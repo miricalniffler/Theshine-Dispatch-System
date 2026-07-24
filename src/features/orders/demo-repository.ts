@@ -23,6 +23,7 @@ export interface OrderRepository {
   getById(id: string): Promise<Order | undefined>;
   getByIds(ids: string[]): Promise<Order[]>;
   updateStatus(id: string, status: Order["status"]): Promise<Order | undefined>;
+  create(order: Order): Promise<Order>;
 }
 
 function matches(order: Order, filters: OrderFilters) {
@@ -66,6 +67,7 @@ export const demoOrderRepository: OrderRepository = {
     if (order) order.status = status;
     return order;
   },
+  async create(order) { demoOrders.unshift(order); return order; },
 };
 
 export function queryToFilters(params: URLSearchParams): OrderFilters {
