@@ -5,7 +5,7 @@
 | 业务 | 接口 |
 |---|---|
 | 订单 | `GET/POST /api/orders`、`GET/PATCH /api/orders/:id` |
-| 订单导入 | `POST /api/orders/import/parse`、`duplicates`、`commit` |
+| 订单导入 | `POST /api/orders/import/parse`、`commit`；`GET/POST /api/orders/import/connectors`（飞书邮件/esforty 的可选接入） |
 | 车队 | `GET/POST /api/fleets`、`GET/PATCH /api/fleets/:id` |
 | 派单 | `POST /api/dispatch-batches/preview`、`copy-log`、`confirm` |
 | 司机资料 | `GET/POST/PATCH /api/orders/:id/driver-details` |
