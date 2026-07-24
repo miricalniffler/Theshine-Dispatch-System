@@ -30,7 +30,12 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
 
 export async function saveOrderToSqlite(order: Order) {
   const [pickupAddress, dropoffAddress] = order.route.split(" → ");
-  return db.order.upsert({ where: { platformOrderNumber: order.orderNo }, update: { status: order.status, fleetId: null }, create: { id: order.id, platformOrderNumber: order.orderNo, city: order.city, serviceDate: order.serviceDate, pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`), pickupAddress: pickupAddress || "待核对", dropoffAddress: dropoffAddress || "待核对", passengerName: order.passengerName, passengerPhone: order.passengerPhone, platformVehicleType: order.vehicleType, status: order.status } });
+  const fleet = await db.fleet.upsert({
+    where: { name_city: { name: order.fleetName, city: order.city } },
+    update: {},
+    create: { name: order.fleetName, city: order.city },
+  });
+  return db.order.upsert({ where: { platformOrderNumber: order.orderNo }, update: { status: order.status, fleetId: fleet.id }, create: { id: order.id, platformOrderNumber: order.orderNo, city: order.city, fleetId: fleet.id, serviceDate: order.serviceDate, pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`), pickupAddress: pickupAddress || "待核对", dropoffAddress: dropoffAddress || "待核对", passengerName: order.passengerName, passengerPhone: order.passengerPhone, platformVehicleType: order.vehicleType, status: order.status } });
 }
 
 function bangkokToday() {
@@ -61,8 +66,8 @@ function matchesFilters(order: Order, filters: OrderFilters) {
 }
 
 export async function listSqliteOrders(filters: OrderFilters = {}) {
-  const rows = await db.order.findMany({ orderBy: { pickupDateTime: "asc" } });
+  const rows = await db.order.findMany({ include: { fleet: true }, orderBy: { pickupDateTime: "asc" } });
   return rows
-    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString() }))
+    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString() }))
     .filter((order) => matchesFilters(order, filters));
 }

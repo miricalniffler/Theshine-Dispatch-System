@@ -1,6 +1,5 @@
 import { loadRules } from "@/lib/rules/load-rules";
 import { renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
-import { demoOrderRepository } from "@/features/orders/demo-repository";
 import { db } from "@/lib/db";
 
 type DispatchOrder = {
@@ -15,6 +14,12 @@ type DispatchOrder = {
   vehicleType: string;
   status: string;
   exceptions: string[];
+  pickupAddress: string;
+  dropoffAddress: string;
+  flightNumber: string | null;
+  adults: number;
+  children: number;
+  luggage: number;
 };
 
 function contentFor(order: DispatchOrder) {
@@ -22,17 +27,17 @@ function contentFor(order: DispatchOrder) {
     platform_order_number: order.orderNo,
     passenger_name: order.passengerName,
     passenger_phone: order.passengerPhone,
-    flight_number: order.city === "曼谷" ? "TG 641" : "PG 124",
+    flight_number: order.flightNumber ?? "待核对",
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
     pickup_datetime: `${order.serviceDate} ${order.pickupTime}`,
-    pickup_address: order.city === "曼谷" ? "Suvarnabhumi Airport (BKK), Gate 3" : "Samui Airport (USM), Arrival Hall",
-    dropoff_address: order.city === "曼谷" ? "Sukhumvit 24, Bangkok" : "Chaweng Beach Road, Koh Samui",
+    pickup_address: order.pickupAddress,
+    dropoff_address: order.dropoffAddress,
     platform_vehicle_type: order.vehicleType,
     seat_count: order.vehicleType === "Van" ? 8 : null,
-    adults: 2,
-    children: 0,
-    luggage: 2,
+    adults: order.adults,
+    children: order.children,
+    luggage: order.luggage,
     child_seat_line: "",
     meet_greet_line: "",
     other_notes: "",
@@ -59,66 +64,27 @@ type StoredDispatchBatch = {
   confirmedAt: string | null;
 };
 
-/**
- * The dashboard still exposes the lightweight `DispatchOrder` shape.  Before a
- * dispatch is saved we make sure its related Fleet and Order rows exist in
- * SQLite, so a saved batch always has an immutable, relational audit trail.
- */
-async function ensureOrdersPersisted(orders: DispatchOrder[]) {
-  return db.$transaction(async (tx) => {
-    const fleetIds = new Map<string, string>();
-
-    for (const order of orders) {
-      const fleetKey = `${order.city}\u0000${order.fleetName}`;
-      let fleetId = fleetIds.get(fleetKey);
-      if (!fleetId) {
-        const fleet = await tx.fleet.upsert({
-          where: { name_city: { name: order.fleetName, city: order.city } },
-          update: {},
-          create: { name: order.fleetName, city: order.city },
-        });
-        fleetId = fleet.id;
-        fleetIds.set(fleetKey, fleetId);
-      }
-
-      const [pickupAddress = "待核对", dropoffAddress = "待核对"] = order.city === "曼谷"
-        ? ["Suvarnabhumi Airport (BKK), Gate 3", "Sukhumvit 24, Bangkok"]
-        : ["Samui Airport (USM), Arrival Hall", "Chaweng Beach Road, Koh Samui"];
-
-      await tx.order.upsert({
-        where: { id: order.id },
-        update: {
-          city: order.city,
-          fleetId,
-          serviceDate: order.serviceDate,
-          pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`),
-          passengerName: order.passengerName,
-          passengerPhone: order.passengerPhone,
-          platformVehicleType: order.vehicleType,
-          status: order.status,
-        },
-        create: {
-          id: order.id,
-          platformOrderNumber: order.orderNo,
-          city: order.city,
-          fleetId,
-          serviceDate: order.serviceDate,
-          pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`),
-          pickupAddress,
-          dropoffAddress,
-          passengerName: order.passengerName,
-          passengerPhone: order.passengerPhone,
-          platformVehicleType: order.vehicleType,
-          status: order.status,
-        },
-      });
-    }
-  });
-}
-
 async function selectedDispatchOrders(orderIds: string[]) {
-  const all = await demoOrderRepository.list({ dateMode: "future" });
-  return all.filter((order) => orderIds.includes(order.id)) as DispatchOrder[];
+  const rows = await db.order.findMany({ where: { id: { in: orderIds } }, include: { fleet: true } });
+  return rows.map((row) => ({
+    id: row.id,
+    orderNo: row.platformOrderNumber,
+    serviceDate: row.serviceDate,
+    pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }),
+    city: row.city,
+    fleetName: row.fleet?.name ?? "待选择",
+    passengerName: row.passengerName,
+    passengerPhone: row.passengerPhone,
+    vehicleType: row.platformVehicleType,
+    status: row.status,
+    exceptions: [],
+    pickupAddress: row.pickupAddress,
+    dropoffAddress: row.dropoffAddress,
+    flightNumber: row.flightNumber,
+    adults: row.adults,
+    children: row.children,
+    luggage: row.luggage,
+  }));
 }
 
 export async function createDispatchPreview(orderIds: string[]): Promise<DispatchPreview> {
@@ -130,6 +96,7 @@ export async function createDispatchPreview(orderIds: string[]): Promise<Dispatc
   const cities = new Set(selected.map((item) => item.city));
   const fleets = new Set(selected.map((item) => item.fleetName));
   const dates = new Set(selected.map((item) => item.serviceDate));
+  if (selected.some((item) => item.fleetName === "待选择")) errors.push("所选订单尚未指定车队，请先在订单详情中选择车队。");
   if (cities.size > 1) errors.push("批量派给车队时，请只选择同一城市的订单。");
   if (fleets.size > 1) errors.push("批量派给车队时，请只选择同一车队的订单。");
   if (dates.size > 1) errors.push("不同服务日期请拆成不同批次。");
@@ -162,8 +129,6 @@ export async function saveDispatchCopy(orderIds: string[]) {
   const preview = await createDispatchPreview(orderIds);
   if (!preview.valid || !preview.text) return preview;
   const selected = await selectedDispatchOrders(orderIds);
-  await ensureOrdersPersisted(selected);
-
   const fleet = await db.fleet.findUnique({
     where: { name_city: { name: preview.fleetName!, city: preview.city! } },
   });
@@ -205,9 +170,6 @@ export async function confirmDispatch(batchId: string): Promise<StoredDispatchBa
         })),
       }),
     ]);
-    // Keep the still-used in-memory workflow in sync while the other modules
-    // are being migrated. SQLite remains the durable source of truth.
-    await Promise.all(orderIds.map((id) => demoOrderRepository.updateStatus(id, "DISPATCHED")));
   }
 
   return {
