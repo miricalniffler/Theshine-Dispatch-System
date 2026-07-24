@@ -16,6 +16,7 @@ const demoOrders: Order[] = [
   { id: "ord_006", orderNo: "IW-20260728-006", serviceDate: isoDate(5), pickupTime: "19:30", city: "曼谷", fleetName: "Bangkok Premier Fleet", passengerName: "赵凡", passengerPhone: "+86 186 1000 8877", route: "BKK Airport → Riverside Hotel", vehicleType: "SUV", status: "DRIVER_CONFIRMED", exceptions: [], createdAt: new Date().toISOString() },
   { id: "ord_007", orderNo: "IW-20260730-007", serviceDate: isoDate(7), pickupTime: "09:00", city: "苏梅", fleetName: "Samui Island Transfer", passengerName: "孙悦", passengerPhone: "+86 130 9988 1100", route: "Fisherman’s Village → USM Airport", vehicleType: "Sedan", status: "COMPLETED", exceptions: [], createdAt: new Date().toISOString() },
 ];
+const activity = new Map<string, { action: string; at: string }[]>();
 
 export interface OrderRepository {
   list(filters?: OrderFilters): Promise<Order[]>;
@@ -24,6 +25,7 @@ export interface OrderRepository {
   getByIds(ids: string[]): Promise<Order[]>;
   updateStatus(id: string, status: Order["status"]): Promise<Order | undefined>;
   create(order: Order): Promise<Order>;
+  getActivity(id: string): Promise<{ action: string; at: string }[]>;
 }
 
 function matches(order: Order, filters: OrderFilters) {
@@ -64,10 +66,11 @@ export const demoOrderRepository: OrderRepository = {
   async getByIds(ids) { return demoOrders.filter((order) => ids.includes(order.id)); },
   async updateStatus(id, status) {
     const order = demoOrders.find((item) => item.id === id);
-    if (order) order.status = status;
+    if (order) { order.status = status; activity.set(id, [...(activity.get(id) ?? []), { action: `状态变更为 ${status}`, at: new Date().toISOString() }]); }
     return order;
   },
   async create(order) { demoOrders.unshift(order); return order; },
+  async getActivity(id) { return activity.get(id) ?? [{ action: "订单已导入", at: demoOrders.find((order) => order.id === id)?.createdAt ?? new Date().toISOString() }]; },
 };
 
 export function queryToFilters(params: URLSearchParams): OrderFilters {
