@@ -75,6 +75,26 @@ export function formatInternationalPhone(phone: string | null | undefined, rules
   return nationalNumber ? `${countryCode}${rules.transforms.phone.display.separator}${nationalNumber}` : countryCode;
 }
 
+/** Uses the business rule for orders whose source does not state a luggage count. */
+export function defaultLuggageCount(luggage: number | null | undefined, adults: number, children: number, rules: RulesConfig = loadRules()) {
+  const statedCount = Number(luggage ?? 0);
+  if (statedCount > 0 || !rules.transforms.luggage.default_to_passenger_count_when_unspecified) return statedCount;
+  return Math.max(0, Number(adults) || 0) + Math.max(0, Number(children) || 0);
+}
+
+/** Turns a stored meet-and-greet request into the fleet-facing wording from YAML. */
+export function formatMeetGreetLine(value: string | null | undefined, passengerName: string, rules: RulesConfig = loadRules()) {
+  const request = value?.trim();
+  if (!request) return "";
+  const greetingSignName = request.replace(/^(?:meeting tablet|greeting sign|meeting sign)\s*:\s*/i, "").trim();
+  const normalized = greetingSignName.toLocaleLowerCase().replace(/\s+/g, " ");
+  const passenger = passengerName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  if (["yes", "true", "required", "meet&greet", "meet & greet", "举牌", "需要举牌"].includes(normalized) || normalized === passenger) {
+    return rules.templates.dispatch.meet_greet.standard_line;
+  }
+  return renderTemplate(rules.templates.dispatch.meet_greet.greeting_sign_line, { greeting_sign_name: greetingSignName });
+}
+
 export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules()) {
   if (!vehicle) return null;
   const normalizedKey = vehicle.trim().toLocaleLowerCase();

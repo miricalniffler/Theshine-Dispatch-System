@@ -18,7 +18,9 @@ export async function POST(request: NextRequest) {
   const order = await db.$transaction(async (tx) => {
     const city = fields.city === "苏梅" ? "苏梅" : "曼谷";
     const fleet = await canonicalFleetForCity(tx, city);
-    const created = await tx.order.create({ data: { platformOrderNumber: fields.platformOrderNumber, city, fleetId: fleet.id, serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults: Number(fields.adults) || 0, children: Number(fields.children) || 0, luggage: Number(fields.luggage) || 0, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
+    const adults = Number(fields.adults) || 0;
+    const children = Number(fields.children) || 0;
+    const created = await tx.order.create({ data: { platformOrderNumber: fields.platformOrderNumber, city, fleetId: fleet.id, serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults, children, luggage: Number(fields.luggage) || adults + children, meetGreetLine: fields.meetGreetLine || null, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
     await tx.activityLog.create({ data: { orderId: created.id, action: "订单已导入", actor: "运营人员", metadata: JSON.stringify({ sourceType: source.type, sourceFormat: source.format, sourceVerified: true }) } });
     return created;
   });

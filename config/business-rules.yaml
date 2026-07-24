@@ -1,10 +1,13 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-07-23.2"
+rules_version: "2026-07-24.1"
 timezone: "Asia/Bangkok"
 
 templates:
   dispatch:
     header: "{{service_date_label}}订单请查收"
+    meet_greet:
+      standard_line: "Meet&Greet"
+      greeting_sign_line: "Meet with greeting sign {{greeting_sign_name}}"
     body: |
       Order Number: {{platform_order_number}}
       Passenger Name: {{passenger_name}}
@@ -51,6 +54,9 @@ validation:
     - license_plate
 
 transforms:
+  luggage:
+    # 订单没有特别说明行李数时，按成人和儿童总人数安排。
+    default_to_passenger_count_when_unspecified: true
   phone:
     # 电话展示规则。系统只按下列国家区号识别国际号码；新增来源国家时在此补充，界面与派单文本会自动生效。
     display:

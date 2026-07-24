@@ -11,6 +11,21 @@ function normaliseOrderNumber(value: string) {
   return value.replace(/^#/, "").replace(/\s/g, "");
 }
 
+function numberFrom(value: string) {
+  const match = value.match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function luggageFor(text: string, passengerCount: number) {
+  const stated = pick(text, "(?:Luggage|Number of luggage|Baggage)");
+  return stated ? numberFrom(stated) : passengerCount;
+}
+
+function meetGreetFor(text: string) {
+  const signName = pick(text, "(?:Meeting tablet|Greeting sign|Meeting sign|Meet(?:ing)?&?Greet)");
+  return signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : "");
+}
+
 function parseIwayRide(text: string) {
   const rideNumber = pick(text, "Ride number");
   const date = pick(text, "Date");
@@ -25,6 +40,7 @@ function parseIwayRide(text: string) {
   const clients = pick(text, "Clients");
   const passengerPhone = clients.match(/phone\s+([+\d][\d\s-]+)/i)?.[1]?.trim() || "";
   const passengerName = clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim();
+  const adults = Number(pick(text, "Number of passengers")) || 0;
   return {
     platformOrderNumber: normaliseOrderNumber(rideNumber),
     passengerName,
@@ -34,9 +50,10 @@ function parseIwayRide(text: string) {
     dropoffAddress,
     platformVehicleType: pick(text, "Vehicle class"),
     flightNumber: pick(text, "Flight number/train number"),
-    adults: Number(pick(text, "Number of passengers")) || 0,
+    adults,
     children: 0,
-    luggage: 0,
+    luggage: luggageFor(text, adults),
+    meetGreetLine: meetGreetFor(text),
     city: /samui|koh samui|สุราษฎร์ธานี/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷",
     otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, pick(text, "Meeting tablet") && `Meeting tablet: ${pick(text, "Meeting tablet")}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
   };
@@ -52,9 +69,10 @@ function parseStandardOrder(text: string) {
     dropoffAddress: pick(text, "Dropoff address"),
     platformVehicleType: pick(text, "Vehicle Type"),
     flightNumber: pick(text, "Flight Number"),
-    adults: 0,
+    adults: Number(pick(text, "(?:Adults|Number of passengers)")) || 0,
     children: 0,
-    luggage: 0,
+    luggage: luggageFor(text, Number(pick(text, "(?:Adults|Number of passengers)")) || 0),
+    meetGreetLine: meetGreetFor(text),
     city: /samui|koh samui|usm/i.test(text) ? "苏梅" : "曼谷",
     otherNotes: "",
   };

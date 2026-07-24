@@ -2,7 +2,11 @@ export type RulesConfig = {
   rules_version: string;
   timezone: string;
   templates: {
-    dispatch: { header: string; body: string };
+    dispatch: {
+      header: string;
+      body: string;
+      meet_greet: { standard_line: string; greeting_sign_line: string };
+    };
     dispatch_batch_footers: Record<string, string>;
     iway_return: { header: string; body: string; footer: string };
   };
@@ -11,6 +15,7 @@ export type RulesConfig = {
     before_iway_return: string[];
   };
   transforms: {
+    luggage: { default_to_passenger_count_when_unspecified: boolean };
     phone: {
       display: { country_calling_codes: string[]; separator: string };
       thailand: { country_code: string; convert_local_leading_zero: boolean; local_digit_lengths: number[] };

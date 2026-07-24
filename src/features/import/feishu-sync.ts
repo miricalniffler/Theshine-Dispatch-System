@@ -24,6 +24,16 @@ function receivedAt(value: string | undefined) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function numberFrom(value: string) {
+  const match = value.match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function meetGreetFor(text: string) {
+  const signName = pick(text, "(?:Meeting tablet|Greeting sign|Meeting sign|Meet(?:ing)?&?Greet)");
+  return signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : null);
+}
+
 async function recordMessage(message: ImportedMessage, orderId?: string) {
   await db.importedSourceMessage.create({ data: { connector: "feishu-mail", externalId: message.id, action: message.action, sourceText: message.text, orderId, receivedAt: receivedAt(message.receivedAt) } });
 }
@@ -51,7 +61,10 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const platformVehicleType = pick(message.text, "Vehicle Type");
   if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
   const city = /samui|苏梅|USM/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷";
-  const data = { city, serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, rawSource: message.text };
+  const adults = numberFrom(pick(message.text, "(?:Adults|Number of passengers)"));
+  const children = numberFrom(pick(message.text, "Children"));
+  const statedLuggage = pick(message.text, "(?:Luggage|Number of luggage|Baggage)");
+  const data = { city, serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, adults, children, luggage: statedLuggage ? numberFrom(statedLuggage) : adults + children, meetGreetLine: meetGreetFor(message.text), rawSource: message.text };
   if (existing) {
     await db.$transaction(async (tx) => {
       const fleet = await canonicalFleetForCity(tx, city);

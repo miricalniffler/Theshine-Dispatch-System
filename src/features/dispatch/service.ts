@@ -1,5 +1,5 @@
 import { loadRules } from "@/lib/rules/load-rules";
-import { formatInternationalPhone, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { defaultLuggageCount, formatInternationalPhone, formatMeetGreetLine, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { db } from "@/lib/db";
 
 type DispatchOrder = {
@@ -20,13 +20,14 @@ type DispatchOrder = {
   adults: number;
   children: number;
   luggage: number;
+  meetGreetLine: string | null;
 };
 
-function contentFor(order: DispatchOrder) {
+function contentFor(order: DispatchOrder, rules = loadRules()) {
   return {
     platform_order_number: order.orderNo,
     passenger_name: order.passengerName,
-    passenger_phone: formatInternationalPhone(order.passengerPhone) ?? order.passengerPhone,
+    passenger_phone: formatInternationalPhone(order.passengerPhone, rules) ?? order.passengerPhone,
     flight_number: order.flightNumber ?? "待核对",
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
@@ -37,9 +38,9 @@ function contentFor(order: DispatchOrder) {
     seat_count: order.vehicleType === "Van" ? 8 : null,
     adults: order.adults,
     children: order.children,
-    luggage: order.luggage,
+    luggage: defaultLuggageCount(order.luggage, order.adults, order.children, rules),
     child_seat_line: "",
-    meet_greet_line: "",
+    meet_greet_line: formatMeetGreetLine(order.meetGreetLine, order.passengerName, rules),
     other_notes: "",
   };
 }
@@ -89,6 +90,7 @@ async function selectedDispatchOrders(orderIds: string[]) {
     adults: row.adults,
     children: row.children,
     luggage: row.luggage,
+    meetGreetLine: row.meetGreetLine,
   }));
 }
 
@@ -109,13 +111,13 @@ export async function createDispatchPreview(orderIds: string[], options: Dispatc
   selected.forEach((order) => {
     if (order.status !== "READY_TO_DISPATCH") errors.push(`${order.orderNo} 当前不是待派单状态。`);
     if (order.exceptions.length) errors.push(`${order.orderNo} 存在异常，不能直接批量派单。`);
-    const result = validateRequiredFields(contentFor(order), "before_dispatch", rules);
+    const result = validateRequiredFields(contentFor(order, rules), "before_dispatch", rules);
     if (!result.valid) errors.push(`${order.orderNo} 缺少：${result.missingFields.join("、")}`);
   });
   if (errors.length) return { valid: false, errors, ruleVersion: rules.rules_version, orderCount: selected.length };
 
   const bodies = selected.map((order) => {
-    const record = contentFor(order);
+    const record = contentFor(order, rules);
     return [renderTemplate(rules.templates.dispatch.header, record), renderTemplate(rules.templates.dispatch.body, record)].filter(Boolean).join("\n");
   });
   const city = selected[0].city;
