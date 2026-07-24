@@ -1,20 +1,83 @@
 import { failure, success } from "@/lib/api-response";
 import { identifyVehicleFromImage, translateThaiForReview } from "@/features/assist/service";
-import { demoOrderRepository } from "@/features/orders/demo-repository";
+import { db } from "@/lib/db";
 import { NextRequest } from "next/server";
 
-function pick(text: string, label: string) { return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || ""; }
+function pick(text: string, label: string) {
+  return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
+}
+
+function normaliseOrderNumber(value: string) {
+  return value.replace(/^#/, "").replace(/\s/g, "");
+}
+
+function parseIwayRide(text: string) {
+  const rideNumber = pick(text, "Ride number");
+  const date = pick(text, "Date");
+  const time = pick(text, "Time");
+  const flightDeparture = pick(text, "Departure time");
+  const year = flightDeparture.match(/(20\d{2})/)?.[1] || String(new Date().getFullYear());
+  const dateParts = date.match(/(\d{1,2})[./-](\d{1,2})/);
+  const serviceDate = dateParts ? `${year}-${dateParts[2].padStart(2, "0")}-${dateParts[1].padStart(2, "0")}` : "";
+  const itinerary = text.match(/Itinerary\s*:\s*([\s\S]*?)(?=Flight number\/train number\s*:|Departure time\s*:|Remarks\s*:)/i)?.[1] || "";
+  const pickupAddress = itinerary.match(/From\s*:\s*([\s\S]*?)(?=\n\s*To\s*:)/i)?.[1]?.replace(/\s+/g, " ").trim() || "";
+  const dropoffAddress = itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1]?.trim() || "";
+  const clients = pick(text, "Clients");
+  const passengerPhone = clients.match(/phone\s+([+\d][\d\s-]+)/i)?.[1]?.trim() || "";
+  const passengerName = clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim();
+  return {
+    platformOrderNumber: normaliseOrderNumber(rideNumber),
+    passengerName,
+    passengerPhone,
+    pickupDateTime: serviceDate && time ? `${serviceDate}T${time.slice(0, 5)}` : "",
+    pickupAddress,
+    dropoffAddress,
+    platformVehicleType: pick(text, "Vehicle class"),
+    flightNumber: pick(text, "Flight number/train number"),
+    adults: Number(pick(text, "Number of passengers")) || 0,
+    children: 0,
+    luggage: 0,
+    city: /samui|koh samui|สุราษฎร์ธานี/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷",
+    otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, pick(text, "Meeting tablet") && `Meeting tablet: ${pick(text, "Meeting tablet")}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
+  };
+}
+
+function parseStandardOrder(text: string) {
+  return {
+    platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
+    passengerName: pick(text, "Passenger Name"),
+    passengerPhone: pick(text, "(?:Passenger Phone Number|Phone)"),
+    pickupDateTime: pick(text, "(?:Departure Time|Pickup Time)"),
+    pickupAddress: pick(text, "Pickup address"),
+    dropoffAddress: pick(text, "Dropoff address"),
+    platformVehicleType: pick(text, "Vehicle Type"),
+    flightNumber: pick(text, "Flight Number"),
+    adults: 0,
+    children: 0,
+    luggage: 0,
+    city: /samui|koh samui|usm/i.test(text) ? "苏梅" : "曼谷",
+    otherNotes: "",
+  };
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   if (typeof body.text !== "string" || !body.text.trim()) return failure("EMPTY_SOURCE", "请粘贴订单原文。", undefined, 422);
-  if (body.vehicleImageUrl !== undefined && typeof body.vehicleImageUrl !== "string") return failure("INVALID_REQUEST", "车辆图片地址格式不正确。", undefined, 422);
-  const text = body.text;
-  const result = { platformOrderNumber: pick(text, "(?:Order Number|Order ID)"), passengerName: pick(text, "Passenger Name"), passengerPhone: pick(text, "(?:Passenger Phone Number|Phone)"), pickupDateTime: pick(text, "(?:Departure Time|Pickup Time)"), pickupAddress: pick(text, "Pickup address"), dropoffAddress: pick(text, "Dropoff address"), platformVehicleType: pick(text, "Vehicle Type"), flightNumber: pick(text, "Flight Number") };
-  const missing = Object.entries(result).filter(([key, value]) => !value && key !== "flightNumber").map(([key]) => key);
-  const orders = await demoOrderRepository.list({ dateMode: "future" });
-  const exact = orders.filter((order) => order.orderNo.replace(/\s/g, "") === result.platformOrderNumber.replace(/\s/g, ""));
-  const suspected = orders.filter((order) => !exact.includes(order) && result.passengerName && order.passengerName.toLowerCase() === result.passengerName.toLowerCase());
-  const [thaiTranslation, vehicleImage] = await Promise.all([translateThaiForReview(text), identifyVehicleFromImage(body.vehicleImageUrl || "")]);
-  return success({ fields: result, missingFields: missing, rawText: text, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: { exact: exact.map((order) => ({ id: order.id, orderNo: order.orderNo })), suspected: suspected.map((order) => ({ id: order.id, orderNo: order.orderNo, reason: "乘客姓名相同，请人工核对服务时间和路线" })) }, assistance: { thaiTranslation, vehicleImage } });
+  const text = body.text.trim();
+  const isIwayRide = /Ride number\s*[:：]/i.test(text) && /Vehicle class\s*[:：]/i.test(text) && /Itinerary\s*[:：]/i.test(text) && /Clients\s*[:：]/i.test(text);
+  const isStandardOrder = /(?:Order Number|Order ID)\s*[:：]/i.test(text) && /Passenger Name\s*[:：]/i.test(text);
+  const sourceType = body.sourceType;
+  if (sourceType === "iway_feishu" && !isIwayRide) return failure("SOURCE_MISMATCH", "这段内容不符合 i’way New ride 邮件格式，已阻止导入。", undefined, 422);
+  if (sourceType === "esforty" && !isStandardOrder) return failure("SOURCE_MISMATCH", "这段内容不符合 esforty/标准订单格式，已阻止导入。", undefined, 422);
+  if (sourceType === "manual" && body.confirmedSource !== true) return failure("SOURCE_UNCONFIRMED", "手工录入前必须确认订单来源。", undefined, 422);
+  if (!["iway_feishu", "esforty", "manual"].includes(sourceType)) return failure("SOURCE_REQUIRED", "请选择订单来源后再识别。", undefined, 422);
+  if (!isIwayRide && !isStandardOrder) return failure("NOT_AN_ORDER", "未识别到完整的新订单结构；车队回复不会被当作订单导入。", undefined, 422);
+
+  const fields = isIwayRide ? parseIwayRide(text) : parseStandardOrder(text);
+  const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType"] as const;
+  const missingFields = required.filter((key) => !fields[key]);
+  const exact = fields.platformOrderNumber ? await db.order.findMany({ where: { platformOrderNumber: fields.platformOrderNumber }, select: { id: true, platformOrderNumber: true } }) : [];
+  const suspected = fields.passengerName ? await db.order.findMany({ where: { passengerName: fields.passengerName }, select: { id: true, platformOrderNumber: true } }) : [];
+  const [thaiTranslation, vehicleImage] = await Promise.all([translateThaiForReview(text), identifyVehicleFromImage(typeof body.vehicleImageUrl === "string" ? body.vehicleImageUrl : "")]);
+  return success({ fields, missingFields, rawText: text, source: { type: sourceType, format: isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: { exact: exact.map((order) => ({ id: order.id, orderNo: order.platformOrderNumber })), suspected: suspected.filter((order) => !exact.some((item) => item.id === order.id)).map((order) => ({ id: order.id, orderNo: order.platformOrderNumber, reason: "乘客姓名相同，请人工核对服务时间和路线" })) }, assistance: { thaiTranslation, vehicleImage } });
 }

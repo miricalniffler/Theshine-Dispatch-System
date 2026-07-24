@@ -12,6 +12,7 @@ export type ImportedMessage = {
   text: string;
   subject?: string;
   receivedAt?: string;
+  sender?: string;
 };
 
 type ConnectorConfig = {
@@ -77,7 +78,8 @@ function normalizeItems(payload: unknown): ImportedMessage[] {
     const row = item as Record<string, unknown>;
     const text = [row.text, row.body, row.rawText, row.content].find((field): field is string => typeof field === "string" && field.trim().length > 0);
     if (!text) return [];
-    return [{ id: typeof row.id === "string" ? row.id : `remote-${index}`, text, subject: typeof row.subject === "string" ? row.subject : undefined, receivedAt: typeof row.receivedAt === "string" ? row.receivedAt : undefined }];
+    const sender = [row.sender, row.from, row.fromAddress, row.email].find((field): field is string => typeof field === "string" && field.trim().length > 0);
+    return [{ id: typeof row.id === "string" ? row.id : `remote-${index}`, text, subject: typeof row.subject === "string" ? row.subject : undefined, receivedAt: typeof row.receivedAt === "string" ? row.receivedAt : undefined, sender }];
   });
 }
 
@@ -98,7 +100,12 @@ export async function pullConnectorMessages(id: ImportConnectorId): Promise<{ co
   try {
     const response = await fetch(config.url, { headers: { Authorization: `Bearer ${config.token}`, Accept: "application/json" }, signal: AbortSignal.timeout(12_000), cache: "no-store" });
     if (!response.ok) throw new Error(`接入地址返回 HTTP ${response.status}`);
-    const items = normalizeItems(await response.json());
+    let items = normalizeItems(await response.json());
+    if (id === "feishu-mail") {
+      const allowedSender = (process.env.FEISHU_MAIL_ALLOWED_SENDER || "dingdan@theshine.com.cn").trim().toLowerCase();
+      items = items.filter((item) => item.sender?.trim().toLowerCase() === allowedSender && /^New ride\s+#?\d+/i.test(item.subject?.trim() || item.text.trim()));
+      if (!items.length) throw new Error(`没有来自 ${allowedSender} 且主题为 New ride 的邮件，已阻止导入其他邮件。`);
+    }
     if (!items.length) throw new Error("接入地址未返回可识别的订单原文。");
     return { connector, items };
   } catch (error) {

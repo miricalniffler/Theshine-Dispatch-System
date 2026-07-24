@@ -47,8 +47,16 @@ function bangkokToday() {
 
 function matchesFilters(order: Order, filters: OrderFilters) {
   const today = bangkokToday();
+  const offsetDate = (days: number) => {
+    const value = new Date(`${today}T12:00:00+07:00`);
+    value.setUTCDate(value.getUTCDate() + days);
+    return value.toISOString().slice(0, 10);
+  };
+  if (filters.dateMode === "window" && (order.serviceDate < today || order.serviceDate > offsetDate(7))) return false;
   if (filters.dateMode === "today" && order.serviceDate !== today) return false;
+  if (filters.dateMode === "tomorrow" && order.serviceDate !== offsetDate(1)) return false;
   if (filters.dateMode === "future" && order.serviceDate <= today) return false;
+  if (filters.dateMode === "month" && order.serviceDate.slice(0, 7) !== today.slice(0, 7)) return false;
   if (filters.dateMode === "range") {
     if (filters.startDate && order.serviceDate < filters.startDate) return false;
     if (filters.endDate && order.serviceDate > filters.endDate) return false;

@@ -59,6 +59,8 @@ export const demoOrderRepository: OrderRepository = {
       pendingReview: orders.filter((order) => order.status === "PENDING_REVIEW").length,
       readyToDispatch: orders.filter((order) => order.status === "READY_TO_DISPATCH").length,
       dispatched: orders.filter((order) => order.status === "DISPATCHED").length,
+      pendingDriver: orders.filter((order) => order.status === "DISPATCHED").length,
+      pendingReturn: orders.filter((order) => order.status === "DRIVER_CONFIRMED" || order.status === "RETURNED").length,
       exceptions: orders.filter((order) => order.exceptions.length > 0).length,
     };
   },
@@ -75,7 +77,7 @@ export const demoOrderRepository: OrderRepository = {
 
 export function queryToFilters(params: URLSearchParams): OrderFilters {
   return {
-    dateMode: (params.get("dateMode") as OrderFilters["dateMode"]) || "today",
+    dateMode: (params.get("dateMode") as OrderFilters["dateMode"]) || "window",
     startDate: params.get("startDate") || undefined,
     endDate: params.get("endDate") || undefined,
     city: params.get("city") || undefined,

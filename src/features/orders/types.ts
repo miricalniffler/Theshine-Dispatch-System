@@ -18,7 +18,7 @@ export type Order = {
 };
 
 export type OrderFilters = {
-  dateMode?: "today" | "future" | "range";
+  dateMode?: "window" | "today" | "tomorrow" | "future" | "month" | "range";
   startDate?: string;
   endDate?: string;
   city?: string;
@@ -33,5 +33,7 @@ export type DashboardSummary = {
   pendingReview: number;
   readyToDispatch: number;
   dispatched: number;
+  pendingDriver: number;
+  pendingReturn: number;
   exceptions: number;
 };
