@@ -23,10 +23,16 @@ const rulesSchema = z.object({
   duplicate_detection: z.object({ compare_fields: z.array(z.string()), pickup_time_window_minutes: z.number() }),
 });
 
-export function loadRules(): RulesConfig {
-  const raw = fs.readFileSync(rulesPath, "utf8");
+export function parseRules(raw: string): RulesConfig {
   return rulesSchema.parse(yaml.load(raw)) as RulesConfig;
 }
+
+export function loadRules(): RulesConfig {
+  const raw = fs.readFileSync(rulesPath, "utf8");
+  return parseRules(raw);
+}
+
+export function loadRulesSource() { return fs.readFileSync(rulesPath, "utf8"); }
 
 export function getRulesFilePath() {
   return rulesPath;
