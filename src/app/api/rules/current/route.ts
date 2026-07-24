@@ -1,7 +1,11 @@
-import { loadRules, loadRulesSource } from "@/lib/rules/load-rules";
-import { success } from "@/lib/api-response";
+import { failure, success } from "@/lib/api-response";
+import { ensureCurrentRuleVersion } from "@/features/rules/repository";
 
 export async function GET() {
-  const rules = loadRules();
-  return success({ source: loadRulesSource(), version: rules.rules_version });
+  try {
+    const current = await ensureCurrentRuleVersion();
+    return success({ source: current.yamlContent, version: current.version, publishedAt: current.publishedAt.toISOString() });
+  } catch (error) {
+    return failure("RULE_CURRENT_UNAVAILABLE", error instanceof Error ? error.message : "无法读取当前规则。", undefined, 500);
+  }
 }
