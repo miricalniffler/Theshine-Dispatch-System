@@ -54,7 +54,7 @@ export function OrderDashboard() {
 
     <section className="date-bar" aria-label="日期筛选">
       {([ ["today", "今天"], ["future", "未来日期"], ["range", "自定义范围"] ] as const).map(([mode, label]) => <button type="button" className={filters.dateMode === mode ? "active" : ""} onClick={() => setDateMode(mode)} key={mode}>{label}</button>)}
-      {filters.dateMode === "range" && <div className="range-fields"><input aria-label="开始日期" type="date" value={filters.startDate || today()} onChange={(event) => updateFilter("startDate", event.target.value)} /><span>至</span><input aria-label="结束日期" type="date" value={filters.endDate || ""} onChange={(event) => updateFilter("endDate", event.target.value)} /></div>}
+      {filters.dateMode === "range" && <div className="range-fields"><input aria-label="开始日期" type="date" value={filters.startDate || today()} onInput={(event) => updateFilter("startDate", event.currentTarget.value)} onChange={(event) => updateFilter("startDate", event.target.value)} /><span>至</span><input aria-label="结束日期" type="date" value={filters.endDate || ""} onInput={(event) => updateFilter("endDate", event.currentTarget.value)} onChange={(event) => updateFilter("endDate", event.target.value)} /></div>}
     </section>
 
     <section className="summary-grid" aria-label="订单概览">
