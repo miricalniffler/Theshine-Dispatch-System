@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/cron/feishu-mail", "schedule": "0 * * * *" }
+  ]
+}

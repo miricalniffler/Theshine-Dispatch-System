@@ -32,11 +32,11 @@ model Order {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  fleet               Fleet?   @relation(fields: [fleetId], references: [id])
-  driverDetail        DriverDetail?
-  dispatchLinks       DispatchBatchOrder[]
-  iwayLinks           IwayReturnBatchOrder[]
-  activityLogs        ActivityLog[]
+  fleet         Fleet?                 @relation(fields: [fleetId], references: [id])
+  driverDetail  DriverDetail?
+  dispatchLinks DispatchBatchOrder[]
+  iwayLinks     IwayReturnBatchOrder[]
+  activityLogs  ActivityLog[]
 
   @@index([serviceDate, city, fleetId])
   @@index([status, pickupDateTime])
@@ -51,29 +51,29 @@ model Fleet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders    Order[]
+  orders Order[]
 
   @@unique([name, city])
 }
 
 model DriverDetail {
-  id                     String   @id @default(cuid())
-  orderId                String   @unique
-  confirmedDriverName    String?
-  rawDriverPhone         String?
-  normalizedDriverPhone  String?
-  confirmedVehicleModel  String?
-  licensePlate           String?
-  rawReply               String?
-  confirmedAt            DateTime?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                    String    @id @default(cuid())
+  orderId               String    @unique
+  confirmedDriverName   String?
+  rawDriverPhone        String?
+  normalizedDriverPhone String?
+  confirmedVehicleModel String?
+  licensePlate          String?
+  rawReply              String?
+  confirmedAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  order                  Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 model DispatchBatch {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   city            String
   fleetId         String
   serviceDate     String
@@ -81,9 +81,9 @@ model DispatchBatch {
   contentSnapshot String
   copiedAt        DateTime?
   confirmedAt     DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
-  orders          DispatchBatchOrder[]
+  orders DispatchBatchOrder[]
 
   @@index([serviceDate, city, fleetId])
 }
@@ -98,15 +98,15 @@ model DispatchBatchOrder {
 }
 
 model IwayReturnBatch {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   serviceDate     String
   ruleVersion     String
   contentSnapshot String
   copiedAt        DateTime?
   confirmedAt     DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
-  orders          IwayReturnBatchOrder[]
+  orders IwayReturnBatchOrder[]
 
   @@index([serviceDate])
 }
@@ -130,26 +130,55 @@ model RuleVersion {
 }
 
 model ActivityLog {
-  id         String   @id @default(cuid())
-  orderId    String?
-  action     String
-  actor      String?
-  metadata   String?
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  orderId   String?
+  action    String
+  actor     String?
+  metadata  String?
+  createdAt DateTime @default(now())
 
-  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId, createdAt])
 }
 
 model DuplicateReview {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   incomingKey    String
   candidateOrder String?
   decision       String?
   reviewedBy     String?
   reviewedAt     DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   @@index([incomingKey])
+}
+
+model ImportSyncRun {
+  id             String    @id @default(cuid())
+  connector      String
+  status         String
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  createdCount   Int       @default(0)
+  updatedCount   Int       @default(0)
+  cancelledCount Int       @default(0)
+  skippedCount   Int       @default(0)
+  errorMessage   String?
+
+  @@index([connector, startedAt])
+}
+
+model ImportedSourceMessage {
+  id          String    @id @default(cuid())
+  connector   String
+  externalId  String
+  action      String
+  sourceText  String
+  orderId     String?
+  receivedAt  DateTime?
+  processedAt DateTime  @default(now())
+
+  @@unique([connector, externalId])
+  @@index([orderId])
 }

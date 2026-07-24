@@ -13,6 +13,7 @@ export type ImportedMessage = {
   subject?: string;
   receivedAt?: string;
   sender?: string;
+  action: "upsert" | "cancel";
 };
 
 type ConnectorConfig = {
@@ -69,17 +70,23 @@ export function listConnectorStatus(): ConnectorStatus[] {
   return [statusFor(connectorConfig("feishu-mail")), statusFor(connectorConfig("esforty"))];
 }
 
+function normalizeAction(row: Record<string, unknown>, subject: string | undefined, text: string) {
+  const raw = [row.action, row.type, row.event, row.status, subject].find((field): field is string => typeof field === "string")?.toLowerCase() ?? "";
+  return /cancel|取消|void/.test(raw) || /cancelled|取消/.test(text) ? "cancel" : "upsert";
+}
+
 function normalizeItems(payload: unknown): ImportedMessage[] {
   const value = payload as { items?: unknown; data?: unknown };
   const candidates = Array.isArray(payload) ? payload : Array.isArray(value?.items) ? value.items : Array.isArray(value?.data) ? value.data : [];
   return candidates.flatMap((item, index) => {
-    if (typeof item === "string" && item.trim()) return [{ id: `remote-${index}`, text: item }];
+    if (typeof item === "string" && item.trim()) return [{ id: `remote-${index}`, text: item, action: /cancelled|取消/i.test(item) ? "cancel" : "upsert" }];
     if (!item || typeof item !== "object") return [];
     const row = item as Record<string, unknown>;
     const text = [row.text, row.body, row.rawText, row.content].find((field): field is string => typeof field === "string" && field.trim().length > 0);
     if (!text) return [];
     const sender = [row.sender, row.from, row.fromAddress, row.email].find((field): field is string => typeof field === "string" && field.trim().length > 0);
-    return [{ id: typeof row.id === "string" ? row.id : `remote-${index}`, text, subject: typeof row.subject === "string" ? row.subject : undefined, receivedAt: typeof row.receivedAt === "string" ? row.receivedAt : undefined, sender }];
+    const subject = typeof row.subject === "string" ? row.subject : undefined;
+    return [{ id: typeof row.id === "string" ? row.id : `remote-${index}`, text, subject, receivedAt: typeof row.receivedAt === "string" ? row.receivedAt : undefined, sender, action: normalizeAction(row, subject, text) }];
   });
 }
 
@@ -89,7 +96,7 @@ function normalizeItems(payload: unknown): ImportedMessage[] {
  * raw order text. This keeps provider credentials out of the browser and lets
  * the existing manual review flow remain the final gate before an order is saved.
  */
-export async function pullConnectorMessages(id: ImportConnectorId): Promise<{ connector: ConnectorStatus; items: ImportedMessage[] }> {
+export async function pullConnectorMessages(id: ImportConnectorId, options: { allowEmpty?: boolean } = {}): Promise<{ connector: ConnectorStatus; items: ImportedMessage[] }> {
   const config = connectorConfig(id);
   const connector = statusFor(config);
   if (!connector.configured || !config.url || !config.token) {
@@ -103,10 +110,10 @@ export async function pullConnectorMessages(id: ImportConnectorId): Promise<{ co
     let items = normalizeItems(await response.json());
     if (id === "feishu-mail") {
       const allowedSender = (process.env.FEISHU_MAIL_ALLOWED_SENDER || "dingdan@theshine.com.cn").trim().toLowerCase();
-      items = items.filter((item) => item.sender?.trim().toLowerCase() === allowedSender && /^New ride\s+#?\d+/i.test(item.subject?.trim() || item.text.trim()));
-      if (!items.length) throw new Error(`没有来自 ${allowedSender} 且主题为 New ride 的邮件，已阻止导入其他邮件。`);
+      items = items.filter((item) => item.sender?.trim().toLowerCase() === allowedSender && (/^New ride\s+#?\d+/i.test(item.subject?.trim() || item.text.trim()) || /cancel|取消|update|change/i.test(item.subject?.trim() || "")));
+      if (!items.length && !options.allowEmpty) throw new Error(`没有来自 ${allowedSender} 的新订单、变更或取消邮件，已阻止导入其他邮件。`);
     }
-    if (!items.length) throw new Error("接入地址未返回可识别的订单原文。");
+    if (!items.length && !options.allowEmpty) throw new Error("接入地址未返回可识别的订单原文。");
     return { connector, items };
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知连接错误";
