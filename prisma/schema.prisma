@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Order {
+  id                  String   @id @default(cuid())
+  platformOrderNumber String   @unique
+  city                String
+  fleetId             String?
+  serviceDate         String
+  pickupDateTime      DateTime
+  pickupAddress       String
+  dropoffAddress      String
+  passengerName       String
+  passengerPhone      String
+  flightNumber        String?
+  platformVehicleType String
+  seatCount           Int?
+  adults              Int      @default(0)
+  children            Int      @default(0)
+  luggage             Int      @default(0)
+  childSeatLine       String?
+  meetGreetLine       String?
+  otherNotes          String?
+  rawSource           String?
+  status              String   @default("PENDING_DISPATCH")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  fleet               Fleet?   @relation(fields: [fleetId], references: [id])
+  driverDetail        DriverDetail?
+  dispatchLinks       DispatchBatchOrder[]
+  iwayLinks           IwayReturnBatchOrder[]
+  activityLogs        ActivityLog[]
+
+  @@index([serviceDate, city, fleetId])
+  @@index([status, pickupDateTime])
+}
+
+model Fleet {
+  id        String   @id @default(cuid())
+  name      String
+  city      String
+  isActive  Boolean  @default(true)
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders    Order[]
+
+  @@unique([name, city])
+}
+
+model DriverDetail {
+  id                     String   @id @default(cuid())
+  orderId                String   @unique
+  confirmedDriverName    String?
+  rawDriverPhone         String?
+  normalizedDriverPhone  String?
+  confirmedVehicleModel  String?
+  licensePlate           String?
+  rawReply               String?
+  confirmedAt            DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  order                  Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model DispatchBatch {
+  id              String   @id @default(cuid())
+  city            String
+  fleetId         String
+  serviceDate     String
+  ruleVersion     String
+  contentSnapshot String
+  copiedAt        DateTime?
+  confirmedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  orders          DispatchBatchOrder[]
+
+  @@index([serviceDate, city, fleetId])
+}
+
+model DispatchBatchOrder {
+  dispatchBatchId String
+  orderId         String
+  dispatchBatch   DispatchBatch @relation(fields: [dispatchBatchId], references: [id], onDelete: Cascade)
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@id([dispatchBatchId, orderId])
+}
+
+model IwayReturnBatch {
+  id              String   @id @default(cuid())
+  serviceDate     String
+  ruleVersion     String
+  contentSnapshot String
+  copiedAt        DateTime?
+  confirmedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  orders          IwayReturnBatchOrder[]
+
+  @@index([serviceDate])
+}
+
+model IwayReturnBatchOrder {
+  iwayReturnBatchId String
+  orderId           String
+  iwayReturnBatch   IwayReturnBatch @relation(fields: [iwayReturnBatchId], references: [id], onDelete: Cascade)
+  order             Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@id([iwayReturnBatchId, orderId])
+}
+
+model RuleVersion {
+  id          String   @id @default(cuid())
+  version     String   @unique
+  yamlContent String
+  isCurrent   Boolean  @default(false)
+  publishedBy String?
+  publishedAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  orderId    String?
+  action     String
+  actor      String?
+  metadata   String?
+  createdAt  DateTime @default(now())
+
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model DuplicateReview {
+  id             String   @id @default(cuid())
+  incomingKey    String
+  candidateOrder String?
+  decision       String?
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([incomingKey])
+}

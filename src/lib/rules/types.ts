@@ -1,0 +1,21 @@
+export type RulesConfig = {
+  rules_version: string;
+  timezone: string;
+  templates: {
+    dispatch: { header: string; body: string };
+    dispatch_batch_footers: Record<string, string>;
+    iway_return: { header: string; body: string; footer: string };
+  };
+  validation: {
+    before_dispatch: string[];
+    before_iway_return: string[];
+  };
+  transforms: {
+    phone: { thailand: { country_code: string; convert_local_leading_zero: boolean; local_digit_lengths: number[] } };
+    vehicle_aliases: Record<string, string>;
+  };
+  thresholds: { dispatch_missing_hours_before_pickup: number; driver_details_missing_hours_before_pickup: number };
+  duplicate_detection: { compare_fields: string[]; pickup_time_window_minutes: number };
+};
+
+export type RuleValidationScope = "before_dispatch" | "before_iway_return";
