@@ -79,7 +79,7 @@ export function OrderDashboard() {
           <tbody>{loading ? <tr><td colSpan={7} className="empty-cell">正在加载订单…</td></tr> : orders.length === 0 ? <tr><td colSpan={7} className="empty-cell">没有符合筛选条件的订单</td></tr> : orders.map((order) => <tr className={order.exceptions.length ? "has-exception" : ""} key={order.id}>
             <td><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)} /></td>
             <td><strong>{formatDate(order.serviceDate)}</strong><small>{order.pickupTime}</small></td>
-            <td><strong>{order.orderNo}</strong><span>{order.passengerName}</span><small>{order.passengerPhone}</small></td>
+            <td><strong><a href={`/orders/${order.id}`}>{order.orderNo}</a></strong><span>{order.passengerName}</span><small>{order.passengerPhone}</small></td>
             <td><span>{order.route}</span><small>{order.vehicleType}</small></td>
             <td><strong>{order.city}</strong><small>{order.fleetName}</small></td>
             <td><span className={`status status-${order.status.toLowerCase()}`}>{statusLabels[order.status]}</span></td>
