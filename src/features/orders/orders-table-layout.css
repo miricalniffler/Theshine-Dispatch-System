@@ -1,0 +1,31 @@
+/* Desktop column contract: mirrors the seven-column V3 prototype without a scroll gutter. */
+.v3-table-wrap { margin-top: 14px; overflow-x: hidden; }
+.v3-page .v3-orders-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; margin-top: 0; }
+.v3-col-select { width: 8%; }
+.v3-col-time { width: 12%; }
+.v3-col-order { width: 13%; }
+.v3-col-passenger { width: 27%; }
+.v3-col-fleet { width: 17%; }
+.v3-col-status { width: 11%; }
+.v3-col-action { width: 12%; }
+
+.v3-orders-table th, .v3-orders-table td { min-width: 0; }
+.v3-time-cell b, .v3-order-cell a, .v3-status-cell, .v3-action-cell { white-space: nowrap; }
+.v3-primary-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.v3-passenger-cell small, .v3-fleet-cell small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; overflow-wrap: anywhere; }
+.v3-next { max-width: 100%; white-space: nowrap; }
+
+@media (max-width: 1080px) and (min-width: 901px) {
+  .v3-page { padding: 24px 20px; }
+  .v3-orders-table th, .v3-orders-table td { padding: 11px 6px; }
+  .v3-orders-table .v3-select label { gap: 4px; font-size: 12px; }
+  .v3-orders-table .v3-select input { width: 19px; height: 19px; }
+  .v3-orders-table .v3-next { padding: 7px 6px; }
+  .v3-col-select { width: 7%; }.v3-col-time { width: 12%; }.v3-col-order { width: 13%; }
+  .v3-col-passenger { width: 29%; }.v3-col-fleet { width: 17%; }.v3-col-status { width: 10%; }.v3-col-action { width: 12%; }
+}
+
+@media (max-width: 900px) {
+  .v3-table-wrap { overflow-x: auto; }
+  .v3-page .v3-orders-table { min-width: 900px; }
+}
