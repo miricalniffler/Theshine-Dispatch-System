@@ -52,6 +52,15 @@ export default function FleetManager() {
     const response = await fetch(`/api/fleets/${fleet.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: fleet.name, city: fleet.city, chatNote: fleet.chatNote, vehicleTypes: fleet.vehicleTypes, note: fleet.note, enabled: !fleet.enabled }) });
     if (response.ok) { setMessage(`${fleet.name} 已${fleet.enabled ? "停用" : "启用"}`); await loadFleets(); }
   }
+  async function removeFleet(fleet: Fleet) {
+    if (!window.confirm(`确定删除“${fleet.name}”吗？\n如有订单关联此车队，订单会保留，但需重新选择车队。`)) return;
+    setError(""); setMessage("");
+    const response = await fetch(`/api/fleets/${fleet.id}`, { method: "DELETE" });
+    const json = await response.json();
+    if (!response.ok) { setError(json.error?.message ?? "删除失败"); return; }
+    if (editingId === fleet.id) resetForm();
+    setMessage(`已删除车队：${fleet.name}`); await loadFleets();
+  }
 
   return <main className={styles.page}>
     <header className={styles.header}><div><p className={styles.eyebrow}>FLEET DIRECTORY</p><h1>车队管理</h1><p>维护可合作车队与联络资料。城市仅用于筛选与提示，不改变派单正文。</p></div><div className={styles.count}><strong>{enabledCount}</strong><span>当前列表中启用</span></div></header>
@@ -60,7 +69,7 @@ export default function FleetManager() {
     <section className={styles.layout}>
       <div className={styles.tableCard}>
         <div className={styles.cardTitle}><h2>车队列表</h2><span>{loading ? "正在读取…" : `共 ${fleets.length} 个`}</span></div>
-        <div className={styles.tableWrap}><table><thead><tr><th>车队</th><th>城市</th><th>群聊备注</th><th>可提供车型</th><th>状态</th><th>更新</th><th aria-label="操作" /></tr></thead><tbody>{!loading && fleets.map((fleet) => <tr key={fleet.id}><td><strong>{fleet.name}</strong>{fleet.note && <small>{fleet.note}</small>}</td><td><span className={styles.cityTag}>{fleet.city}</span></td><td>{fleet.chatNote}</td><td><div className={styles.vehicles}>{fleet.vehicleTypes.map((vehicle) => <span key={vehicle}>{vehicle}</span>)}</div></td><td><button type="button" onClick={() => toggleEnabled(fleet)} className={fleet.enabled ? styles.enabled : styles.disabled}>{fleet.enabled ? "启用中" : "已停用"}</button></td><td>{formatTime(fleet.updatedAt)}</td><td><button className={styles.editButton} onClick={() => beginEdit(fleet)} type="button">编辑</button></td></tr>)}{!loading && fleets.length === 0 && <tr><td colSpan={7} className={styles.empty}>没有符合条件的车队</td></tr>}</tbody></table></div>
+        <div className={styles.tableWrap}><table><thead><tr><th>车队</th><th>城市</th><th>群聊备注</th><th>可提供车型</th><th>状态</th><th>更新</th><th aria-label="操作" /></tr></thead><tbody>{!loading && fleets.map((fleet) => <tr key={fleet.id}><td><strong>{fleet.name}</strong>{fleet.note && <small>{fleet.note}</small>}</td><td><span className={styles.cityTag}>{fleet.city}</span></td><td>{fleet.chatNote}</td><td><div className={styles.vehicles}>{fleet.vehicleTypes.map((vehicle) => <span key={vehicle}>{vehicle}</span>)}</div></td><td><button type="button" onClick={() => toggleEnabled(fleet)} className={fleet.enabled ? styles.enabled : styles.disabled}>{fleet.enabled ? "启用中" : "已停用"}</button></td><td>{formatTime(fleet.updatedAt)}</td><td><div className={styles.rowActions}><button className={styles.editButton} onClick={() => beginEdit(fleet)} type="button">编辑</button><button className={styles.deleteButton} onClick={() => void removeFleet(fleet)} type="button">删除</button></div></td></tr>)}{!loading && fleets.length === 0 && <tr><td colSpan={7} className={styles.empty}>没有符合条件的车队</td></tr>}</tbody></table></div>
       </div>
       <form id="fleet-form" className={styles.formCard} onSubmit={submit}><div className={styles.cardTitle}><h2>{editingId ? "编辑车队" : "新增车队"}</h2>{editingId && <button type="button" onClick={resetForm}>取消编辑</button>}</div>
         <label>车队名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：Siam Airport Transfer" /></label>
