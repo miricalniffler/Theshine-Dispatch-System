@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { failure, success } from "@/lib/api-response";
 import { NextRequest } from "next/server";
+import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
@@ -15,9 +16,11 @@ export async function POST(request: NextRequest) {
   const pickupDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(fields.pickupDateTime)) ? new Date(`${fields.pickupDateTime}:00+07:00`) : null;
   if (!pickupDateTime || Number.isNaN(pickupDateTime.getTime())) return failure("INVALID_PICKUP_TIME", "接客时间无法确认，请返回核对。", ["pickupDateTime"], 422);
   const order = await db.$transaction(async (tx) => {
-    const created = await tx.order.create({ data: { platformOrderNumber: fields.platformOrderNumber, city: fields.city === "苏梅" ? "苏梅" : "曼谷", serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults: Number(fields.adults) || 0, children: Number(fields.children) || 0, luggage: Number(fields.luggage) || 0, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
+    const city = fields.city === "苏梅" ? "苏梅" : "曼谷";
+    const fleet = await canonicalFleetForCity(tx, city);
+    const created = await tx.order.create({ data: { platformOrderNumber: fields.platformOrderNumber, city, fleetId: fleet.id, serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults: Number(fields.adults) || 0, children: Number(fields.children) || 0, luggage: Number(fields.luggage) || 0, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
     await tx.activityLog.create({ data: { orderId: created.id, action: "订单已导入", actor: "运营人员", metadata: JSON.stringify({ sourceType: source.type, sourceFormat: source.format, sourceVerified: true }) } });
     return created;
   });
-  return success({ order, message: missing.length ? "订单已保存为待核对。" : "订单已保存，等待选择车队派单。" });
+  return success({ order, message: missing.length ? "订单已保存为待核对。" : "订单已按城市自动分配车队，等待派单。" });
 }

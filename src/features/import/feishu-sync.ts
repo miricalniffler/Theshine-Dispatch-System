@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { pullConnectorMessages, type ImportedMessage } from "./connectors";
+import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
 
@@ -49,17 +50,19 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const dropoffAddress = pick(message.text, "Dropoff address");
   const platformVehicleType = pick(message.text, "Vehicle Type");
   if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
-  const data = { serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, rawSource: message.text };
+  const city = /samui|苏梅|USM/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷";
+  const data = { city, serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, rawSource: message.text };
   if (existing) {
     await db.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: existing.id }, data });
+      const fleet = await canonicalFleetForCity(tx, city);
+      await tx.order.update({ where: { id: existing.id }, data: { ...data, fleetId: fleet.id } });
       await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
     });
     await recordMessage(message, existing.id);
     return "updated";
   }
-  const city = /samui|苏梅|USM/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷";
-  const created = await db.order.create({ data: { platformOrderNumber, city, ...data, status: "READY_TO_DISPATCH" } });
+  const fleet = await canonicalFleetForCity(db, city);
+  const created = await db.order.create({ data: { platformOrderNumber, ...data, fleetId: fleet.id, status: "READY_TO_DISPATCH" } });
   await db.activityLog.create({ data: { orderId: created.id, action: "飞书邮件同步：新增订单", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
   await recordMessage(message, created.id);
   return "created";

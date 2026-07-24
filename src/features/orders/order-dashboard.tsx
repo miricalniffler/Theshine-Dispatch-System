@@ -16,7 +16,7 @@ function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ban
 function displayToday() { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Bangkok", year: "numeric", month: "long", day: "numeric" }).format(new Date()); }
 function nextAction(order: Order) {
   if (order.status === "PENDING_REVIEW") return "核对订单";
-  if (order.status === "READY_TO_DISPATCH") return order.fleetName === "待选择" ? "选择车队" : "去派车";
+  if (order.status === "READY_TO_DISPATCH") return "去派车";
   if (order.status === "DISPATCHED") return "录入司机资料";
   if (order.status === "DRIVER_CONFIRMED" || order.status === "RETURNED") return "生成回传";
   return "查看详情";
@@ -45,7 +45,7 @@ export function OrderDashboard() {
         <select aria-label="日期范围" value={filters.dateMode} onChange={(event) => update("dateMode", event.target.value)}><option value="window">今天至未来 7 日</option><option value="today">今天</option><option value="tomorrow">明天</option><option value="month">本月</option><option value="future">未来全部日期</option><option value="range">自定义日期范围</option></select>
         {filters.dateMode === "range" && <><input aria-label="开始日期" type="date" value={filters.startDate || today()} onInput={(event) => update("startDate", event.currentTarget.value)} onChange={(event) => update("startDate", event.target.value)}/><input aria-label="结束日期" type="date" value={filters.endDate || ""} onInput={(event) => update("endDate", event.currentTarget.value)} onChange={(event) => update("endDate", event.target.value)}/></>}
         <select aria-label="城市" value={filters.city || ""} onChange={(event) => update("city", event.target.value)}><option value="">全部城市</option><option>曼谷</option><option>苏梅</option></select>
-        <select aria-label="车队" value={filters.fleet || ""} onChange={(event) => update("fleet", event.target.value)}><option value="">全部车队</option><option>Bangkok Premier Fleet</option><option>Siam Airport Service</option><option>Samui Island Transfer</option></select>
+        <select aria-label="车队" value={filters.fleet || ""} onChange={(event) => update("fleet", event.target.value)}><option value="">全部车队</option><option>曼谷车队</option><option>苏梅车队</option></select>
         <select aria-label="状态" value={filters.status || ""} onChange={(event) => update("status", event.target.value)}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
         <select aria-label="异常" value={filters.exception || ""} onChange={(event) => update("exception", event.target.value)}><option value="">全部异常</option>{Object.entries(exceptionLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
         <input aria-label="关键词" placeholder="订单号 / 乘客 / 电话" value={filters.keyword || ""} onChange={(event) => update("keyword", event.target.value)}/>

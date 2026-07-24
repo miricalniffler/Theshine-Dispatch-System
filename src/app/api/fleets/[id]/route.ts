@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteSqliteFleet, getSqliteFleet, updateSqliteFleet } from "@/features/fleets/sqlite-repository";
+import { getSqliteFleet, updateSqliteFleet } from "@/features/fleets/sqlite-repository";
 import { fleetInputSchema } from "@/features/fleets/validation";
 
 type Params = { params: Promise<{ id: string }> };
@@ -15,6 +15,6 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   return fleet ? NextResponse.json({ data: fleet }) : NextResponse.json({ error: { code: "NOT_FOUND", message: "未找到该车队", fields: [] } }, { status: 404 });
 }
 export async function DELETE(_: NextRequest, { params }: Params) {
-  const fleet = await deleteSqliteFleet((await params).id);
-  return fleet ? NextResponse.json({ data: fleet }) : NextResponse.json({ error: { code: "NOT_FOUND", message: "未找到该车队", fields: [] } }, { status: 404 });
+  await params;
+  return NextResponse.json({ error: { code: "FIXED_FLEET_DIRECTORY", message: "第一期固定使用两支车队，不能删除。", fields: [] } }, { status: 409 });
 }

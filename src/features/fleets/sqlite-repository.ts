@@ -5,7 +5,14 @@ function decode(row: { id: string; name: string; city: string; isActive: boolean
 export async function listSqliteFleets(city?: string) { return (await db.fleet.findMany({ where: city ? { city } : {}, orderBy: { updatedAt: "desc" } })).map(decode); }
 export async function createSqliteFleet(input: FleetInput) { return decode(await db.fleet.create({ data: { name: input.name, city: input.city, isActive: input.enabled, note: JSON.stringify({ chatNote: input.chatNote, vehicleTypes: input.vehicleTypes, note: input.note }) } })); }
 export async function getSqliteFleet(id: string) { const row = await db.fleet.findUnique({ where: { id } }); return row ? decode(row) : undefined; }
-export async function updateSqliteFleet(id: string, input: FleetInput) { try { return decode(await db.fleet.update({ where: { id }, data: { name: input.name, city: input.city, isActive: input.enabled, note: JSON.stringify({ chatNote: input.chatNote, vehicleTypes: input.vehicleTypes, note: input.note }) } })); } catch { return undefined; } }
+export async function updateSqliteFleet(id: string, input: FleetInput) {
+  try {
+    const current = await db.fleet.findUnique({ where: { id } });
+    if (!current) return undefined;
+    // 车队名称和城市是固定路由键，编辑页仅维护可选运营资料。
+    return decode(await db.fleet.update({ where: { id }, data: { name: current.name, city: current.city, isActive: input.enabled, note: JSON.stringify({ chatNote: input.chatNote, vehicleTypes: input.vehicleTypes, note: input.note }) } }));
+  } catch { return undefined; }
+}
 export async function deleteSqliteFleet(id: string) {
   const fleet = await db.fleet.findUnique({ where: { id } });
   if (!fleet) return undefined;
