@@ -1,6 +1,7 @@
 import { loadRules } from "@/lib/rules/load-rules";
 import { renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { demoOrderRepository } from "@/features/orders/demo-repository";
+import { db } from "@/lib/db";
 
 type DispatchOrder = {
   id: string;
@@ -49,7 +50,7 @@ export type DispatchPreview = {
   orderCount: number;
 };
 
-type DispatchBatch = {
+type StoredDispatchBatch = {
   id: string;
   orderIds: string[];
   text: string;
@@ -58,12 +59,71 @@ type DispatchBatch = {
   confirmedAt: string | null;
 };
 
-const dispatchBatches = new Map<string, DispatchBatch>();
+/**
+ * The dashboard still exposes the lightweight `DispatchOrder` shape.  Before a
+ * dispatch is saved we make sure its related Fleet and Order rows exist in
+ * SQLite, so a saved batch always has an immutable, relational audit trail.
+ */
+async function ensureOrdersPersisted(orders: DispatchOrder[]) {
+  return db.$transaction(async (tx) => {
+    const fleetIds = new Map<string, string>();
+
+    for (const order of orders) {
+      const fleetKey = `${order.city}\u0000${order.fleetName}`;
+      let fleetId = fleetIds.get(fleetKey);
+      if (!fleetId) {
+        const fleet = await tx.fleet.upsert({
+          where: { name_city: { name: order.fleetName, city: order.city } },
+          update: {},
+          create: { name: order.fleetName, city: order.city },
+        });
+        fleetId = fleet.id;
+        fleetIds.set(fleetKey, fleetId);
+      }
+
+      const [pickupAddress = "待核对", dropoffAddress = "待核对"] = order.city === "曼谷"
+        ? ["Suvarnabhumi Airport (BKK), Gate 3", "Sukhumvit 24, Bangkok"]
+        : ["Samui Airport (USM), Arrival Hall", "Chaweng Beach Road, Koh Samui"];
+
+      await tx.order.upsert({
+        where: { id: order.id },
+        update: {
+          city: order.city,
+          fleetId,
+          serviceDate: order.serviceDate,
+          pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`),
+          passengerName: order.passengerName,
+          passengerPhone: order.passengerPhone,
+          platformVehicleType: order.vehicleType,
+          status: order.status,
+        },
+        create: {
+          id: order.id,
+          platformOrderNumber: order.orderNo,
+          city: order.city,
+          fleetId,
+          serviceDate: order.serviceDate,
+          pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`),
+          pickupAddress,
+          dropoffAddress,
+          passengerName: order.passengerName,
+          passengerPhone: order.passengerPhone,
+          platformVehicleType: order.vehicleType,
+          status: order.status,
+        },
+      });
+    }
+  });
+}
+
+async function selectedDispatchOrders(orderIds: string[]) {
+  const all = await demoOrderRepository.list({ dateMode: "future" });
+  return all.filter((order) => orderIds.includes(order.id)) as DispatchOrder[];
+}
 
 export async function createDispatchPreview(orderIds: string[]): Promise<DispatchPreview> {
   const rules = loadRules();
-  const all = await demoOrderRepository.list({ dateMode: "future" });
-  const selected = all.filter((order) => orderIds.includes(order.id)) as DispatchOrder[];
+  const selected = await selectedDispatchOrders(orderIds);
   const errors: string[] = [];
   if (!selected.length) errors.push("请至少选择一张订单。");
   if (selected.length !== orderIds.length) errors.push("有订单不存在或不在当前可选范围内。");
@@ -101,15 +161,61 @@ export async function createDispatchPreview(orderIds: string[]): Promise<Dispatc
 export async function saveDispatchCopy(orderIds: string[]) {
   const preview = await createDispatchPreview(orderIds);
   if (!preview.valid || !preview.text) return preview;
-  const id = `dispatch_${Date.now()}`;
-  dispatchBatches.set(id, { id, orderIds, text: preview.text, ruleVersion: preview.ruleVersion, copiedAt: new Date().toISOString(), confirmedAt: null });
-  return { ...preview, batchId: id };
+  const selected = await selectedDispatchOrders(orderIds);
+  await ensureOrdersPersisted(selected);
+
+  const fleet = await db.fleet.findUnique({
+    where: { name_city: { name: preview.fleetName!, city: preview.city! } },
+  });
+  if (!fleet) throw new Error("FLEET_NOT_FOUND");
+
+  const batch = await db.dispatchBatch.create({
+    data: {
+      city: preview.city!,
+      fleetId: fleet.id,
+      serviceDate: preview.serviceDate!,
+      ruleVersion: preview.ruleVersion,
+      contentSnapshot: preview.text,
+      copiedAt: new Date(),
+      orders: { create: orderIds.map((orderId) => ({ orderId })) },
+    },
+  });
+  return { ...preview, batchId: batch.id };
 }
 
-export async function confirmDispatch(batchId: string) {
-  const batch = dispatchBatches.get(batchId);
+export async function confirmDispatch(batchId: string): Promise<StoredDispatchBatch> {
+  const batch = await db.dispatchBatch.findUnique({
+    where: { id: batchId },
+    include: { orders: { select: { orderId: true } } },
+  });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
-  batch.confirmedAt = new Date().toISOString();
-  await Promise.all(batch.orderIds.map((id) => demoOrderRepository.updateStatus(id, "DISPATCHED")));
-  return batch;
+  const confirmedAt = batch.confirmedAt ?? new Date();
+  const orderIds = batch.orders.map((link) => link.orderId);
+
+  if (!batch.confirmedAt) {
+    await db.$transaction([
+      db.dispatchBatch.update({ where: { id: batch.id }, data: { confirmedAt } }),
+      db.order.updateMany({ where: { id: { in: orderIds } }, data: { status: "DISPATCHED" } }),
+      db.activityLog.createMany({
+        data: orderIds.map((orderId) => ({
+          orderId,
+          action: "已确认派单",
+          actor: "运营人员",
+          metadata: JSON.stringify({ dispatchBatchId: batch.id, ruleVersion: batch.ruleVersion }),
+        })),
+      }),
+    ]);
+    // Keep the still-used in-memory workflow in sync while the other modules
+    // are being migrated. SQLite remains the durable source of truth.
+    await Promise.all(orderIds.map((id) => demoOrderRepository.updateStatus(id, "DISPATCHED")));
+  }
+
+  return {
+    id: batch.id,
+    orderIds,
+    text: batch.contentSnapshot,
+    ruleVersion: batch.ruleVersion,
+    copiedAt: (batch.copiedAt ?? batch.createdAt).toISOString(),
+    confirmedAt: confirmedAt.toISOString(),
+  };
 }
