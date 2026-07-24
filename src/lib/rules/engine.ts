@@ -88,8 +88,11 @@ export function formatMeetGreetLine(value: string | null | undefined, passengerN
   if (!request) return "";
   const greetingSignName = request.replace(/^(?:meeting tablet|greeting sign|meeting sign)\s*:\s*/i, "").trim();
   const normalized = greetingSignName.toLocaleLowerCase().replace(/\s+/g, " ");
-  const passenger = passengerName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-  if (["yes", "true", "required", "meet&greet", "meet & greet", "举牌", "需要举牌"].includes(normalized) || normalized === passenger) {
+  const passengers = passengerName
+    .split(/\s*,\s*/)
+    .map((name) => name.trim().toLocaleLowerCase().replace(/\s+/g, " "))
+    .filter(Boolean);
+  if (["yes", "true", "required", "meet&greet", "meet & greet", "举牌", "需要举牌"].includes(normalized) || passengers.includes(normalized)) {
     return rules.templates.dispatch.meet_greet.standard_line;
   }
   return renderTemplate(rules.templates.dispatch.meet_greet.greeting_sign_line, { greeting_sign_name: greetingSignName });
