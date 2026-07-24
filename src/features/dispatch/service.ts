@@ -49,6 +49,17 @@ export type DispatchPreview = {
   orderCount: number;
 };
 
+type DispatchBatch = {
+  id: string;
+  orderIds: string[];
+  text: string;
+  ruleVersion: string;
+  copiedAt: string;
+  confirmedAt: string | null;
+};
+
+const dispatchBatches = new Map<string, DispatchBatch>();
+
 export async function createDispatchPreview(orderIds: string[]): Promise<DispatchPreview> {
   const rules = loadRules();
   const all = await demoOrderRepository.list({ dateMode: "future" });
@@ -85,4 +96,20 @@ export async function createDispatchPreview(orderIds: string[]): Promise<Dispatc
     ruleVersion: rules.rules_version,
     orderCount: selected.length,
   };
+}
+
+export async function saveDispatchCopy(orderIds: string[]) {
+  const preview = await createDispatchPreview(orderIds);
+  if (!preview.valid || !preview.text) return preview;
+  const id = `dispatch_${Date.now()}`;
+  dispatchBatches.set(id, { id, orderIds, text: preview.text, ruleVersion: preview.ruleVersion, copiedAt: new Date().toISOString(), confirmedAt: null });
+  return { ...preview, batchId: id };
+}
+
+export async function confirmDispatch(batchId: string) {
+  const batch = dispatchBatches.get(batchId);
+  if (!batch) throw new Error("BATCH_NOT_FOUND");
+  batch.confirmedAt = new Date().toISOString();
+  await Promise.all(batch.orderIds.map((id) => demoOrderRepository.updateStatus(id, "DISPATCHED")));
+  return batch;
 }
