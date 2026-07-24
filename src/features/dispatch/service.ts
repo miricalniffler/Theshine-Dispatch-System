@@ -1,5 +1,5 @@
 import { loadRules } from "@/lib/rules/load-rules";
-import { renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { formatInternationalPhone, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { db } from "@/lib/db";
 
 type DispatchOrder = {
@@ -26,7 +26,7 @@ function contentFor(order: DispatchOrder) {
   return {
     platform_order_number: order.orderNo,
     passenger_name: order.passengerName,
-    passenger_phone: order.passengerPhone,
+    passenger_phone: formatInternationalPhone(order.passengerPhone) ?? order.passengerPhone,
     flight_number: order.flightNumber ?? "待核对",
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
@@ -53,6 +53,11 @@ export type DispatchPreview = {
   serviceDate?: string;
   ruleVersion: string;
   orderCount: number;
+};
+
+export type DispatchPreviewOptions = {
+  /** A single-order inspection preview uses the same header/body but never adds a city batch footer. */
+  includeBatchFooter?: boolean;
 };
 
 type StoredDispatchBatch = {
@@ -87,19 +92,20 @@ async function selectedDispatchOrders(orderIds: string[]) {
   }));
 }
 
-export async function createDispatchPreview(orderIds: string[]): Promise<DispatchPreview> {
+export async function createDispatchPreview(orderIds: string[], options: DispatchPreviewOptions = {}): Promise<DispatchPreview> {
   const rules = loadRules();
   const selected = await selectedDispatchOrders(orderIds);
   const errors: string[] = [];
   if (!selected.length) errors.push("请至少选择一张订单。");
   if (selected.length !== orderIds.length) errors.push("有订单不存在或不在当前可选范围内。");
+  const includeBatchFooter = options.includeBatchFooter ?? true;
   const cities = new Set(selected.map((item) => item.city));
   const fleets = new Set(selected.map((item) => item.fleetName));
   const dates = new Set(selected.map((item) => item.serviceDate));
   if (selected.some((item) => item.fleetName === "待选择")) errors.push("所选订单尚未指定车队，请先在订单详情中选择车队。");
-  if (cities.size > 1) errors.push("批量派给车队时，请只选择同一城市的订单。");
-  if (fleets.size > 1) errors.push("批量派给车队时，请只选择同一车队的订单。");
-  if (dates.size > 1) errors.push("不同服务日期请拆成不同批次。");
+  if (includeBatchFooter && cities.size > 1) errors.push("批量派给车队时，请只选择同一城市的订单。");
+  if (includeBatchFooter && fleets.size > 1) errors.push("批量派给车队时，请只选择同一车队的订单。");
+  if (includeBatchFooter && dates.size > 1) errors.push("不同服务日期请拆成不同批次。");
   selected.forEach((order) => {
     if (order.status !== "READY_TO_DISPATCH") errors.push(`${order.orderNo} 当前不是待派单状态。`);
     if (order.exceptions.length) errors.push(`${order.orderNo} 存在异常，不能直接批量派单。`);
@@ -116,7 +122,9 @@ export async function createDispatchPreview(orderIds: string[]): Promise<Dispatc
   return {
     valid: true,
     errors: [],
-    text: `${bodies.join("\n\n---\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules)}`,
+    text: includeBatchFooter
+      ? `${bodies.join("\n\n---\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules)}`
+      : bodies.join("\n\n---\n\n"),
     city,
     fleetName: selected[0].fleetName,
     serviceDate: selected[0].serviceDate,

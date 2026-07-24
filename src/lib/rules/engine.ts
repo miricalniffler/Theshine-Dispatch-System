@@ -60,6 +60,21 @@ export function normalizeThailandPhone(phone: string | null | undefined, rules: 
   return `${config.country_code}${digits}`;
 }
 
+/** Formats an international passenger phone as "+country code national number" using YAML rules.
+ * The original value is returned when its country code cannot be identified safely. */
+export function formatInternationalPhone(phone: string | null | undefined, rules: RulesConfig = loadRules()) {
+  if (!phone) return null;
+  const original = phone.trim();
+  let digits = original.replace(/[^\d]/g, "");
+  if (original.replace(/[^\d+]/g, "").startsWith("00")) digits = digits.slice(2);
+  const countryCode = [...rules.transforms.phone.display.country_calling_codes]
+    .sort((left, right) => right.length - left.length)
+    .find((code) => digits.startsWith(code.slice(1)));
+  if (!countryCode) return original;
+  const nationalNumber = digits.slice(countryCode.length - 1);
+  return nationalNumber ? `${countryCode}${rules.transforms.phone.display.separator}${nationalNumber}` : countryCode;
+}
+
 export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules()) {
   if (!vehicle) return null;
   const normalizedKey = vehicle.trim().toLocaleLowerCase();

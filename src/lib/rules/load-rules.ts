@@ -16,7 +16,10 @@ const rulesSchema = z.object({
   }),
   validation: z.object({ before_dispatch: z.array(z.string()), before_iway_return: z.array(z.string()) }),
   transforms: z.object({
-    phone: z.object({ thailand: z.object({ country_code: z.string(), convert_local_leading_zero: z.boolean(), local_digit_lengths: z.array(z.number()) }) }),
+    phone: z.object({
+      display: z.object({ country_calling_codes: z.array(z.string().regex(/^\+\d+$/)), separator: z.string().min(1) }),
+      thailand: z.object({ country_code: z.string(), convert_local_leading_zero: z.boolean(), local_digit_lengths: z.array(z.number()) }),
+    }),
     vehicle_aliases: z.record(z.string(), z.string()),
   }),
   thresholds: z.object({ dispatch_missing_hours_before_pickup: z.number(), driver_details_missing_hours_before_pickup: z.number() }),

@@ -11,7 +11,10 @@ export type RulesConfig = {
     before_iway_return: string[];
   };
   transforms: {
-    phone: { thailand: { country_code: string; convert_local_leading_zero: boolean; local_digit_lengths: number[] } };
+    phone: {
+      display: { country_calling_codes: string[]; separator: string };
+      thailand: { country_code: string; convert_local_leading_zero: boolean; local_digit_lengths: number[] };
+    };
     vehicle_aliases: Record<string, string>;
   };
   thresholds: { dispatch_missing_hours_before_pickup: number; driver_details_missing_hours_before_pickup: number };
