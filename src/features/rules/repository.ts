@@ -77,3 +77,21 @@ export async function publishRuleVersion(source: string, publishedBy?: string): 
   }
   return toPublishedRule(created);
 }
+
+/** Restoring an old snapshot always creates a new, traceable published version. */
+export async function rollbackRuleVersion(targetVersion: string, publishedBy?: string): Promise<PublishedRule> {
+  const target = await db.ruleVersion.findUnique({ where: { version: targetVersion } });
+  if (!target) throw new Error(`找不到规则版本 ${targetVersion}。`);
+
+  const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+  let attempt = 0;
+  let nextVersion = `${target.version}-rollback-${timestamp}`;
+  while (await db.ruleVersion.findUnique({ where: { version: nextVersion } })) {
+    attempt += 1;
+    nextVersion = `${target.version}-rollback-${timestamp}-${attempt}`;
+  }
+  const source = target.yamlContent.replace(/^rules_version:\s*.*$/m, `rules_version: "${nextVersion}"`);
+  // Re-parse before publishing so malformed legacy snapshots cannot become active.
+  parseRules(source);
+  return publishRuleVersion(source, publishedBy?.trim() || `回退自 ${target.version}`);
+}
