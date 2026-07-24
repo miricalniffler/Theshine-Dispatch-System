@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import type { Order } from "./types";
+import type { Order, OrderFilters } from "./types";
 import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 
 export async function findPersistedOrder(id: string) {
@@ -33,7 +33,36 @@ export async function saveOrderToSqlite(order: Order) {
   return db.order.upsert({ where: { platformOrderNumber: order.orderNo }, update: { status: order.status, fleetId: null }, create: { id: order.id, platformOrderNumber: order.orderNo, city: order.city, serviceDate: order.serviceDate, pickupDateTime: new Date(`${order.serviceDate}T${order.pickupTime}:00+07:00`), pickupAddress: pickupAddress || "待核对", dropoffAddress: dropoffAddress || "待核对", passengerName: order.passengerName, passengerPhone: order.passengerPhone, platformVehicleType: order.vehicleType, status: order.status } });
 }
 
-export async function listSqliteOrders() {
+function bangkokToday() {
+  const parts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function matchesFilters(order: Order, filters: OrderFilters) {
+  const today = bangkokToday();
+  if (filters.dateMode === "today" && order.serviceDate !== today) return false;
+  if (filters.dateMode === "future" && order.serviceDate <= today) return false;
+  if (filters.dateMode === "range") {
+    if (filters.startDate && order.serviceDate < filters.startDate) return false;
+    if (filters.endDate && order.serviceDate > filters.endDate) return false;
+  }
+  if (filters.city && order.city !== filters.city) return false;
+  if (filters.fleet && order.fleetName !== filters.fleet) return false;
+  if (filters.status && order.status !== filters.status) return false;
+  if (filters.exception && !order.exceptions.includes(filters.exception as Order["exceptions"][number])) return false;
+  if (filters.keyword) {
+    const keyword = filters.keyword.trim().toLowerCase();
+    const searchable = [order.orderNo, order.passengerName, order.passengerPhone, order.route].join(" ").toLowerCase();
+    if (!searchable.includes(keyword)) return false;
+  }
+  return true;
+}
+
+export async function listSqliteOrders(filters: OrderFilters = {}) {
   const rows = await db.order.findMany({ orderBy: { pickupDateTime: "asc" } });
-  return rows.map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString() }));
+  return rows
+    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString() }))
+    .filter((order) => matchesFilters(order, filters));
 }

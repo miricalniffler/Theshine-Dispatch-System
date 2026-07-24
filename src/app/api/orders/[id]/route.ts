@@ -1,10 +1,13 @@
 import { findPersistedOrder, updatePersistedOrder } from "@/features/orders/sqlite-repository";
 import { orderEditSchema } from "@/features/orders/order-edit-validation";
+import { translateThaiForReview } from "@/features/assist/service";
 import { failure, success } from "@/lib/api-response";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const order = await findPersistedOrder((await params).id);
-  return order ? success(order) : failure("ORDER_NOT_FOUND", "找不到该订单。", undefined, 404);
+  if (!order) return failure("ORDER_NOT_FOUND", "找不到该订单。", undefined, 404);
+  const thaiTranslation = await translateThaiForReview(order.rawSource || "");
+  return success({ ...order, assistance: { thaiTranslation, vehicleImage: { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "订单详情未保存车辆图片；如需识别，请在导入订单时提供图片地址。" } } });
 }
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
