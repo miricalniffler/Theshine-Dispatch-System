@@ -37,6 +37,7 @@ model Order {
   dispatchLinks DispatchBatchOrder[]
   iwayLinks     IwayReturnBatchOrder[]
   activityLogs  ActivityLog[]
+  driverConfirmations DriverDetailConfirmation[]
 
   @@index([serviceDate, city, fleetId])
   @@index([status, pickupDateTime])
@@ -52,6 +53,7 @@ model Fleet {
   updatedAt DateTime @updatedAt
 
   orders Order[]
+  dispatchBatches DispatchBatch[]
 
   @@unique([name, city])
 }
@@ -84,8 +86,77 @@ model DispatchBatch {
   createdAt       DateTime  @default(now())
 
   orders DispatchBatchOrder[]
+  fleetReplies FleetReply[]
+  fleet Fleet @relation(fields: [fleetId], references: [id])
 
   @@index([serviceDate, city, fleetId])
+}
+
+model FleetReply {
+  id              String    @id @default(cuid())
+  dispatchBatchId String?
+  candidateOrderIds String?
+  rawText         String
+  createdBy       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  dispatchBatch DispatchBatch? @relation(fields: [dispatchBatchId], references: [id], onDelete: SetNull)
+  images        FleetReplyImage[]
+  extractions   AiExtraction[]
+  confirmations DriverDetailConfirmation[]
+
+  @@index([dispatchBatchId, createdAt])
+}
+
+model FleetReplyImage {
+  id               String   @id @default(cuid())
+  fleetReplyId     String
+  storagePath      String
+  originalFilename String?
+  mimeType         String
+  uploadedAt       DateTime @default(now())
+
+  fleetReply FleetReply @relation(fields: [fleetReplyId], references: [id], onDelete: Cascade)
+
+  @@index([fleetReplyId])
+}
+
+model AiExtraction {
+  id                  String   @id @default(cuid())
+  fleetReplyId        String
+  provider            String
+  modelName           String?
+  promptVersion       String
+  rawModelJson        String?
+  validatedResultJson String?
+  status              String
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+
+  fleetReply FleetReply @relation(fields: [fleetReplyId], references: [id], onDelete: Cascade)
+
+  @@index([fleetReplyId, createdAt])
+}
+
+model DriverDetailConfirmation {
+  id                  String   @id @default(cuid())
+  orderId             String
+  fleetReplyId        String
+  extractionId        String?
+  finalDriverName     String
+  finalPhone          String
+  finalPlate          String
+  finalVehicleModel   String
+  confirmedBy         String?
+  confirmedAt         DateTime @default(now())
+  rulesVersion        String
+
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fleetReply FleetReply  @relation(fields: [fleetReplyId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, confirmedAt])
+  @@index([fleetReplyId])
 }
 
 model DispatchBatchOrder {

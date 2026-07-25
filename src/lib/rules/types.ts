@@ -21,6 +21,7 @@ export type RulesConfig = {
       thailand: { country_code: string; convert_local_leading_zero: boolean; local_digit_lengths: number[] };
     };
     vehicle_aliases: Record<string, string>;
+    generic_vehicle_labels_not_allowed_for_return: string[];
   };
   thresholds: { dispatch_missing_hours_before_pickup: number; driver_details_missing_hours_before_pickup: number };
   duplicate_detection: { compare_fields: string[]; pickup_time_window_minutes: number };

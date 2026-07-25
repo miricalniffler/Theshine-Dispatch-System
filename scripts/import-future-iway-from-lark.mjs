@@ -88,6 +88,14 @@ function parseOrder(message, meta) {
   };
 }
 
+function orderNumberFromSubject(subject) {
+  return String(subject || "").match(/#?([\d\s\u00a0]{5,})/)?.[1]?.replace(/[\s\u00a0]/g, "") || "";
+}
+
+function isCancellationSubject(subject) {
+  return /cancel(?:lation|led|ed)?|void/i.test(String(subject || ""));
+}
+
 function todayBangkok() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
@@ -101,7 +109,8 @@ async function main() {
     "--max", "400", "--format", "json",
   ]);
   const candidates = triage.messages.filter((mail) =>
-    /^(?:Transfer service order|AMENDMENT to the transfer)\s+#?[\d\s\u00a0]+\s+\(i[’']way\)$/i.test(mail.subject),
+    /(?:Transfer service order|AMENDMENT to the transfer|cancel(?:lation|led|ed)?.*transfer|transfer.*cancel(?:lation|led|ed)?)/i.test(mail.subject) &&
+    /i[’']way/i.test(mail.subject),
   );
   const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
   const details = runCli([
@@ -110,33 +119,43 @@ async function main() {
     "--html=false", "--format", "json",
   ]);
   const metadata = new Map(uniqueCandidates.map((mail) => [mail.message_id, mail]));
-  const parseResults = details.data.messages.map((message) => ({
-    message,
-    order: parseOrder(message, metadata.get(message.message_id)),
-  }));
-  const rejectedMessages = parseResults.filter((result) => !result.order).map((result) => metadata.get(result.message.message_id));
-  const parsed = parseResults
-    .map((result) => result.order)
-    .filter(Boolean)
-    .sort((left, right) => left.receivedAt - right.receivedAt);
-  const latestByOrder = new Map(parsed.map((order) => [order.orderNo, order]));
+  const parseResults = details.data.messages.map((message) => {
+    const meta = metadata.get(message.message_id);
+    if (isCancellationSubject(meta?.subject)) {
+      return { message, event: { action: "cancel", orderNo: orderNumberFromSubject(meta.subject), sourceMessageId: message.message_id, sourceSubject: meta.subject, receivedAt: new Date(meta.date) } };
+    }
+    const order = parseOrder(message, meta);
+    return { message, event: order ? { action: "upsert", ...order } : null };
+  });
+  const rejectedMessages = parseResults.filter((result) => !result.event?.orderNo).map((result) => metadata.get(result.message.message_id));
+  const parsed = parseResults.map((result) => result.event).filter((event) => event?.orderNo).sort((left, right) => left.receivedAt - right.receivedAt);
+  const latestByOrder = new Map(parsed.map((event) => [event.orderNo, event]));
   const today = todayBangkok();
-  const future = [...latestByOrder.values()].filter((order) => order.serviceDate > today);
+  const future = [];
+  for (const event of latestByOrder.values()) {
+    if (event.action === "upsert" && event.serviceDate >= today) future.push(event);
+    if (event.action === "cancel") {
+      const existing = await db.order.findUnique({ where: { platformOrderNumber: event.orderNo } });
+      if (existing?.serviceDate >= today) future.push(event);
+    }
+  }
   if (dryRun) {
     console.log(JSON.stringify({
       scanned: triage.count,
       candidateMessages: uniqueCandidates.length,
-      parsedMessages: parsed.length,
+      parsedMessages: parsed.filter((event) => event.action === "upsert").length,
+      cancellationMessages: parsed.filter((event) => event.action === "cancel").length,
       rejectedMessages: rejectedMessages.map((mail) => ({ date: mail?.date, subject: mail?.subject, messageId: mail?.message_id })),
-      futureOrders: future.map((order) => ({
-        orderNo: order.orderNo,
-        city: order.city,
-        serviceDate: order.serviceDate,
-        pickupTime: order.pickupDateTime.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }),
-        passengerName: order.passengerName,
-        pickupAddress: order.pickupAddress,
-        dropoffAddress: order.dropoffAddress,
-        sourceSubject: order.sourceSubject,
+      futureOrders: future.map((event) => ({
+        action: event.action,
+        orderNo: event.orderNo,
+        city: event.city,
+        serviceDate: event.serviceDate,
+        pickupTime: event.pickupDateTime?.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }),
+        passengerName: event.passengerName,
+        pickupAddress: event.pickupAddress,
+        dropoffAddress: event.dropoffAddress,
+        sourceSubject: event.sourceSubject,
       })),
     }, null, 2));
     return;
@@ -150,9 +169,21 @@ async function main() {
       create: { name, city, isActive: true, note: JSON.stringify({ chatNote: "", vehicleTypes: [], note: "" }) },
     }));
   }
-  const summary = { scanned: triage.count, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.length, futureOrders: future.length, created: [], updated: [], unchanged: [], rejected: uniqueCandidates.length - parsed.length };
+  const summary = { scanned: triage.count, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.filter((event) => event.action === "upsert").length, cancellationMessages: parsed.filter((event) => event.action === "cancel").length, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
   for (const item of future) {
     const existing = await db.order.findUnique({ where: { platformOrderNumber: item.orderNo } });
+    if (item.action === "cancel") {
+      if (existing && existing.status !== "CANCELLED") {
+        await db.$transaction([
+          db.order.update({ where: { id: existing.id }, data: { status: "CANCELLED" } }),
+          db.activityLog.create({ data: { orderId: existing.id, action: "从飞书邮箱同步订单取消", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } }),
+        ]);
+        summary.cancelled.push(item.orderNo);
+      } else {
+        summary.unchanged.push(item.orderNo);
+      }
+      continue;
+    }
     const fleet = fleets.get(item.city);
     const data = {
       city: item.city,
@@ -172,7 +203,6 @@ async function main() {
       meetGreetLine: item.meetGreetLine,
       otherNotes: item.otherNotes,
       rawSource: item.rawSource,
-      status: "READY_TO_DISPATCH",
     };
     if (existing) {
       const comparable = ["city", "serviceDate", "pickupAddress", "dropoffAddress", "passengerName", "passengerPhone", "flightNumber", "platformVehicleType", "seatCount", "adults", "children", "luggage", "meetGreetLine", "otherNotes"];
@@ -180,7 +210,7 @@ async function main() {
         existing.pickupDateTime.toISOString() !== data.pickupDateTime.toISOString() || existing.fleetId !== data.fleetId;
       if (changed) {
         await db.$transaction([
-          db.order.update({ where: { id: existing.id }, data }),
+          db.order.update({ where: { id: existing.id }, data: { ...data, status: existing.status === "CANCELLED" ? "READY_TO_DISPATCH" : existing.status } }),
           db.activityLog.create({ data: { orderId: existing.id, action: "从飞书邮箱同步订单最新信息", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } }),
         ]);
         summary.updated.push(item.orderNo);
@@ -188,7 +218,7 @@ async function main() {
         summary.unchanged.push(item.orderNo);
       }
     } else {
-      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data } });
+      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
       await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
       summary.created.push(item.orderNo);
     }

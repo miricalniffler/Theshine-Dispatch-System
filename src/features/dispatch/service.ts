@@ -28,7 +28,7 @@ function contentFor(order: DispatchOrder, rules = loadRules()) {
     platform_order_number: order.orderNo,
     passenger_name: order.passengerName,
     passenger_phone: formatInternationalPhone(order.passengerPhone, rules) ?? order.passengerPhone,
-    flight_number: order.flightNumber ?? "待核对",
+    flight_number: order.flightNumber,
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
     pickup_datetime: `${order.serviceDate} ${order.pickupTime}`,
@@ -109,7 +109,6 @@ export async function createDispatchPreview(orderIds: string[], options: Dispatc
   if (includeBatchFooter && fleets.size > 1) errors.push("批量派给车队时，请只选择同一车队的订单。");
   if (includeBatchFooter && dates.size > 1) errors.push("不同服务日期请拆成不同批次。");
   selected.forEach((order) => {
-    if (order.status !== "READY_TO_DISPATCH") errors.push(`${order.orderNo} 当前不是待派单状态。`);
     if (order.exceptions.length) errors.push(`${order.orderNo} 存在异常，不能直接批量派单。`);
     const result = validateRequiredFields(contentFor(order, rules), "before_dispatch", rules);
     if (!result.valid) errors.push(`${order.orderNo} 缺少：${result.missingFields.join("、")}`);
@@ -124,9 +123,10 @@ export async function createDispatchPreview(orderIds: string[], options: Dispatc
   return {
     valid: true,
     errors: [],
+    // 微信和 WhatsApp 中用两个回车分隔订单；不再插入视觉分割线。
     text: includeBatchFooter
-      ? `${bodies.join("\n\n---\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules)}`
-      : bodies.join("\n\n---\n\n"),
+      ? `${bodies.join("\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules)}`
+      : bodies.join("\n\n"),
     city,
     fleetName: selected[0].fleetName,
     serviceDate: selected[0].serviceDate,
@@ -170,11 +170,13 @@ export async function confirmDispatch(batchId: string): Promise<StoredDispatchBa
   if (!batch.confirmedAt) {
     await db.$transaction([
       db.dispatchBatch.update({ where: { id: batch.id }, data: { confirmedAt } }),
-      db.order.updateMany({ where: { id: { in: orderIds } }, data: { status: "DISPATCHED" } }),
+      // Re-opening or re-sending historical dispatch text must never move an
+      // order backwards from driver-confirmed, returned, or completed states.
+      db.order.updateMany({ where: { id: { in: orderIds }, status: "READY_TO_DISPATCH" }, data: { status: "DISPATCHED" } }),
       db.activityLog.createMany({
         data: orderIds.map((orderId) => ({
           orderId,
-          action: "已确认派单",
+          action: "已确认派单或再次发送派单信息",
           actor: "运营人员",
           metadata: JSON.stringify({ dispatchBatchId: batch.id, ruleVersion: batch.ruleVersion }),
         })),

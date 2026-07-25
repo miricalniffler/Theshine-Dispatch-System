@@ -1,10 +1,11 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-07-24.1"
+rules_version: "2026-07-25.2"
 timezone: "Asia/Bangkok"
 
 templates:
   dispatch:
-    header: "{{service_date_label}}订单请查收"
+    # 车队派单不使用统一开头；每张订单直接从 Order Number 开始。
+    header: ""
     meet_greet:
       standard_line: "Meet&Greet"
       greeting_sign_line: "Meet with greeting sign {{greeting_sign_name}}"
@@ -13,7 +14,7 @@ templates:
       Passenger Name: {{passenger_name}}
       Passenger Phone Number: {{passenger_phone}}
       Flight Number: {{flight_number|default('none')}}
-      Departure Time: {{pickup_datetime}} (Asia/Bangkok)
+      Pickup time: {{pickup_datetime}} (Asia/Bangkok)
       Pickup address: {{pickup_address}}
       Dropoff address: {{dropoff_address}}
       Vehicle Type: {{platform_vehicle_type}}{{seat_count|prefix(' ')}}
@@ -71,6 +72,8 @@ transforms:
     toyota commut: "Toyota Commuter"
     toyota ventury: "Toyota Ventury"
     standard: "Standard"
+  # 以下只是车辆大类，不能作为 i’way 回传中的具体车型。
+  generic_vehicle_labels_not_allowed_for_return: ["Van", "Minibus", "Sedan", "Standard", "Minivan"]
 
 thresholds:
   dispatch_missing_hours_before_pickup: 24

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const links = [
   { href: "/orders", label: "订单工作台" },
+  { href: "/driver-details", label: "车队回传信息" },
   { href: "/fleets", label: "车队管理" },
   { href: "/rules", label: "规则中心" },
 ];

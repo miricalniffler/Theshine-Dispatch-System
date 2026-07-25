@@ -26,6 +26,7 @@ const rulesSchema = z.object({
       thailand: z.object({ country_code: z.string(), convert_local_leading_zero: z.boolean(), local_digit_lengths: z.array(z.number()) }),
     }),
     vehicle_aliases: z.record(z.string(), z.string()),
+    generic_vehicle_labels_not_allowed_for_return: z.array(z.string()),
   }),
   thresholds: z.object({ dispatch_missing_hours_before_pickup: z.number(), driver_details_missing_hours_before_pickup: z.number() }),
   duplicate_detection: z.object({ compare_fields: z.array(z.string()), pickup_time_window_minutes: z.number() }),

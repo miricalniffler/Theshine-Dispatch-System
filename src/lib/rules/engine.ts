@@ -29,7 +29,9 @@ export function renderTemplate(template: string, context: TemplateContext) {
       if (filter === "omit_if_empty") return empty ? "" : printable(value);
       throw new Error(`Unsupported rule-template filter: ${filter}`);
     })
-    .replace(/\n[ \t]*\n{2,}/g, "\n\n")
+    // Optional YAML lines that render empty must not leave visual gaps inside
+    // one order. Batch orders are still separated later by two newlines.
+    .replace(/\n[ \t]*\n+/g, "\n")
     .trim();
 }
 
