@@ -4,7 +4,7 @@ import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 export async function findPersistedOrder(id: string) {
-  return db.order.findUnique({ where: { id }, include: { activityLogs: { orderBy: { createdAt: "asc" } } } });
+  return db.order.findUnique({ where: { id }, include: { driverDetail: true, activityLogs: { orderBy: { createdAt: "asc" } } } });
 }
 
 export async function recordOrderActivity(orderId: string, action: string, metadata?: string) {

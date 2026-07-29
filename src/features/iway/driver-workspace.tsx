@@ -15,6 +15,12 @@ const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对
 
 function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, confirmedAt: null }; }
 
+function bangkokTomorrowDate() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+  return new Date(Date.UTC(part("year"), part("month") - 1, part("day") + 1)).toISOString().slice(0, 10);
+}
+
 function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSaved: () => void; focused?: boolean }) {
   const [form, setForm] = useState<DriverDetails>({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id });
   const [saving, setSaving] = useState(false);
@@ -89,10 +95,47 @@ export function IwayReturnWorkspace() {
   const [items, setItems] = useState<WorkItem[]>([]); const [selected, setSelected] = useState<string[]>([]); const [preview, setPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion: string } | null>(null); const [batchId, setBatchId] = useState<string | null>(null); const [notice, setNotice] = useState<Notice>(null);
   const refresh = () => fetch("/api/driver-details").then((r) => r.json()).then((payload) => setItems(payload.data));
   useEffect(() => { refresh(); }, []);
-  const selectable = useMemo(() => items.filter((item) => item.order.status === "DRIVER_CONFIRMED" || item.order.status === "RETURNED"), [items]);
+  const selectable = useMemo(() => items.filter((item) => ["DRIVER_CONFIRMED", "RETURNED", "COMPLETED"].includes(item.order.status)), [items]);
+  const readyByDate = useMemo(() => {
+    const dates = new Map<string, WorkItem[]>();
+    items.filter((item) => item.order.status === "DRIVER_CONFIRMED" || item.order.status === "RETURNED").forEach((item) => dates.set(item.order.serviceDate, [...(dates.get(item.order.serviceDate) ?? []), item]));
+    return [...dates.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [items]);
+  const tomorrowDate = bangkokTomorrowDate();
+  const tomorrowItems = useMemo(() => items.filter((item) => item.order.serviceDate === tomorrowDate && item.order.status !== "COMPLETED"), [items, tomorrowDate]);
+  const incompleteTomorrow = tomorrowItems.filter((item) => item.order.status !== "DRIVER_CONFIRMED" && item.order.status !== "RETURNED");
   const toggle = (id: string) => { setBatchId(null); setPreview(null); setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); };
   async function createPreview() { setNotice(null); setBatchId(null); const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await response.json(); setPreview(payload.data); }
-  async function copy() { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await response.json(); if (!payload.data?.valid) { setPreview(payload.data); return; } await navigator.clipboard?.writeText(payload.data.text); setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "文本已复制。请到 i’way 人工发送后，再回来确认。" }); }
+  async function copy(orderIds = selected) { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await response.json(); setPreview(payload.data); if (!payload.data?.valid) return; await navigator.clipboard?.writeText(payload.data.text); setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); }
+  async function copyWholeDay(date: string, dayItems: WorkItem[]) { const orderIds = dayItems.map((item) => item.order.id); setSelected(orderIds); setNotice(null); await copy(orderIds); }
+  async function copyTomorrow() {
+    const orderIds = tomorrowItems.map((item) => item.order.id);
+    setSelected(orderIds);
+    setNotice(null);
+    await copy(orderIds);
+  }
   async function confirm() { if (!batchId) return; const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) }); const payload = await response.json(); if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "确认失败" }); return; } setNotice({ tone: "success", message: "已记录人工回传，相关订单已完成。" }); setSelected([]); setPreview(null); setBatchId(null); refresh(); }
-  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单工作台</a><a href="/driver-details">司机资料</a><a className="active" href="/iway-return">i’way 回传</a></nav><header className="workflow-header"><p className="workflow-kicker">04 · I’WAY 回传</p><h1>按服务日合并，人工完成最后发送</h1><p>可把同一服务日的曼谷和苏梅订单合并为一条回传。复制不会改变订单状态。</p></header><section className="return-grid"><div className="return-selection"><h2>选择待回传订单</h2><p>只能选择同一个服务日；系统会在生成前再做一次校验。</p>{selectable.length ? selectable.map(({ order, driver }) => <label className="return-order" key={order.id}><input type="checkbox" checked={selected.includes(order.id)} onChange={() => toggle(order.id)} /><span><strong>{order.orderNo}</strong><small>{order.city} · {order.serviceDate} {order.pickupTime} · {driver?.confirmedDriverName ?? "未确认司机"}</small></span></label>) : <p className="empty-work">没有可回传的订单。请先完成司机资料确认。</p>}<button type="button" className="secondary-action" onClick={createPreview} disabled={!selected.length}>生成回传预览</button></div><div className="return-preview"><div className="preview-heading"><div><span>回传文本预览</span><strong>{preview?.orderCount ? `${preview.orderCount} 个订单` : "尚未生成"}</strong></div>{preview?.ruleVersion && <small>规则 {preview.ruleVersion}</small>}</div>{preview?.errors.length ? <div className="validation-errors"><strong>暂不能生成</strong>{preview.errors.map((error) => <p key={error}>{error}</p>)}</div> : preview?.text ? <pre>{preview.text}</pre> : <p className="preview-empty">选择订单后生成预览。文本的开头、每单内容和结尾均来自 YAML 规则文件。</p>}{notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}<div className="preview-actions"><button type="button" onClick={copy} disabled={!preview?.valid}>复制回传内容</button><button type="button" className="confirm-action" onClick={confirm} disabled={!batchId}>我已人工发送，确认回传</button></div></div></section></main>;
+  return (
+    <main className="workflow-page">
+      <nav className="workflow-nav"><a href="/orders">订单工作台</a><a href="/driver-details">车队回传信息</a><a className="active" href="/iway-return">i’way 回传</a></nav>
+      <header className="workflow-header"><p className="workflow-kicker">04 · I’WAY 回传</p><h1>明日订单一键回传，也支持单笔补发</h1><p>系统会把明日所有已确认司机资料的订单，组合为一份完整的 i’way 回复并自动复制。</p></header>
+      <section className="return-grid">
+        <div className="return-selection">
+          <h2>一键回传明日订单</h2>
+          <p>服务日期：{tomorrowDate} · 会合并明日全部待回传订单。</p>
+          <button type="button" className="one-click-return" onClick={() => void copyTomorrow()} disabled={!tomorrowItems.length}>一键生成并复制明日 i’way 回传</button>
+          {!tomorrowItems.length && <p className="empty-work">明日暂时没有等待回传的订单。</p>}
+          {incompleteTomorrow.length > 0 && <p className="incomplete-hint">明日还有 {incompleteTomorrow.length} 笔订单缺少司机资料；点击按钮后会列出需要补充的订单。</p>}
+          <h2>单笔发送或更正</h2>
+          <p>已完成订单也可勾选，用于车辆、司机或时间调整后的补发。</p>
+          {selectable.length ? selectable.map(({ order, driver }) => <label className="return-order" key={order.id}><input type="checkbox" checked={selected.includes(order.id)} onChange={() => toggle(order.id)} /><span><strong>{order.orderNo}</strong><small>{order.city} · {order.serviceDate} {order.pickupTime} · {driver?.confirmedDriverName ?? "未确认司机"}{order.status === "COMPLETED" ? " · 已完成，可补发" : ""}</small></span></label>) : <p className="empty-work">没有可单独回传的订单。</p>}
+          <button type="button" className="secondary-action" onClick={createPreview} disabled={!selected.length}>生成所选订单预览</button>
+        </div>
+        <div className="return-preview"><div className="preview-heading"><div><span>i’way 正确格式</span><strong>{preview?.orderCount ? `${preview.orderCount} 个订单` : "尚未生成"}</strong></div>{preview?.ruleVersion && <small>规则 {preview.ruleVersion}</small>}</div>{preview?.errors.length ? <div className="validation-errors"><strong>暂不能生成完整回传</strong>{preview.errors.map((error) => <p key={error}>{error}</p>)}</div> : preview?.text ? <pre>{preview.text}</pre> : <p className="preview-empty">点击左侧“一键回传明日订单”，系统会在这里生成整份回传内容。</p>}{notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}<div className="preview-actions"><button type="button" onClick={() => void copy()} disabled={!preview?.valid}>复制回传内容</button><button type="button" className="confirm-action" onClick={confirm} disabled={!batchId}>我已在 i’way 发送，确认回传</button></div></div>
+      </section>
+    </main>
+  );
+  /* Legacy return kept below temporarily while this workspace is being simplified.
+  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单工作台</a><a href="/driver-details">车队回传信息</a><a className="active" href="/iway-return">i’way 回传</a></nav><header className="workflow-header"><p className="workflow-kicker">04 · I’WAY 回传</p><h1>当天订单一键回传，也支持单笔补发</h1><p>收齐车队资料后，直接生成并复制当天全部待回传订单。临时换车、重派或时间调整时，在下方勾选对应订单即可单独生成更正内容。</p></header><section className="return-grid"><div className="return-selection"><h2>一键回传当天订单</h2><p>只包含司机资料已齐全、尚未记录为完成的订单。</p>{readyByDate.length ? <div className="return-day-actions">{readyByDate.map(([date, dayItems]) => <button type="button" className="secondary-action" key={date} onClick={() => void copyWholeDay(date, dayItems)}>生成并复制 {date} 全部 {dayItems.length} 笔订单</button>)}</div> : <p className="empty-work">暂时没有资料齐全、等待回传的订单。</p>}<h2>单笔发送或更正</h2><p>已完成订单也可勾选，用于车辆、司机或时间调整后的补发。</p>{selectable.length ? selectable.map(({ order, driver }) => <label className="return-order" key={order.id}><input type="checkbox" checked={selected.includes(order.id)} onChange={() => toggle(order.id)} /><span><strong>{order.orderNo}</strong><small>{order.city} · {order.serviceDate} {order.pickupTime} · {driver?.confirmedDriverName ?? "未确认司机"}{order.status === "COMPLETED" ? " · 已完成，可补发" : ""}</small></span></label>) : <p className="empty-work">没有可单独回传的订单。</p>}<button type="button" className="secondary-action" onClick={createPreview} disabled={!selected.length}>生成所选订单预览</button></div><div className="return-preview"><div className="preview-heading"><div><span>i’way 正确格式</span><strong>{preview?.orderCount ? `${preview.orderCount} 个订单` : "尚未生成"}</strong></div>{preview?.ruleVersion && <small>规则 {preview.ruleVersion}</small>}</div>{preview?.errors.length ? <div className="validation-errors"><strong>暂不能生成</strong>{preview.errors.map((error) => <p key={error}>{error}</p>)}</div> : preview?.text ? <pre>{preview.text}</pre> : <p className="preview-empty">点击上方当天按钮可直接生成并复制；也可以勾选一笔或多笔订单，单独生成。</p>}{notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}<div className="preview-actions"><button type="button" onClick={() => void copy()} disabled={!preview?.valid}>复制回传内容</button><button type="button" className="confirm-action" onClick={confirm} disabled={!batchId}>我已在 i’way 发送，确认回传</button></div></div></section></main>;
+  */
 }

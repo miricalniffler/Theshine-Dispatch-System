@@ -1,5 +1,5 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-07-25.2"
+rules_version: "2026-07-26.1"
 timezone: "Asia/Bangkok"
 
 templates:
@@ -23,7 +23,7 @@ templates:
       {{meet_greet_line|omit_if_empty}}
       {{other_notes|omit_if_empty}}
   dispatch_batch_footers:
-    "曼谷": "{{order_count}} orders for tomorrow, please kindly check, thank you!"
+    "曼谷": "{{order_count}} {{order_unit}} for tomorrow, please kindly check, thank you!"
     "苏梅": "明日{{order_count}}个订单，请查收~"
   iway_return:
     header: "Dear team, Here are the driver and vehicle details for {{service_date_label_en}}:"
@@ -68,8 +68,9 @@ transforms:
       convert_local_leading_zero: true
       local_digit_lengths: [9, 10]
   vehicle_aliases:
+    all new v9: "Toyota HiAce All New V9"
     seadan: "Sedan"
-    toyota commut: "Toyota Commuter"
+    toyota commut: "Toyota Commut"
     toyota ventury: "Toyota Ventury"
     standard: "Standard"
   # 以下只是车辆大类，不能作为 i’way 回传中的具体车型。

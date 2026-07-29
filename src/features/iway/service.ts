@@ -39,13 +39,16 @@ function toOrder(row: PersistedOrder & { fleet?: { name: string } | null }): Ord
 }
 
 function toDriverDetails(row: DriverDetail): DriverDetails {
+  // 旧数据也按当前规则展示，避免历史上保存的简称（如 All New V9）
+  // 在回传时漏掉品牌与车型前缀。
+  const rules = loadRules();
   return {
     orderId: row.orderId,
     rawReply: row.rawReply ?? "",
     confirmedDriverName: row.confirmedDriverName,
     rawDriverPhone: row.rawDriverPhone,
     normalizedDriverPhone: row.normalizedDriverPhone,
-    confirmedVehicleModel: row.confirmedVehicleModel,
+    confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
     licensePlate: row.licensePlate,
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
   };
@@ -76,13 +79,17 @@ async function findOrderWithDriver(orderId: string): Promise<OrderWithDriver | n
 }
 
 async function findOrdersWithDrivers(orderIds: string[]): Promise<OrderWithDriver[]> {
-  return db.order.findMany({ where: { id: { in: orderIds } }, include: { driverDetail: true, fleet: true } });
+  return db.order.findMany({
+    where: { id: { in: orderIds } },
+    include: { driverDetail: true, fleet: true },
+    orderBy: { pickupDateTime: "asc" },
+  });
 }
 
 export async function listDriverWork() {
   const today = new Date().toISOString().slice(0, 10);
   const rows = await db.order.findMany({
-    where: { serviceDate: { gte: today }, status: { in: ["DISPATCHED", "DRIVER_CONFIRMED", "RETURNED"] } },
+    where: { serviceDate: { gte: today }, status: { in: ["DISPATCHED", "DRIVER_CONFIRMED", "RETURNED", "COMPLETED"] } },
     include: { driverDetail: true, fleet: true },
     orderBy: { pickupDateTime: "asc" },
   });

@@ -9,3 +9,8 @@ tsconfig.tsbuildinfo
 .env.local
 data/*.db
 prisma/*.db
+
+# Local Netlify folder
+.netlify
+.vercel
+.env*

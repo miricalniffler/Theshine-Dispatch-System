@@ -71,7 +71,11 @@ type StoredDispatchBatch = {
 };
 
 async function selectedDispatchOrders(orderIds: string[]) {
-  const rows = await db.order.findMany({ where: { id: { in: orderIds } }, include: { fleet: true } });
+  const rows = await db.order.findMany({
+    where: { id: { in: orderIds } },
+    include: { fleet: true },
+    orderBy: { pickupDateTime: "asc" },
+  });
   return rows.map((row) => ({
     id: row.id,
     orderNo: row.platformOrderNumber,

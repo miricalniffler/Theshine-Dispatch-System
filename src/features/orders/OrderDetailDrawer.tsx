@@ -6,6 +6,7 @@ import type { Order } from "./types";
 import "./order-detail-drawer.css";
 
 type DetailedOrder = Record<string, unknown>;
+type DriverDetail = { confirmedDriverName?: string | null; normalizedDriverPhone?: string | null; confirmedVehicleModel?: string | null; licensePlate?: string | null };
 
 export function OrderDetailDrawer({ order, onClose }: { order: Order | null; onClose: () => void }) {
   const [detail, setDetail] = useState<DetailedOrder | null>(null);
@@ -17,6 +18,7 @@ export function OrderDetailDrawer({ order, onClose }: { order: Order | null; onC
   }, [order]);
   if (!order) return null;
   const field = (key: string) => String(detail?.[key] ?? "待核对");
+  const driver = detail?.driverDetail as DriverDetail | null | undefined;
   return <div className="order-drawer-overlay" role="presentation" onMouseDown={onClose}>
     <aside className="order-drawer" role="dialog" aria-modal="true" aria-label="订单详情侧边栏" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><p>订单详情</p><h2>{order.orderNo}</h2></div><button type="button" aria-label="关闭订单详情" onClick={onClose}>×</button></header>
@@ -24,6 +26,7 @@ export function OrderDetailDrawer({ order, onClose }: { order: Order | null; onC
         <section><h3>乘客与服务</h3><Row label="乘客" value={field("passengerName")} /><Row label="电话" value={field("passengerPhone")} /><Row label="服务时间" value={detail?.pickupDateTime ? new Date(String(detail.pickupDateTime)).toLocaleString("zh-CN", { timeZone: "Asia/Bangkok" }) : `${order.serviceDate} ${order.pickupTime}`} /><Row label="城市" value={field("city")} /></section>
         <section><h3>行程与车型</h3><Row label="上车地点" value={field("pickupAddress")} /><Row label="下车地点" value={field("dropoffAddress")} /><Row label="航班号" value={field("flightNumber")} /><Row label="平台车型" value={field("platformVehicleType")} /></section>
         <section><h3>处理状态</h3><Row label="当前状态" value={field("status")} /><Row label="车队" value={order.fleetName} /></section>
+        {driver && <section><h3>司机和车辆信息</h3><Row label="司机姓名" value={driver.confirmedDriverName || "待核对"} /><Row label="司机电话" value={driver.normalizedDriverPhone || "待核对"} /><Row label="具体车型" value={driver.confirmedVehicleModel || "待核对"} /><Row label="车牌号" value={driver.licensePlate || "待核对"} /></section>}
       </div>}
       <footer><Link href={`/orders/${order.id}`}>打开完整订单并编辑</Link></footer>
     </aside>

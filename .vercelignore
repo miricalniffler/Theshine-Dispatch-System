@@ -1,0 +1,9 @@
+.git
+.next
+node_modules
+tmp
+output
+docs
+原始素材
+.env
+.env.local

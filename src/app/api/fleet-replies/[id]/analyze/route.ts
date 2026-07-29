@@ -1,6 +1,8 @@
 import { failure, success } from "@/lib/api-response";
 import { analyzeFleetReply } from "@/features/fleet-replies/service";
 
+export const maxDuration = 120;
+
 type Params = { params: Promise<{ id: string }> };
 export async function POST(_request: Request, { params }: Params) {
   try { return success(await analyzeFleetReply((await params).id)); }

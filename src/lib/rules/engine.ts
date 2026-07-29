@@ -50,16 +50,23 @@ export function validateRequiredFields(
 export function normalizeThailandPhone(phone: string | null | undefined, rules: RulesConfig = loadRules()) {
   if (!phone) return null;
   const config = rules.transforms.phone.thailand;
-  let digits = phone.replace(/[^\d+]/g, "");
-  if (digits.startsWith("00")) digits = `+${digits.slice(2)}`;
-  if (digits.startsWith("+")) {
-    const countryDigits = config.country_code.replace("+", "");
-    return digits.startsWith(config.country_code) ? `${config.country_code}${digits.slice(config.country_code.length).replace(/\D/g, "")}` : digits;
-  }
-  digits = digits.replace(/\D/g, "");
-  if (config.convert_local_leading_zero && digits.startsWith("0")) digits = digits.slice(1);
-  if (!config.local_digit_lengths.includes(digits.length)) return null;
-  return `${config.country_code}${digits}`;
+  const normalizeOne = (original: string) => {
+    const value = original.trim().replace(/^\+\s*66/, "+66");
+    const countryCode = config.country_code;
+    if (value.startsWith(countryCode)) {
+      const suffix = value.slice(countryCode.length);
+      const nationalDigits = suffix.replace(/\D/g, "");
+      if (!config.local_digit_lengths.includes(nationalDigits.replace(/^0/, "").length)) return null;
+      // 保留车队原来的空格、横杠；仅去掉国家码后的本地前导 0。
+      return `${countryCode}${suffix.replace(/^(\s|-)*0/, "$1")}`;
+    }
+    const digits = value.replace(/\D/g, "");
+    const national = config.convert_local_leading_zero && digits.startsWith("0") ? digits.slice(1) : digits;
+    if (!config.local_digit_lengths.includes(national.length)) return null;
+    return `${countryCode} ${national}`;
+  };
+  const normalized = phone.split("/").map(normalizeOne);
+  return normalized.every(Boolean) ? normalized.join("/") : null;
 }
 
 /** Formats an international passenger phone as "+country code national number" using YAML rules.
@@ -67,6 +74,9 @@ export function normalizeThailandPhone(phone: string | null | undefined, rules: 
 export function formatInternationalPhone(phone: string | null | undefined, rules: RulesConfig = loadRules()) {
   if (!phone) return null;
   const original = phone.trim();
+  // When the source explicitly separates a short calling prefix (for example
+  // "+97 123456"), preserve it instead of guessing a longer code such as +971.
+  if (/^\+\d{1,3}[\s-]/.test(original)) return original;
   let digits = original.replace(/[^\d]/g, "");
   if (original.replace(/[^\d+]/g, "").startsWith("00")) digits = digits.slice(2);
   const countryCode = [...rules.transforms.phone.display.country_calling_codes]
@@ -116,5 +126,5 @@ export function formatServiceDateLabel(serviceDate: string, locale: "zh" | "en" 
 export function renderDispatchBatchFooter(city: string, orderCount: number, rules: RulesConfig = loadRules()) {
   const template = rules.templates.dispatch_batch_footers[city];
   if (!template) throw new Error(`No dispatch batch footer configured for city: ${city}`);
-  return renderTemplate(template, { order_count: orderCount });
+  return renderTemplate(template, { order_count: orderCount, order_unit: orderCount === 1 ? "order" : "orders" });
 }

@@ -16,6 +16,22 @@ function numberFrom(value: string) {
   return match ? Number(match[0]) : 0;
 }
 
+function lastPassengerName(value: string) {
+  const names = value
+    .split(/\s*(?:,|;|\/|\n|\s+&\s+|\s+and\s+)\s*/i)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return names.at(-1) || "";
+}
+
+function passengerCounts(text: string) {
+  const children = numberFrom(pick(text, "Children"));
+  const statedAdults = pick(text, "Adults");
+  const totalPassengers = numberFrom(pick(text, "Number of passengers"));
+  const adults = statedAdults ? numberFrom(statedAdults) : Math.max(0, totalPassengers - children);
+  return { adults, children };
+}
+
 function luggageFor(text: string, passengerCount: number) {
   const stated = pick(text, "(?:Luggage|Number of luggage|Baggage)");
   return stated ? numberFrom(stated) : passengerCount;
@@ -39,8 +55,8 @@ function parseIwayRide(text: string) {
   const dropoffAddress = itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1]?.trim() || "";
   const clients = pick(text, "Clients");
   const passengerPhone = clients.match(/phone\s+([+\d][\d\s-]+)/i)?.[1]?.trim() || "";
-  const passengerName = clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim();
-  const adults = Number(pick(text, "Number of passengers")) || 0;
+  const passengerName = lastPassengerName(clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim());
+  const { adults, children } = passengerCounts(text);
   return {
     platformOrderNumber: normaliseOrderNumber(rideNumber),
     passengerName,
@@ -51,8 +67,8 @@ function parseIwayRide(text: string) {
     platformVehicleType: pick(text, "Vehicle class"),
     flightNumber: pick(text, "Flight number/train number"),
     adults,
-    children: 0,
-    luggage: luggageFor(text, adults),
+    children,
+    luggage: luggageFor(text, adults + children),
     meetGreetLine: meetGreetFor(text),
     city: /samui|koh samui|สุราษฎร์ธานี/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷",
     otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, pick(text, "Meeting tablet") && `Meeting tablet: ${pick(text, "Meeting tablet")}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
@@ -60,6 +76,7 @@ function parseIwayRide(text: string) {
 }
 
 function parseStandardOrder(text: string) {
+  const { adults, children } = passengerCounts(text);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
@@ -69,9 +86,9 @@ function parseStandardOrder(text: string) {
     dropoffAddress: pick(text, "Dropoff address"),
     platformVehicleType: pick(text, "Vehicle Type"),
     flightNumber: pick(text, "Flight Number"),
-    adults: Number(pick(text, "(?:Adults|Number of passengers)")) || 0,
-    children: 0,
-    luggage: luggageFor(text, Number(pick(text, "(?:Adults|Number of passengers)")) || 0),
+    adults,
+    children,
+    luggage: luggageFor(text, adults + children),
     meetGreetLine: meetGreetFor(text),
     city: /samui|koh samui|usm/i.test(text) ? "苏梅" : "曼谷",
     otherNotes: "",

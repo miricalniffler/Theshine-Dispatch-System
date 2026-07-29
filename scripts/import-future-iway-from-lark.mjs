@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 
 const db = new PrismaClient();
@@ -6,6 +8,16 @@ const cli = process.env.LARK_CLI_PATH || "/Users/muzitong/.local/bin/lark-cli";
 const mailbox = process.env.IWAY_MAILBOX || "dingdan@theshine.com.cn";
 const officialSender = "control@iwayex.com";
 const dryRun = process.argv.includes("--dry-run");
+const requestedOnly = process.argv.includes("--when-requested");
+let syncRequestId = null;
+
+// The local mail bridge can occasionally leave a database or mail request
+// waiting forever.  This worker is launched again every minute, so ending a
+// stuck run is safer than blocking every later manual refresh.
+const watchdog = setTimeout(() => {
+  console.error("飞书手动同步超过 120 秒未结束，已停止本次执行，下一分钟会自动重试。");
+  process.exit(1);
+}, 120_000);
 
 function runCli(args) {
   const result = spawnSync(cli, args, {
@@ -13,6 +25,9 @@ function runCli(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      // LaunchAgent starts with a minimal PATH.  Keep the Node runtime that
+      // launched this script available to the lark-cli wrapper as well.
+      PATH: `${dirname(process.execPath)}:${process.env.PATH || "/usr/bin:/bin"}`,
       LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
     },
@@ -63,6 +78,9 @@ function parseOrder(message, meta) {
   const phones = [...new Set(phoneBlock.split(/\s*,\s*/).map((phone) => phone.trim()).filter(Boolean))];
   const additionalRemarks = capture(text, /Additional remarks:\s*(.*?)\s+i[’']way notes:/i);
   const city = /^(?:koh\s+samui|samui)$/i.test(iwayCity) ? "苏梅" : /^bangkok$/i.test(iwayCity) ? "曼谷" : null;
+  const children = Number(capture(text, /Children:\s*(\d+)/i)) || 0;
+  const statedAdults = Number(capture(text, /Adults:\s*(\d+)/i)) || 0;
+  const adults = statedAdults || Math.max(0, pax - children);
   if (!orderNo || !city || !date || !pickupTime || !pickupAddress || !dropoffAddress || !passengers.length || !phones.length || !vehicleType) return null;
   return {
     orderNo,
@@ -71,14 +89,14 @@ function parseOrder(message, meta) {
     pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00+07:00`),
     pickupAddress: pickupAddress.trim(),
     dropoffAddress: dropoffAddress.trim(),
-    passengerName: passengers.join(", "),
+    passengerName: passengers.at(-1),
     passengerPhone: phones.join(" / "),
     flightNumber,
     platformVehicleType: vehicleType,
     seatCount,
-    adults: pax,
-    children: 0,
-    luggage: pax,
+    adults,
+    children,
+    luggage: adults + children,
     meetGreetLine: greetingSign || null,
     otherNotes: additionalRemarks || null,
     rawSource: text,
@@ -103,6 +121,15 @@ function todayBangkok() {
 }
 
 async function main() {
+  if (requestedOnly && !dryRun) {
+    const request = await db.importSyncRun.findFirst({ where: { connector: "feishu-mail", status: "REQUESTED" }, orderBy: { startedAt: "asc" } });
+    if (!request) {
+      console.log(JSON.stringify({ status: "idle", message: "没有待处理的网站同步请求。" }));
+      return;
+    }
+    syncRequestId = request.id;
+    await db.importSyncRun.update({ where: { id: request.id }, data: { status: "RUNNING" } });
+  }
   const triage = runCli([
     "mail", "+triage", "--as", "user", "--mailbox", mailbox,
     "--filter", JSON.stringify({ from: [officialSender] }),
@@ -223,7 +250,18 @@ async function main() {
       summary.created.push(item.orderNo);
     }
   }
+  if (syncRequestId) {
+    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected } });
+  }
   console.log(JSON.stringify(summary, null, 2));
 }
 
-main().finally(() => db.$disconnect());
+main().catch(async (error) => {
+  if (syncRequestId) {
+    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "FAILED", completedAt: new Date(), errorMessage: error instanceof Error ? error.message : "未知同步错误" } });
+  }
+  throw error;
+}).finally(async () => {
+  clearTimeout(watchdog);
+  await db.$disconnect();
+});

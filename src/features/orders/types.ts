@@ -18,7 +18,7 @@ export type Order = {
 };
 
 export type OrderFilters = {
-  dateMode?: "window" | "today" | "tomorrow" | "future" | "month" | "range";
+  dateMode?: "all" | "window" | "today" | "tomorrow" | "future" | "month" | "range";
   startDate?: string;
   endDate?: string;
   city?: string;
