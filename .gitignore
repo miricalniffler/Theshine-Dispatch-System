@@ -5,6 +5,8 @@ node_modules/
 tmp/
 output/
 tsconfig.tsbuildinfo
+playwright-report/
+test-results/
 .env
 .env.local
 data/*.db

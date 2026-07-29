@@ -73,7 +73,7 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
       <section className="import-sync-panel" aria-label="飞书订单同步"><div><strong>飞书订单同步</strong><p>{latestRunText}</p></div><button className="import-sync-button" onClick={runManualSync} disabled={syncing}>{syncing ? "正在请求…" : "立即同步"}</button></section>
       <label>订单来源<select value={sourceType} onChange={(event) => { setSourceType(event.target.value as SourceType); setConfirmedSource(false); }}><option value="iway_feishu">i’way 飞书邮件（New ride）</option><option value="esforty">esforty 订单</option><option value="manual">手工新增</option></select></label>
       <div className="import-connectors">{connectors.filter((connector) => connector.id !== "feishu-mail").map((connector) => <button key={connector.id} disabled={!connector.configured} title={connector.message} onClick={() => pull(connector.id)}>{connector.configured ? `从${connector.label}读取` : `${connector.label}尚未接入`}</button>)}</div>
-      <label>订单原文<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="粘贴整封 i’way New ride 邮件或 esforty 订单文字" /></label>
+      <label>订单原文<textarea value={text} autoCapitalize="none" onChange={(event) => setText(event.target.value)} placeholder="粘贴整封 i’way New ride 邮件或 esforty 订单文字" /></label>
       {sourceType === "manual" && <label className="source-confirm"><input type="checkbox" checked={confirmedSource} onChange={(event) => setConfirmedSource(event.target.checked)} />我已人工确认这是一张需要进入本平台的新订单</label>}
       <p>系统会拦截车队司机回复和来源不匹配的文字，不会自动保存。</p>
       <footer><button className="v3-primary" onClick={parse}>识别并进入核对</button></footer>

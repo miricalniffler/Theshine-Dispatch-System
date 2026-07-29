@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppNavigation } from "@/components/AppNavigation";
+import { PwaRegistration } from "@/components/PwaRegistration";
 import "./styles.css";
 
 export const metadata: Metadata = {
@@ -12,5 +13,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN"><body><AppNavigation>{children}</AppNavigation></body></html>;
+  return <html lang="zh-CN"><body><PwaRegistration /><AppNavigation>{children}</AppNavigation></body></html>;
 }

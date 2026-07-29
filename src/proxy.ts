@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const publicPaths = ["/login", "/api/access/login"];
+const publicPaths = ["/login", "/api/access/login", "/api/access/logout"];
 
 export async function proxy(request: NextRequest) {
   if (publicPaths.some((path) => request.nextUrl.pathname.startsWith(path))) {

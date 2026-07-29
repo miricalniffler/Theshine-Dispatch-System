@@ -36,6 +36,27 @@ function fileToDataUrl(file: File) {
   });
 }
 
+async function copyTextWithFallback(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // iPhone Safari may deny clipboard access outside a trusted context.
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+  document.body.appendChild(field);
+  field.select();
+  field.setSelectionRange(0, field.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(field);
+  return copied;
+}
+
 export function FleetReplyWorkspace() {
   const [rawText, setRawText] = useState("");
   const [images, setImages] = useState<{ dataUrl: string; filename: string; mimeType: string }[]>([]);
@@ -115,7 +136,11 @@ export function FleetReplyWorkspace() {
     const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: returnOrderIds }) });
     const payload = await response.json();
     if (!response.ok || !payload.data?.valid) { setNotice({ tone: "error", text: payload.data?.errors?.join("；") || payload.error?.message || "无法复制回传内容。" }); return; }
-    await navigator.clipboard?.writeText(payload.data.text);
+    const copied = await copyTextWithFallback(payload.data.text);
+    if (!copied) {
+      setNotice({ tone: "error", text: "系统无法自动复制。请长按下方回传文本，选择“全选”后复制。" });
+      return;
+    }
     setReturnBatchId(payload.data.batchId);
     setNotice({ tone: "success", text: "回传内容已复制。请粘贴至 i’way 发送；发送完成后点击“已向 i’way 回传”。" });
   }
@@ -188,16 +213,16 @@ export function FleetReplyWorkspace() {
     <nav className="workflow-nav"><a href="/orders">订单工作台</a><a className="active" href="/driver-details">车队回传信息</a><a href="/iway-return">i’way 回传</a></nav>
     <header className="workflow-header"><p className="workflow-kicker">03 · 车队回传信息</p><h1>粘贴车队回复，自动生成 i’way 所需资料</h1><p>订单号、电话、车牌和回传格式由网站规则处理；AI 只用于泰语姓名转写和逐张车辆图片识别。</p></header>
     <section className="fleet-reply-source">
-      <label>车队原始回复（完整保留）<textarea value={rawText} onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
+      <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
       <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option></select></label>
       <label className="vehicle-upload">添加车辆图片<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
-      {images.length > 0 && <div className="reply-image-list">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
+      {images.length > 0 && <div className="reply-image-list" aria-label="已添加车辆图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
     </section>
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.text}</p>}
     {result && <section className="fleet-reply-results">
-      {iwayText && <section className="iway-direct-result"><h2>i’way 回传内容</h2><p>已按正确格式生成；复制后直接粘贴到 i’way 即可。</p><pre>{iwayText}</pre><div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void copyIwayReturn()} disabled={working || returned}>复制回传内容</button><button type="button" className="secondary-action" onClick={() => void confirmIwayReturn()} disabled={working || returned}>{returned ? "已向 i’way 回传" : "已向 i’way 回传"}</button></div></section>}
+      {iwayText && <section className="iway-direct-result"><h2>i’way 回传内容</h2><p>已按正确格式生成；复制后直接粘贴到 i’way 即可。如自动复制失败，可长按文本手动复制。</p><pre tabIndex={0}>{iwayText}</pre><div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void copyIwayReturn()} disabled={working || returned}>复制回传内容</button><button type="button" className="secondary-action" onClick={() => void confirmIwayReturn()} disabled={working || returned}>{returned ? "已向 i’way 回传" : "已向 i’way 回传"}</button></div></section>}
       {unresolved.length > 0 && <div className="unmatched-block"><h3>有资料需要修改</h3>{unresolved.map((item, index) => <p key={`${item}-${index}`}>{item}</p>)}</div>}
       <button type="button" className="secondary-action" onClick={() => setShowEditor((current) => !current)}>{showEditor ? "收起修改资料" : "修改回传资料"}</button>
       {showEditor && <><h2>修改回传资料</h2>{result.records.map((record, index) => <article className="reply-candidate" key={`${record.source_index}-${index}`}>

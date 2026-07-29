@@ -21,6 +21,27 @@ function bangkokTomorrowDate() {
   return new Date(Date.UTC(part("year"), part("month") - 1, part("day") + 1)).toISOString().slice(0, 10);
 }
 
+async function copyTextWithFallback(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // iPhone Safari can reject Clipboard API calls in embedded browsers.
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+  document.body.appendChild(field);
+  field.select();
+  field.setSelectionRange(0, field.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(field);
+  return copied;
+}
+
 function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSaved: () => void; focused?: boolean }) {
   const [form, setForm] = useState<DriverDetails>({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id });
   const [saving, setSaving] = useState(false);
@@ -61,11 +82,11 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   }
   return <article className={`driver-card${focused ? " focused-driver-card" : ""}`}>
     <header><div><span className="order-mark">{focused ? "正在录入 · " : ""}{item.order.city} · {item.order.serviceDate} {item.order.pickupTime}</span><h2>{item.order.orderNo}</h2><p>{item.order.passengerName} · {item.order.route}</p></div><span className={`work-status ${item.order.status.toLowerCase()}`}>{statusText[item.order.status]}</span></header>
-    <label className="wide-field">车队原始回复（保留原文）<textarea value={form.rawReply ?? ""} placeholder="粘贴车队回复；系统不会替你发送任何消息" onChange={(event) => set("rawReply", event.target.value)} /></label>
+    <label className="wide-field">车队原始回复（保留原文）<textarea value={form.rawReply ?? ""} autoCapitalize="none" placeholder="粘贴车队回复；系统不会替你发送任何消息" onChange={(event) => set("rawReply", event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) attachVehicleImage(image); }} /></label>
     <section className="driver-assist" aria-label="车辆图片和翻译协助" onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) { event.preventDefault(); attachVehicleImage(image); } }} tabIndex={0}>
       <div><strong>粘贴车队回复和车辆图片</strong><p>可直接从微信粘贴文字；点击此区域后也可粘贴车辆截图。系统只给出翻译和车型建议，最终以你确认保存的信息为准。</p></div>
       <label className="vehicle-upload">选择车辆图片<input aria-label="选择车辆图片" type="file" accept="image/*" onChange={(event) => attachVehicleImage(event.currentTarget.files?.[0])}/></label>
-      {vehicleImage && <img className="vehicle-preview" src={vehicleImage} alt="待分析的车辆图片"/>}
+      {vehicleImage && <div className="vehicle-preview-wrap"><img className="vehicle-preview" src={vehicleImage} alt="待分析的车辆图片"/><button type="button" className="remove-vehicle-image" onClick={() => setVehicleImage("")}>删除图片</button></div>}
       <button type="button" className="assist-action" onClick={analyseReply} disabled={analysing || (!form.rawReply?.trim() && !vehicleImage)}>{analysing ? "正在分析…" : "分析并翻译"}</button>
       {assistantNotes.length > 0 && <div className="assist-notes">{assistantNotes.map((message) => <p key={message}>{message}</p>)}</div>}
     </section>
@@ -106,7 +127,7 @@ export function IwayReturnWorkspace() {
   const incompleteTomorrow = tomorrowItems.filter((item) => item.order.status !== "DRIVER_CONFIRMED" && item.order.status !== "RETURNED");
   const toggle = (id: string) => { setBatchId(null); setPreview(null); setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); };
   async function createPreview() { setNotice(null); setBatchId(null); const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await response.json(); setPreview(payload.data); }
-  async function copy(orderIds = selected) { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await response.json(); setPreview(payload.data); if (!payload.data?.valid) return; await navigator.clipboard?.writeText(payload.data.text); setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); }
+  async function copy(orderIds = selected) { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await response.json(); setPreview(payload.data); if (!payload.data?.valid) return; const copied = await copyTextWithFallback(payload.data.text); if (!copied) { setNotice({ tone: "error", message: "无法自动复制。请长按右侧回传内容，选择“全选”后复制。" }); return; } setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); }
   async function copyWholeDay(date: string, dayItems: WorkItem[]) { const orderIds = dayItems.map((item) => item.order.id); setSelected(orderIds); setNotice(null); await copy(orderIds); }
   async function copyTomorrow() {
     const orderIds = tomorrowItems.map((item) => item.order.id);
@@ -114,7 +135,8 @@ export function IwayReturnWorkspace() {
     setNotice(null);
     await copy(orderIds);
   }
-  async function confirm() { if (!batchId) return; const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) }); const payload = await response.json(); if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "确认失败" }); return; } setNotice({ tone: "success", message: "已记录人工回传，相关订单已完成。" }); setSelected([]); setPreview(null); setBatchId(null); refresh(); }
+  async function confirm() { if (!batchId) return; const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) }); const payload = await response.json(); if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "确认失败" }); return; } window.location.assign("/orders"); }
+  function openWhatsAppShare() { if (!preview?.text) return; window.open(`https://wa.me/?text=${encodeURIComponent(preview.text)}`, "_blank", "noopener,noreferrer"); }
   return (
     <main className="workflow-page">
       <nav className="workflow-nav"><a href="/orders">订单工作台</a><a href="/driver-details">车队回传信息</a><a className="active" href="/iway-return">i’way 回传</a></nav>
@@ -131,7 +153,7 @@ export function IwayReturnWorkspace() {
           {selectable.length ? selectable.map(({ order, driver }) => <label className="return-order" key={order.id}><input type="checkbox" checked={selected.includes(order.id)} onChange={() => toggle(order.id)} /><span><strong>{order.orderNo}</strong><small>{order.city} · {order.serviceDate} {order.pickupTime} · {driver?.confirmedDriverName ?? "未确认司机"}{order.status === "COMPLETED" ? " · 已完成，可补发" : ""}</small></span></label>) : <p className="empty-work">没有可单独回传的订单。</p>}
           <button type="button" className="secondary-action" onClick={createPreview} disabled={!selected.length}>生成所选订单预览</button>
         </div>
-        <div className="return-preview"><div className="preview-heading"><div><span>i’way 正确格式</span><strong>{preview?.orderCount ? `${preview.orderCount} 个订单` : "尚未生成"}</strong></div>{preview?.ruleVersion && <small>规则 {preview.ruleVersion}</small>}</div>{preview?.errors.length ? <div className="validation-errors"><strong>暂不能生成完整回传</strong>{preview.errors.map((error) => <p key={error}>{error}</p>)}</div> : preview?.text ? <pre>{preview.text}</pre> : <p className="preview-empty">点击左侧“一键回传明日订单”，系统会在这里生成整份回传内容。</p>}{notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}<div className="preview-actions"><button type="button" onClick={() => void copy()} disabled={!preview?.valid}>复制回传内容</button><button type="button" className="confirm-action" onClick={confirm} disabled={!batchId}>我已在 i’way 发送，确认回传</button></div></div>
+        <div className="return-preview"><div className="preview-heading"><div><span>i’way 正确格式</span><strong>{preview?.orderCount ? `${preview.orderCount} 个订单` : "尚未生成"}</strong></div>{preview?.ruleVersion && <small>规则 {preview.ruleVersion}</small>}</div>{preview?.errors.length ? <div className="validation-errors"><strong>暂不能生成完整回传</strong>{preview.errors.map((error) => <p key={error}>{error}</p>)}</div> : preview?.text ? <pre tabIndex={0}>{preview.text}</pre> : <p className="preview-empty">点击左侧“一键回传明日订单”，系统会在这里生成整份回传内容。</p>}{notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}<div className="preview-actions"><button type="button" onClick={() => void copy()} disabled={!preview?.valid}>复制回传内容</button><button type="button" className="whatsapp-share" onClick={openWhatsAppShare} disabled={!preview?.valid}>在 WhatsApp 打开</button><button type="button" className="confirm-action" onClick={confirm} disabled={!batchId}>我已在 i’way 发送，确认回传</button></div></div>
       </section>
     </main>
   );
