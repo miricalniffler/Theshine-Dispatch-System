@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import type { DriverDetail, Order as PersistedOrder } from "@prisma/client";
 import type { Order } from "@/features/orders/types";
-import { formatServiceDateLabel, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { loadRules } from "@/lib/rules/load-rules";
 
 export type DriverDetails = {
@@ -49,7 +49,7 @@ function toDriverDetails(row: DriverDetail): DriverDetails {
     rawDriverPhone: row.rawDriverPhone,
     normalizedDriverPhone: row.normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
-    licensePlate: row.licensePlate,
+    licensePlate: normalizeLicensePlateForReturn(row.licensePlate),
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
   };
 }
@@ -114,7 +114,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     rawDriverPhone: input.rawDriverPhone?.trim() || null,
     normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(input.confirmedVehicleModel, rules),
-    licensePlate: input.licensePlate?.trim() || null,
+    licensePlate: normalizeLicensePlateForReturn(input.licensePlate),
     confirmedAt: null,
   };
   const check = validateRequiredFields(iwayContext(order, record), "before_iway_return", rules);

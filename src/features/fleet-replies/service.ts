@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
-import { normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
+import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured, qwenJson, type QwenContent } from "@/features/assist/qwen";
 
@@ -24,7 +24,7 @@ type VisualResult = { vehicle_model: string | null; license_plate: string | null
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
-function normalizePlate(value: string | null) { return (value ?? "").replace(/[\s-]/g, "").toLowerCase(); }
+function normalizePlate(value: string | null) { return (normalizeLicensePlateForReturn(value) ?? "").replace(/[\s-]/g, "").toLowerCase(); }
 function parseIds(raw: string | null) { try { return raw ? z.array(z.string()).parse(JSON.parse(raw)) : []; } catch { return []; } }
 function bangkokToday() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function bangkokTomorrow() {
@@ -305,7 +305,9 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     // TypeScript know the normalized values are present below.
     if (!phone || !vehicle) continue;
     if (rules.transforms.generic_vehicle_labels_not_allowed_for_return.some((item) => item.toLowerCase() === vehicle.toLowerCase())) { errors.push({ orderId: record.orderId, message: "i’way 回传需要具体车型，不能只填 Van、Minibus、Sedan 等大类。" }); continue; }
-    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate: record.licensePlate.trim(), vehicleModel: vehicle });
+    const licensePlate = normalizeLicensePlateForReturn(record.licensePlate);
+    if (!licensePlate) { errors.push({ orderId: record.orderId, message: `${record.orderId}：请补充或修改车牌。` }); continue; }
+    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate, vehicleModel: vehicle });
   }
   if (errors.length) return { valid: false, errors, confirmed: 0 };
   for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate });

@@ -69,6 +69,23 @@ export function normalizeThailandPhone(phone: string | null | undefined, rules: 
   return normalized.every(Boolean) ? normalized.join("/") : null;
 }
 
+/**
+ * i'way only needs the numeric part of a Thai licence plate.  Fleets may
+ * include Thai letters (for example "นจ 2265"); those letters are useful in
+ * the original reply but must not leak into the English return message.
+ * Hyphens between numeric groups are retained when the fleet supplied them.
+ */
+export function normalizeLicensePlateForReturn(plate: string | null | undefined) {
+  if (!plate) return null;
+  const normalized = plate
+    .trim()
+    .replace(/[\u0E00-\u0E7F]/g, "")
+    .replace(/[^\d-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || null;
+}
+
 /** Formats an international passenger phone as "+country code national number" using YAML rules.
  * The original value is returned when its country code cannot be identified safely. */
 export function formatInternationalPhone(phone: string | null | undefined, rules: RulesConfig = loadRules()) {
