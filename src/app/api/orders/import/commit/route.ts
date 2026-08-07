@@ -9,14 +9,15 @@ export async function POST(request: NextRequest) {
   const source = body.source;
   if (!fields || typeof fields.platformOrderNumber !== "string") return failure("INVALID_REQUEST", "缺少确认后的订单字段。", undefined, 422);
   if (!source?.verified || !["iway_feishu", "esforty", "manual"].includes(source.type)) return failure("SOURCE_UNVERIFIED", "订单来源尚未核实，禁止保存。", undefined, 422);
-  const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType"];
+  const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"];
   const missing = required.filter((key) => !fields[key]);
   const existing = await db.order.findUnique({ where: { platformOrderNumber: fields.platformOrderNumber } });
   if (existing && body.duplicateAction !== "keep") return failure("DUPLICATE_ORDER", "该订单号已存在。请查看旧单，不要重复录入。", [existing.id], 409);
   const pickupDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(fields.pickupDateTime)) ? new Date(`${fields.pickupDateTime}:00+07:00`) : null;
   if (!pickupDateTime || Number.isNaN(pickupDateTime.getTime())) return failure("INVALID_PICKUP_TIME", "接客时间无法确认，请返回核对。", ["pickupDateTime"], 422);
+  if (fields.city !== "曼谷" && fields.city !== "苏梅") return failure("CITY_REQUIRED", "无法确认服务城市，请根据接人和送人地址选择曼谷或苏梅后再保存。", ["city"], 422);
   const order = await db.$transaction(async (tx) => {
-    const city = fields.city === "苏梅" ? "苏梅" : "曼谷";
+    const city = fields.city;
     const fleet = await canonicalFleetForCity(tx, city);
     const adults = Number(fields.adults) || 0;
     const children = Number(fields.children) || 0;

@@ -2,6 +2,7 @@ import { failure, success } from "@/lib/api-response";
 import { identifyVehicleFromImage, translateThaiForReview } from "@/features/assist/service";
 import { db } from "@/lib/db";
 import { NextRequest } from "next/server";
+import { detectDispatchCity } from "@/lib/city/detect-city";
 
 function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
@@ -57,6 +58,7 @@ function parseIwayRide(text: string) {
   const passengerPhone = clients.match(/phone\s+([+\d][\d\s-]+)/i)?.[1]?.trim() || "";
   const passengerName = lastPassengerName(clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim());
   const { adults, children } = passengerCounts(text);
+  const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(rideNumber),
     passengerName,
@@ -70,27 +72,32 @@ function parseIwayRide(text: string) {
     children,
     luggage: luggageFor(text, adults + children),
     meetGreetLine: meetGreetFor(text),
-    city: /samui|koh samui|สุราษฎร์ธานี/i.test(`${pickupAddress} ${dropoffAddress}`) ? "苏梅" : "曼谷",
+    city: cityDetection.city ?? "",
+    cityDetection,
     otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, pick(text, "Meeting tablet") && `Meeting tablet: ${pick(text, "Meeting tablet")}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
   };
 }
 
 function parseStandardOrder(text: string) {
   const { adults, children } = passengerCounts(text);
+  const pickupAddress = pick(text, "Pickup address");
+  const dropoffAddress = pick(text, "Dropoff address");
+  const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
     passengerPhone: pick(text, "(?:Passenger Phone Number|Phone)"),
     pickupDateTime: pick(text, "(?:Departure Time|Pickup Time)"),
-    pickupAddress: pick(text, "Pickup address"),
-    dropoffAddress: pick(text, "Dropoff address"),
+    pickupAddress,
+    dropoffAddress,
     platformVehicleType: pick(text, "Vehicle Type"),
     flightNumber: pick(text, "Flight Number"),
     adults,
     children,
     luggage: luggageFor(text, adults + children),
     meetGreetLine: meetGreetFor(text),
-    city: /samui|koh samui|usm/i.test(text) ? "苏梅" : "曼谷",
+    city: cityDetection.city ?? "",
+    cityDetection,
     otherNotes: "",
   };
 }
@@ -108,11 +115,12 @@ export async function POST(request: NextRequest) {
   if (!["iway_feishu", "esforty", "manual"].includes(sourceType)) return failure("SOURCE_REQUIRED", "请选择订单来源后再识别。", undefined, 422);
   if (!isIwayRide && !isStandardOrder) return failure("NOT_AN_ORDER", "未识别到完整的新订单结构；车队回复不会被当作订单导入。", undefined, 422);
 
-  const fields = isIwayRide ? parseIwayRide(text) : parseStandardOrder(text);
-  const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType"] as const;
+  const parsed = isIwayRide ? parseIwayRide(text) : parseStandardOrder(text);
+  const { cityDetection, ...fields } = parsed;
+  const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"] as const;
   const missingFields = required.filter((key) => !fields[key]);
   const exact = fields.platformOrderNumber ? await db.order.findMany({ where: { platformOrderNumber: fields.platformOrderNumber }, select: { id: true, platformOrderNumber: true } }) : [];
   const suspected = fields.passengerName ? await db.order.findMany({ where: { passengerName: fields.passengerName }, select: { id: true, platformOrderNumber: true } }) : [];
   const [thaiTranslation, vehicleImage] = await Promise.all([translateThaiForReview(text), identifyVehicleFromImage(typeof body.vehicleImageUrl === "string" ? body.vehicleImageUrl : "")]);
-  return success({ fields, missingFields, rawText: text, source: { type: sourceType, format: isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: { exact: exact.map((order) => ({ id: order.id, orderNo: order.platformOrderNumber })), suspected: suspected.filter((order) => !exact.some((item) => item.id === order.id)).map((order) => ({ id: order.id, orderNo: order.platformOrderNumber, reason: "乘客姓名相同，请人工核对服务时间和路线" })) }, assistance: { thaiTranslation, vehicleImage } });
+  return success({ fields, cityDetection, missingFields, rawText: text, source: { type: sourceType, format: isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: { exact: exact.map((order) => ({ id: order.id, orderNo: order.platformOrderNumber })), suspected: suspected.filter((order) => !exact.some((item) => item.id === order.id)).map((order) => ({ id: order.id, orderNo: order.platformOrderNumber, reason: "乘客姓名相同，请人工核对服务时间和路线" })) }, assistance: { thaiTranslation, vehicleImage } });
 }
