@@ -13,6 +13,12 @@ const exceptionLabels = { MISSING_FIELD: "字段缺失", DUPLICATE_SUSPECT: "疑
 type SyncRun = { status: "REQUESTED" | "RUNNING" | "SUCCEEDED" | "FAILED"; createdCount: number; updatedCount: number; cancelledCount: number; skippedCount: number; errorMessage?: string | null };
 function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()); }
 function displayToday() { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Bangkok", year: "numeric", month: "long", day: "numeric" }).format(new Date()); }
+function displaySyncFailure(message: string) {
+  if (/need_user_authorization|token_missing|lark-cli auth login/i.test(message)) {
+    return "飞书邮箱授权已失效，暂时无法同步。请在安装同步助手的电脑上重新登录飞书后再试。";
+  }
+  return "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
+}
 function nextAction(order: Order) {
   if (order.status === "PENDING_REVIEW") return "核对订单";
   if (order.status === "READY_TO_DISPATCH") return "去派车";
@@ -60,7 +66,7 @@ export function OrderDashboard() {
   }, [query, refreshVersion]);
   async function syncMailAndRefresh() {
     setSyncingMail(true);
-    setSyncMessage("正在请求飞书订单，请稍候…");
+    setSyncMessage("正在请求飞书订单。这台电脑会在约 1 分钟内开始读取，请稍候…");
     try {
       const response = await fetch("/api/import-sync/feishu-mail", { method: "POST" });
       const payload = await response.json();
@@ -72,14 +78,14 @@ export function OrderDashboard() {
         const statusPayload = await statusResponse.json();
         const run = statusPayload.data?.latestRun as SyncRun | undefined;
         if (!run || run.status === "REQUESTED" || run.status === "RUNNING") continue;
-        if (run.status === "FAILED") throw new Error(run.errorMessage || "飞书同步失败");
+        if (run.status === "FAILED") throw new Error(displaySyncFailure(run.errorMessage || ""));
         setRefreshVersion((version) => version + 1);
         setSyncMessage(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔。订单列表已刷新。`);
         return;
       }
       setSyncMessage("同步请求已发出，仍在处理中。请稍后再点击一次；订单不会丢失。");
     } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : "飞书同步失败，请稍后重试。");
+      setSyncMessage(error instanceof Error ? displaySyncFailure(error.message) : "飞书同步失败，请稍后重试。");
     } finally {
       setSyncingMail(false);
     }
@@ -88,7 +94,7 @@ export function OrderDashboard() {
   const allSelected = orders.length > 0 && selected.length === orders.length;
   const toggleOne = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <main className="v3-page">
-    <header className="v3-top"><div><h1>订单工作台</h1><p>{displayToday()} · 默认今天至未来 7 日</p><small className="v3-sync-state">订单仅在首次打开、筛选变更或你手动刷新时更新{lastRefreshedAt ? ` · 最后刷新 ${lastRefreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}{syncMessage ? ` · ${syncMessage}` : ""}</small></div><div className="v3-top-actions"><button className="v3-secondary" type="button" onClick={syncMailAndRefresh} disabled={loading || syncingMail}>{syncingMail ? "正在同步飞书…" : "同步飞书并刷新"}</button></div></header>
+    <header className="v3-top"><div><h1>订单工作台</h1><p>{displayToday()} · 默认今天至未来 7 日</p><small className="v3-sync-state">订单仅在首次打开、筛选变更或你手动刷新时更新{lastRefreshedAt ? ` · 最后刷新 ${lastRefreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}{syncMessage ? ` · ${syncMessage}` : ""}</small></div><div className="v3-top-actions"><a className="v3-secondary" href="/import">手动录入订单</a><button className="v3-secondary" type="button" onClick={syncMailAndRefresh} disabled={loading || syncingMail}>{syncingMail ? "正在同步飞书…" : "同步飞书并刷新"}</button></div></header>
     <section className="v3-metrics" aria-label="订单概览">
       <Metric value={summary?.pendingReview} label="待核对"/><Metric value={summary?.readyToDispatch} label="待派车"/><Metric value={summary?.pendingDriver} label="待司机资料"/><Metric value={summary?.pendingReturn} label="待回传 i’way"/><Metric value={summary?.exceptions} label="异常 / 临近"/>
     </section>
