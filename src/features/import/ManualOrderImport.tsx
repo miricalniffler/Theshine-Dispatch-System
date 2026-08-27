@@ -10,6 +10,11 @@ const fieldLabels: Record<string, string> = {
   adults: "成人数量", children: "儿童数量", luggage: "行李数量", meetGreetLine: "举牌信息", otherNotes: "其他备注",
 };
 
+const emptyManualFields: Fields = {
+  platformOrderNumber: "", passengerName: "", passengerPhone: "", pickupDateTime: "", pickupAddress: "", dropoffAddress: "",
+  platformVehicleType: "", flightNumber: "", adults: 0, children: 0, luggage: 0, meetGreetLine: "", otherNotes: "", city: "",
+};
+
 function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const image = new Image();
@@ -71,6 +76,12 @@ export function ManualOrderImport() {
     finally { setWorking(null); }
   }
 
+  function startDirectEntry() {
+    setNotice({ tone: "success", text: "可直接填写已知资料；暂时缺少的项会保存为“待核对”，之后仍可在订单详情补全。" });
+    setFields({ ...emptyManualFields });
+    setSource({ type: "manual", format: "manual_form", verified: true });
+  }
+
   async function saveOrder() {
     if (!fields || !source) return;
     setWorking("save"); setNotice(null);
@@ -93,8 +104,8 @@ export function ManualOrderImport() {
       <div className="manual-image-actions"><button type="button" className="v3-secondary" onClick={() => fileInput.current?.click()}>上传订单截图</button><input ref={fileInput} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseImage(event.currentTarget.files?.[0])}/>{imagePreview && <button type="button" className="v3-primary" onClick={scanImage} disabled={working !== null}>{working === "scan" ? "正在识别截图…" : "识别这张订单截图"}</button>}</div>
       {imagePreview && <div className="manual-image-preview"><img src={imagePreview} alt="待识别的订单截图"/><button type="button" onClick={() => setImagePreview("")}>删除截图</button></div>}
       <p>截图只用于本次文字转写，不会作为订单资料保存。AI 不会补猜看不清的信息。</p>
-      <footer><a className="v3-secondary" href="/orders">取消并返回工作台</a><button className="v3-primary" type="button" onClick={parseOrder} disabled={working !== null || !text.trim()}>{working === "parse" ? "正在整理字段…" : "识别订单字段"}</button></footer>
+      <footer><a className="v3-secondary" href="/orders">取消并返回工作台</a><button className="v3-secondary" type="button" onClick={startDirectEntry} disabled={working !== null}>直接填写订单</button><button className="v3-primary" type="button" onClick={parseOrder} disabled={working !== null || !text.trim()}>{working === "parse" ? "正在整理字段…" : "识别订单字段"}</button></footer>
     </section>}
-    {fields && <section className="import-review"><div><h3>核对订单字段</h3>{Object.entries(fields).filter(([key]) => key !== "cityDetection").map(([key, value]) => key === "city" ? <label key={key}>服务城市<select value={String(value ?? "")} onChange={(event) => setFields((current) => ({ ...current!, city: event.target.value }))}><option value="">请选择服务城市</option><option value="曼谷">曼谷</option><option value="苏梅">苏梅</option></select></label> : <label key={key}>{fieldLabels[key] || key}<input value={String(value ?? "")} onChange={(event) => setFields((current) => ({ ...current!, [key]: event.target.value }))}/></label>)}</div><div><h3>订单原文</h3><pre>{text}</pre><p>截图识别后仍由网站规则提取字段；你可以直接改正任何一项。</p></div><footer><button className="v3-secondary" type="button" onClick={() => { setFields(null); setSource(null); }}>返回修改</button><button className="v3-primary" type="button" onClick={saveOrder} disabled={working !== null || duplicates.exact.length > 0}>{duplicates.exact.length ? "订单号已存在" : working === "save" ? "正在保存…" : "确认并保存订单"}</button></footer></section>}
+    {fields && <section className="import-review"><div><h3>核对订单字段</h3>{Object.entries(fields).filter(([key]) => key !== "cityDetection").map(([key, value]) => key === "city" ? <label key={key}>服务城市<select value={String(value ?? "")} onChange={(event) => setFields((current) => ({ ...current!, city: event.target.value }))}><option value="">请选择服务城市</option><option value="曼谷">曼谷</option><option value="苏梅">苏梅</option></select></label> : <label key={key}>{fieldLabels[key] || key}<input type={key === "pickupDateTime" ? "datetime-local" : "text"} value={String(value ?? "")} onChange={(event) => setFields((current) => ({ ...current!, [key]: event.target.value }))}/></label>)}</div><div><h3>{text ? "订单原文" : "直接填写模式"}</h3>{text ? <><pre>{text}</pre><p>截图识别后仍由网站规则提取字段；你可以直接改正任何一项。</p></> : <p>请至少填入订单号、接客时间和服务城市；其余信息可先留空，订单会作为待核对保存。</p>}</div><footer><button className="v3-secondary" type="button" onClick={() => { setFields(null); setSource(null); }}>返回修改</button><button className="v3-primary" type="button" onClick={saveOrder} disabled={working !== null || duplicates.exact.length > 0}>{duplicates.exact.length ? "订单号已存在" : working === "save" ? "正在保存…" : "确认并保存订单"}</button></footer></section>}
   </section></main>;
 }

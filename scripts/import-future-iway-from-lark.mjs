@@ -7,6 +7,7 @@ const db = new PrismaClient();
 const cli = process.env.LARK_CLI_PATH || "/Users/muzitong/.local/bin/lark-cli";
 const mailbox = process.env.IWAY_MAILBOX || "dingdan@theshine.com.cn";
 const officialSender = "control@iwayex.com";
+const newRideSender = "noreply@iway.ru";
 const dryRun = process.argv.includes("--dry-run");
 const requestedOnly = process.argv.includes("--when-requested");
 let syncRequestId = null;
@@ -56,6 +57,16 @@ function serviceDate(value) {
   return month ? `${match[3]}-${String(month).padStart(2, "0")}-${match[2].padStart(2, "0")}` : "";
 }
 
+function cityFromOrder(iwayCity, pickupAddress, dropoffAddress) {
+  // i'way 的 City 偶尔填的是错误的行政城市。苏梅的接/送地址比这行字段
+  // 更接近实际派车地点，因此只要任一地址明确出现苏梅，就优先归到苏梅。
+  const route = `${pickupAddress} ${dropoffAddress}`.toLowerCase();
+  if (/\b(?:koh\s+samui|ko\s+samui|samui|chaweng|lamai|bophut|bo\s+phut|surat\s+thani|usm)\b/i.test(route)) return "苏梅";
+  if (/^(?:koh\s+samui|ko\s+samui|samui)$/i.test(iwayCity)) return "苏梅";
+  if (/^bangkok$/i.test(iwayCity)) return "曼谷";
+  return null;
+}
+
 function parseOrder(message, meta) {
   const text = normalizedText(message.body_plain_text);
   const orderNo = capture(text, /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, "");
@@ -77,7 +88,7 @@ function parseOrder(message, meta) {
   const phoneBlock = capture(text, /Phone:\s*(.*?)\s+Please send us a confirmation/i);
   const phones = [...new Set(phoneBlock.split(/\s*,\s*/).map((phone) => phone.trim()).filter(Boolean))];
   const additionalRemarks = capture(text, /Additional remarks:\s*(.*?)\s+i[’']way notes:/i);
-  const city = /^(?:koh\s+samui|samui)$/i.test(iwayCity) ? "苏梅" : /^bangkok$/i.test(iwayCity) ? "曼谷" : null;
+  const city = cityFromOrder(iwayCity, pickupAddress, dropoffAddress);
   const children = Number(capture(text, /Children:\s*(\d+)/i)) || 0;
   const statedAdults = Number(capture(text, /Adults:\s*(\d+)/i)) || 0;
   const adults = statedAdults || Math.max(0, pax - children);
@@ -130,21 +141,34 @@ async function main() {
     syncRequestId = request.id;
     await db.importSyncRun.update({ where: { id: request.id }, data: { status: "RUNNING" } });
   }
-  const triage = runCli([
+  // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
+  // 再合并结果，既不会漏掉 New ride，也不必下载整个邮箱的 400 封目录。
+  // 同步是增量的：已解析邮件已留有缓存，新订单/修改邮件总会排在最新位置。
+  // 每个发件人只看最近 30 封，避免旧邮件越来越多后拖慢每一次人工刷新。
+  const triages = [{ sender: officialSender, max: 30 }, { sender: newRideSender, max: 30 }].map(({ sender, max }) => runCli([
     "mail", "+triage", "--as", "user", "--mailbox", mailbox,
-    "--filter", JSON.stringify({ from: [officialSender] }),
-    "--max", "400", "--format", "json",
-  ]);
-  const candidates = triage.messages.filter((mail) =>
-    /(?:Transfer service order|AMENDMENT to the transfer|cancel(?:lation|led|ed)?.*transfer|transfer.*cancel(?:lation|led|ed)?)/i.test(mail.subject) &&
+    "--filter", JSON.stringify({ from: [sender] }), "--max", String(max), "--format", "json",
+  ]));
+  const triageMessages = triages.flatMap((result) => result.messages || []);
+  const scannedCount = triages.reduce((total, result) => total + Number(result.count || 0), 0);
+  const candidates = triageMessages.filter((mail) =>
+    /(?:Transfer service order|New ride\s*#|AMENDMENT to the transfer|cancel(?:lation|led|ed)?.*transfer|transfer.*cancel(?:lation|led|ed)?)/i.test(mail.subject) &&
     /i[’']way/i.test(mail.subject),
   );
   const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
-  const details = runCli([
+  // 历史邮件无需每次重新下载正文。新修改邮件会有新的 message_id，仍会被
+  // 自动读取并覆盖对应订单；这让后续手动刷新从约一分钟降到只查邮件目录。
+  const previouslyRead = dryRun ? [] : await db.importedSourceMessage.findMany({
+    where: { connector: "feishu-mail", externalId: { in: uniqueCandidates.map((mail) => mail.message_id) } },
+    select: { externalId: true },
+  });
+  const knownIds = new Set(previouslyRead.map((item) => item.externalId));
+  const pendingCandidates = dryRun ? uniqueCandidates : uniqueCandidates.filter((mail) => !knownIds.has(mail.message_id));
+  const details = pendingCandidates.length ? runCli([
     "mail", "+messages", "--as", "user", "--mailbox", mailbox,
-    "--message-ids", uniqueCandidates.map((mail) => mail.message_id).join(","),
+    "--message-ids", pendingCandidates.map((mail) => mail.message_id).join(","),
     "--html=false", "--format", "json",
-  ]);
+  ]) : { data: { messages: [] } };
   const metadata = new Map(uniqueCandidates.map((mail) => [mail.message_id, mail]));
   const parseResults = details.data.messages.map((message) => {
     const meta = metadata.get(message.message_id);
@@ -168,7 +192,7 @@ async function main() {
   }
   if (dryRun) {
     console.log(JSON.stringify({
-      scanned: triage.count,
+      scanned: scannedCount,
       candidateMessages: uniqueCandidates.length,
       parsedMessages: parsed.filter((event) => event.action === "upsert").length,
       cancellationMessages: parsed.filter((event) => event.action === "cancel").length,
@@ -196,7 +220,7 @@ async function main() {
       create: { name, city, isActive: true, note: JSON.stringify({ chatNote: "", vehicleTypes: [], note: "" }) },
     }));
   }
-  const summary = { scanned: triage.count, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.filter((event) => event.action === "upsert").length, cancellationMessages: parsed.filter((event) => event.action === "cancel").length, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
+  const summary = { scanned: scannedCount, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.filter((event) => event.action === "upsert").length, cancellationMessages: parsed.filter((event) => event.action === "cancel").length, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
   for (const item of future) {
     const existing = await db.order.findUnique({ where: { platformOrderNumber: item.orderNo } });
     if (item.action === "cancel") {
@@ -250,6 +274,16 @@ async function main() {
       summary.created.push(item.orderNo);
     }
   }
+  // 只标记已成功读懂的邮件。格式异常的邮件仍会在下一次刷新重试，避免
+  // 一次解析器故障把订单永久忽略。
+  const processed = parseResults.filter((result) => result.event?.orderNo).map((result) => ({
+    connector: "feishu-mail",
+    externalId: result.message.message_id,
+    action: result.event.action,
+    sourceText: result.message.body_plain_text || "",
+    receivedAt: result.event.receivedAt,
+  }));
+  if (processed.length) await db.importedSourceMessage.createMany({ data: processed, skipDuplicates: true });
   if (syncRequestId) {
     await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected } });
   }

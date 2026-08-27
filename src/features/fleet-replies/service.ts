@@ -183,20 +183,22 @@ function parseBangkokRecords(text: string, orders: CandidateOrder[]): Analysis {
 }
 
 function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
-  const starts = [...text.matchAll(/(?:^|\n)\s*(\d{3}\s*\d{3})\b/g)];
+  // i'way 订单号原先多为 6 位，现在已出现 7 位。必须按“每一行开头的
+  // 6 或 7 位订单号”切开，否则后面各行的电话会被误并到第一笔订单。
+  const starts = [...text.matchAll(/(?:^|\n)\s*(\d{3}\s*\d{3,4})\b/g)];
   const blocks = starts.length ? starts.map((match, index) => text.slice(match.index, starts[index + 1]?.index ?? text.length)) : [text];
   const records = blocks.map((block, source_index) => {
-    const orderNo = firstMatch(block, /^\s*(\d{3}\s*\d{3})\b/m);
+    const orderNo = firstMatch(block, /^\s*(\d{3}\s*\d{3,4})\b/m);
     const exact = orderNo ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(orderNo)) : undefined;
     const phone = readPhone(block);
-    const model = firstMatch(block, /\b((?:toyota\s+commut(?:er)?|toyota\s+ventury|mitsubishi\s+pajero|toyota\s+hiace[^,\n]*|hyundai[^,\n]*|honda[^,\n]*)\b)/i);
+    const model = firstMatch(block, /\b((?:toyota\s+commut(?:er)?|commut(?:er)?\s+toyota|toyota\s+ventury|mitsubishi\s+pajero|(?:toyota\s+)?all\s+new\s+v9|toyota\s+hiace[^,\n]*|hyundai[^,\n]*|honda[^,\n]*)\b)/i);
     const plate = block.match(/(?:,|\s)(\d{1,2}-\d{3,5}|\d{3,5})\s*$/m)?.[1]
       ?? firstMatch(block, /(?:toyota\s+ventury|toyota\s+commut(?:er)?|mitsubishi\s+pajero)\s+(\d{3,5})\b/i)
       ?? readPlate(block);
     const beforePhone = phone ? block.slice(0, Math.max(0, block.indexOf(phone))) : block;
     const name = beforePhone
-      .replace(/^\s*\d{3}\s*\d{3}\s*[,，:]?\s*/m, "")
-      .replace(/\b(?:toyota\s+commut(?:er)?|toyota\s+ventury|mitsubishi\s+pajero|toyota\s+hiace)\b/ig, "")
+      .replace(/^\s*\d{3}\s*\d{3,4}\s*[,，:]?\s*/m, "")
+      .replace(/\b(?:toyota\s+commut(?:er)?|commut(?:er)?\s+toyota|toyota\s+ventury|mitsubishi\s+pajero|(?:toyota\s+)?all\s+new\s+v9|toyota\s+hiace)\b/ig, "")
       .replace(/\b\d{1,2}-\d{3,5}\b|\b\d{3,5}\b/g, "")
       .split(/[,，]/).map((value) => value.trim()).filter(Boolean).at(-1) || null;
     return {

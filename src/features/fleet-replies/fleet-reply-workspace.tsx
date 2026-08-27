@@ -108,9 +108,12 @@ export function FleetReplyWorkspace() {
   async function saveAndGenerate(currentReplyId: string, records: Editable[], currentExtractionId: string | null) {
     const errors: string[] = [];
     const savedOrderIds: string[] = [];
-    for (const record of records.filter((item) => item.orderId)) {
+    // 每笔订单互不依赖；并行保存可以避免 5 笔资料就把等待时间放大为 5 倍。
+    const confirmations = await Promise.all(records.filter((item) => item.orderId).map(async (record) => {
       const response = await fetch(`/api/fleet-replies/${currentReplyId}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extractionId: currentExtractionId, records: [record] }) });
-      const payload = await response.json();
+      return { record, response, payload: await response.json() };
+    }));
+    for (const { record, response, payload } of confirmations) {
       if (response.ok && payload.data?.valid) savedOrderIds.push(record.orderId);
       else errors.push(payload.data?.errors?.map((item: { message: string }) => item.message).join("；") || payload.error?.message || "这笔资料未能保存。");
     }

@@ -129,8 +129,13 @@ export function formatMeetGreetLine(value: string | null | undefined, passengerN
 
 export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules()) {
   if (!vehicle) return null;
-  const normalizedKey = vehicle.trim().toLocaleLowerCase();
-  return rules.transforms.vehicle_aliases[normalizedKey] ?? vehicle.trim();
+  const trimmed = vehicle.trim();
+  const normalizedKey = trimmed.toLocaleLowerCase().replace(/\s+/g, " ");
+  // 车队常把品牌写在后面（例如 “Commuter Toyota”），或简称为
+  // “All New V9”。这些不是 AI 推测，而是已确认的车型别名。
+  if (/\ball\s+new\s+v9\b/i.test(normalizedKey)) return "Toyota HiAce All New V9";
+  if (/\bcommut(?:er)?\s+toyota\b/i.test(normalizedKey)) return "Toyota Commut";
+  return rules.transforms.vehicle_aliases[normalizedKey] ?? trimmed;
 }
 
 export function formatServiceDateLabel(serviceDate: string, locale: "zh" | "en" = "zh") {
