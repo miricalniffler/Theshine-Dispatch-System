@@ -67,22 +67,12 @@ function cityFromOrder(iwayCity, pickupAddress, dropoffAddress) {
   return null;
 }
 
-function platformVehicleLabel(vehicleClass, modelCars) {
+function platformVehicleLabel(vehicleClass) {
   const category = normalizedText(vehicleClass).split("(")[0].trim();
-  // i'way 的 New ride 邮件中，Vehicle Class 有时只是 C、E 之类的内部
-  // 分类代码，不是可派车/可展示的车型。此时优先使用同一封邮件里的
-  // Model cars；若没有可读车型，明确显示“待核对”，避免误导地显示 C。
-  const isInternalCode = /^[A-Z]\d?$/i.test(category);
-  if (!isInternalCode) return category;
-
-  const model = normalizedText(modelCars).split(/,\s*\d+\.\s*/)[0]
-    .replace(/^\d+\.\s*/, "")
-    .replace(/\(\s*(?:\d+\s*)?(?:seats?|pax)\s*[-:]\s*\d+\s*\)/gi, "")
-    .replace(/\(?\s*\d+\s*(?:seats?|pax)\s*[-:]\s*\d+\s*\)?/gi, "")
-    .replace(/\s*(?:,|;|-)?\s*(?:seats?|pax)\b.*$/i, "")
-    .replace(/[\s,;:-]+$/, "")
-    .trim();
-  return model || "待核对";
+  // Model cars 只是该等级可用的示例车，不是订单要求的车型。C 是 i'way
+  // 的 COMFORT 等级代码，应转换为平台车型名称后再显示/派单。
+  if (/^C$/i.test(category)) return "COMFORT";
+  return category;
 }
 
 function parseOrder(message, meta) {
@@ -93,7 +83,7 @@ function parseOrder(message, meta) {
   const pickupTime = capture(text, /Local pick-up time:\s*(\d{1,2}:\d{2})/i);
   const vehicleBlock = capture(text, /Vehicle Class:\s*(.*?)\s+Model cars:/i);
   const modelCars = capture(text, /Model cars:\s*(.*?)\s+Pax:/i);
-  const vehicleType = platformVehicleLabel(vehicleBlock, modelCars);
+  const vehicleType = platformVehicleLabel(vehicleBlock);
   const seatCount = Number(modelCars.match(/seats\s*-\s*(\d+)/i)?.[1] || 0) || null;
   const pax = Number(capture(text, /Pax:\s*(\d+)/i)) || 0;
   const transfer = capture(text, /Transfer:\s*(.*?)\s+Flight number:/i);

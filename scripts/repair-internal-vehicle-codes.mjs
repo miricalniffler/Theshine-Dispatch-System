@@ -11,17 +11,10 @@ function capture(text, pattern) {
   return normalizedText(text.match(pattern)?.[1] || "");
 }
 
-function platformVehicleLabel(vehicleClass, modelCars) {
+function platformVehicleLabel(vehicleClass) {
   const category = normalizedText(vehicleClass).split("(")[0].trim();
-  if (!/^[A-Z]\d?$/i.test(category)) return category;
-  const model = normalizedText(modelCars).split(/,\s*\d+\.\s*/)[0]
-    .replace(/^\d+\.\s*/, "")
-    .replace(/\(\s*(?:\d+\s*)?(?:seats?|pax)\s*[-:]\s*\d+\s*\)/gi, "")
-    .replace(/\(?\s*\d+\s*(?:seats?|pax)\s*[-:]\s*\d+\s*\)?/gi, "")
-    .replace(/\s*(?:,|;|-)?\s*(?:seats?|pax)\b.*$/i, "")
-    .replace(/[\s,;:-]+$/, "")
-    .trim();
-  return model || "待核对";
+  if (/^C$/i.test(category)) return "COMFORT";
+  return category;
 }
 
 try {
@@ -30,11 +23,10 @@ try {
   });
   const repaired = [];
   for (const order of orders) {
-    if (!/^(?:[A-Z]\d?|\d+\.\s)/i.test(order.platformVehicleType.trim())) continue;
+    if (!/^(?:C|Toyota Corolla)$/i.test(order.platformVehicleType.trim())) continue;
     const text = normalizedText(order.rawSource);
     const vehicleClass = capture(text, /Vehicle Class:\s*(.*?)\s+Model cars:/i);
-    const modelCars = capture(text, /Model cars:\s*(.*?)\s+Pax:/i);
-    const vehicleType = platformVehicleLabel(vehicleClass, modelCars);
+    const vehicleType = platformVehicleLabel(vehicleClass);
     if (!vehicleType || vehicleType === order.platformVehicleType) continue;
     await db.$transaction([
       db.order.update({ where: { id: order.id }, data: { platformVehicleType: vehicleType } }),
