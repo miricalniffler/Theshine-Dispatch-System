@@ -43,6 +43,21 @@ function meetGreetFor(text: string) {
   return signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : "");
 }
 
+function platformVehicleLabel(vehicleClass: string, modelCars: string) {
+  const category = vehicleClass.replace(/\s+/g, " ").split("(")[0].trim();
+  // C、E 等是 i'way 邮件里的内部车型分类码，不应直接展示给运营人员。
+  // 有明确 Model cars 时显示该车型；否则标为待核对，避免把 C 当作车型。
+  if (!/^[A-Z]\d?$/i.test(category)) return category;
+  const model = modelCars.replace(/\s+/g, " ").split(/,\s*\d+\.\s*/)[0]
+    .replace(/^\d+\.\s*/, "")
+    .replace(/\(\s*(?:\d+\s*)?(?:seats?|pax)\s*[-:]\s*\d+\s*\)/gi, "")
+    .replace(/\(?\s*\d+\s*(?:seats?|pax)\s*[-:]\s*\d+\s*\)?/gi, "")
+    .replace(/\s*(?:,|;|-)?\s*(?:seats?|pax)\b.*$/i, "")
+    .replace(/[\s,;:-]+$/, "")
+    .trim();
+  return model || "待核对";
+}
+
 function parseIwayRide(text: string) {
   const rideNumber = pick(text, "Ride number");
   const date = pick(text, "Date");
@@ -66,7 +81,7 @@ function parseIwayRide(text: string) {
     pickupDateTime: serviceDate && time ? `${serviceDate}T${time.slice(0, 5)}` : "",
     pickupAddress,
     dropoffAddress,
-    platformVehicleType: pick(text, "Vehicle class"),
+    platformVehicleType: platformVehicleLabel(pick(text, "Vehicle class"), pick(text, "Model cars")),
     flightNumber: pick(text, "Flight number/train number"),
     adults,
     children,
