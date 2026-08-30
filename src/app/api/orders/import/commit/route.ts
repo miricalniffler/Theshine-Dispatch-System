@@ -13,6 +13,7 @@ export async function POST(request: NextRequest) {
   const missing = required.filter((key) => !fields[key]);
   const existing = await db.order.findUnique({ where: { platformOrderNumber: fields.platformOrderNumber } });
   if (existing && body.duplicateAction !== "keep") return failure("DUPLICATE_ORDER", "该订单号已存在。请查看旧单，不要重复录入。", [existing.id], 409);
+  if (existing) return success({ order: existing, skipped: true, message: "订单号已存在，已保留原订单。" });
   const pickupDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(fields.pickupDateTime)) ? new Date(`${fields.pickupDateTime}:00+07:00`) : null;
   if (!pickupDateTime || Number.isNaN(pickupDateTime.getTime())) return failure("INVALID_PICKUP_TIME", "接客时间无法确认，请返回核对。", ["pickupDateTime"], 422);
   if (fields.city !== "曼谷" && fields.city !== "苏梅") return failure("CITY_REQUIRED", "无法确认服务城市，请根据接人和送人地址选择曼谷或苏梅后再保存。", ["city"], 422);
