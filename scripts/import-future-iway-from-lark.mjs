@@ -11,14 +11,13 @@ const newRideSender = "noreply@iway.ru";
 const dryRun = process.argv.includes("--dry-run");
 const requestedOnly = process.argv.includes("--when-requested");
 let syncRequestId = null;
+const staleRunMs = 5 * 60_000;
+const cliTimeoutMs = 75_000;
 
 // The local mail bridge can occasionally leave a database or mail request
-// waiting forever.  This worker is launched again every minute, so ending a
-// stuck run is safer than blocking every later manual refresh.
-const watchdog = setTimeout(() => {
-  console.error("飞书手动同步超过 120 秒未结束，已停止本次执行，下一分钟会自动重试。");
-  process.exit(1);
-}, 120_000);
+// waiting forever. The timeout is applied to each blocking lark-cli call:
+// spawnSync blocks the event loop, so a JavaScript-only watchdog cannot
+// reliably interrupt it or mark the database run as failed.
 
 function runCli(args) {
   const result = spawnSync(cli, args, {
@@ -33,7 +32,10 @@ function runCli(args) {
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
     },
     maxBuffer: 32 * 1024 * 1024,
+    timeout: cliTimeoutMs,
+    killSignal: "SIGTERM",
   });
+  if (result.error) throw new Error(`lark-cli 执行失败：${result.error.message}`);
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || `lark-cli exited ${result.status}`);
   return JSON.parse(result.stdout);
 }
@@ -141,13 +143,26 @@ function todayBangkok() {
 
 async function main() {
   if (requestedOnly && !dryRun) {
-    const request = await db.importSyncRun.findFirst({ where: { connector: "feishu-mail", status: "REQUESTED" }, orderBy: { startedAt: "asc" } });
+    const staleBefore = new Date(Date.now() - staleRunMs);
+    // A previous worker can be interrupted by sleep, a closed terminal, or a
+    // stopped CLI. Reclaim only a clearly stale RUNNING request; an active
+    // worker is still left alone.
+    const request = await db.importSyncRun.findFirst({
+      where: {
+        connector: "feishu-mail",
+        OR: [
+          { status: "REQUESTED" },
+          { status: "RUNNING", startedAt: { lt: staleBefore } },
+        ],
+      },
+      orderBy: { startedAt: "asc" },
+    });
     if (!request) {
       console.log(JSON.stringify({ status: "idle", message: "没有待处理的网站同步请求。" }));
       return;
     }
     syncRequestId = request.id;
-    await db.importSyncRun.update({ where: { id: request.id }, data: { status: "RUNNING" } });
+    await db.importSyncRun.update({ where: { id: request.id }, data: { status: "RUNNING", startedAt: new Date(), completedAt: null, errorMessage: null } });
   }
   // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
   // 再合并结果，既不会漏掉 New ride，也不必下载整个邮箱的 400 封目录。
@@ -304,6 +319,5 @@ main().catch(async (error) => {
   }
   throw error;
 }).finally(async () => {
-  clearTimeout(watchdog);
   await db.$disconnect();
 });
