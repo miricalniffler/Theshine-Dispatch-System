@@ -39,6 +39,7 @@ model Order {
   iwayLinks     IwayReturnBatchOrder[]
   activityLogs  ActivityLog[]
   driverConfirmations DriverDetailConfirmation[]
+  customerNotifications CustomerNotification[]
 
   @@index([serviceDate, city, fleetId])
   @@index([status, pickupDateTime])
@@ -253,4 +254,93 @@ model ImportedSourceMessage {
 
   @@unique([connector, externalId])
   @@index([orderId])
+}
+
+// 一条 AirportGuide 就是一份可保留的指引版本。新版本启用时，旧版本保留但停用，
+// 使后续通知快照不会依赖会被改写的当前文案。
+model AirportGuide {
+  id            String   @id @default(cuid())
+  airportName   String
+  iataCode      String?
+  terminal      String?
+  matchKey      String
+  guideText     String
+  isActive      Boolean  @default(true)
+  deactivatedAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  aliases AirportGuideAlias[]
+  images  AirportGuideImage[]
+
+  @@index([iataCode, isActive])
+  @@index([isActive, updatedAt])
+  @@index([matchKey])
+}
+
+model AirportGuideAlias {
+  id              String   @id @default(cuid())
+  airportGuideId  String
+  matchKind       String   @default("ALIAS")
+  value           String
+  normalizedValue String
+  createdAt       DateTime @default(now())
+
+  airportGuide AirportGuide @relation(fields: [airportGuideId], references: [id], onDelete: Cascade)
+
+  @@unique([airportGuideId, matchKind, normalizedValue])
+  @@index([matchKind, normalizedValue])
+}
+
+model AirportGuideImage {
+  id               String   @id @default(cuid())
+  airportGuideId   String
+  storageBucket    String
+  storagePath      String
+  originalFilename String?
+  mimeType         String
+  byteSize         Int?
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  airportGuide AirportGuide @relation(fields: [airportGuideId], references: [id], onDelete: Cascade)
+
+  @@unique([storageBucket, storagePath])
+  @@index([airportGuideId, sortOrder])
+}
+
+model RegionNotificationSetting {
+  id                          String   @id @default(cuid())
+  region                      String   @unique
+  customerWhatsAppEnabled     Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+}
+
+// 本阶段只建立 outbox/历史快照，不接入任何 WhatsApp 发送行为。
+// JSON 快照为后续入站回复、行李识别和司机资料更新比较保留扩展空间。
+model CustomerNotification {
+  id                    String   @id @default(cuid())
+  orderId               String
+  notificationType      String
+  recipientPhone        String
+  status                String   @default("PENDING")
+  idempotencyKey        String   @unique
+  contentSnapshot       Json?
+  templateSnapshot      Json?
+  driverVehicleSnapshot Json?
+  airportGuideSnapshot  Json?
+  providerMessageId     String?  @unique
+  attemptCount          Int      @default(0)
+  lastError             String?
+  sentAt                DateTime?
+  failedAt              DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, notificationType, createdAt])
+  @@index([status, createdAt])
+  @@index([recipientPhone, createdAt])
 }

@@ -9,6 +9,7 @@ type NavLink = { href: string; defaultLabel: string };
 const defaultLinks: NavLink[] = [
   { href: "/orders", defaultLabel: "订单" },
   { href: "/driver-details", defaultLabel: "车队回传" },
+  { href: "/airport-guides", defaultLabel: "机场指引库" },
   { href: "/fleets", defaultLabel: "车队管理" },
   { href: "/history-orders", defaultLabel: "历史订单" },
   { href: "/rules", defaultLabel: "设置 / 规则" },
