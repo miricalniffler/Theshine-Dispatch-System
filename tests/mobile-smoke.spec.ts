@@ -69,15 +69,17 @@ test.describe("已登录后的手机工作台", () => {
     await page.getByLabel("打开更多功能").click();
     const sheet = page.getByRole("dialog", { name: "更多功能" });
     await expect(sheet).toBeVisible();
+    await expect(page.getByRole("link", { name: "订单", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "车队回传", exact: true })).toBeVisible();
     await expect(sheet.getByRole("link", { name: "历史订单" })).toBeVisible();
     await sheet.getByLabel("关闭更多功能").click();
     await expect(sheet).toBeHidden();
     await expectNoDocumentOverflow(page);
   });
 
-  test("车队回传和 i’way 回传页面可在手机打开", async ({ page }) => {
+  test("车队回传页可在手机打开，并保留旧 i’way 地址兼容", async ({ page }) => {
     await page.goto("/driver-details");
-    await expect(page.getByRole("heading", { name: /粘贴车队回复|把车队回复/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /车队回复与 i.?way 回传|粘贴车队回复|把车队回复/ })).toBeVisible();
     await expectNoDocumentOverflow(page);
 
     await page.goto("/iway-return");

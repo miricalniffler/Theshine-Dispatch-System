@@ -98,7 +98,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
     </div>
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
-    <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/iway-return" className="driver-return-link">查看 i’way 回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
+    <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
   </article>;
 }
 
@@ -109,7 +109,7 @@ export function DriverWorkspace() {
   const refresh = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setItems(payload.data)).finally(() => setLoading(false));
   useEffect(() => { refresh(); }, []);
   const orderedItems = orderId ? [...items].sort((left, right) => Number(right.order.id === orderId) - Number(left.order.id === orderId)) : items;
-  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单工作台</a><a className="active" href="/driver-details">司机资料</a><a href="/iway-return">i’way 回传</a></nav><header className="workflow-header"><p className="workflow-kicker">03 · 司机资料</p><h1>把车队回复变成可回传的信息</h1><p>{orderId ? "已打开你从订单工作台选择的订单。粘贴车队回复和车辆图片后，先查看建议，再确认保存。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{orderedItems.length ? orderedItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">没有需要确认司机资料的订单。</p>}</section>}</main>;
+  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>把车队回复变成可回传的信息</h1><p>{orderId ? "已打开你选择的订单。粘贴车队回复和车辆图片后，先查看建议，再确认保存。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{orderedItems.length ? orderedItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">没有需要确认司机资料的订单。</p>}</section>}</main>;
 }
 
 export function IwayReturnWorkspace() {

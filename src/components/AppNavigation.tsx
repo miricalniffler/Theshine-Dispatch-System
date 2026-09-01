@@ -7,12 +7,11 @@ import { useEffect, useMemo, useState } from "react";
 type NavLink = { href: string; defaultLabel: string };
 
 const defaultLinks: NavLink[] = [
-  { href: "/orders", defaultLabel: "订单工作台" },
-  { href: "/history-orders", defaultLabel: "历史订单" },
+  { href: "/orders", defaultLabel: "订单" },
+  { href: "/driver-details", defaultLabel: "车队回传" },
   { href: "/fleets", defaultLabel: "车队管理" },
-  { href: "/driver-details", defaultLabel: "车队回传信息" },
-  { href: "/iway-return", defaultLabel: "i’way 回传" },
-  { href: "/rules", defaultLabel: "规则中心" },
+  { href: "/history-orders", defaultLabel: "历史订单" },
+  { href: "/rules", defaultLabel: "设置 / 规则" },
 ];
 
 const storageKey = "iway-navigation-preferences-v1";

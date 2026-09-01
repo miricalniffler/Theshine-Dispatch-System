@@ -15,6 +15,12 @@ export type Order = {
   status: OrderStatus;
   exceptions: OrderException[];
   createdAt: string;
+  driverDetail?: {
+    confirmedDriverName: string | null;
+    normalizedDriverPhone: string | null;
+    confirmedVehicleModel: string | null;
+    licensePlate: string | null;
+  } | null;
 };
 
 export type OrderFilters = {
@@ -30,10 +36,8 @@ export type OrderFilters = {
 
 export type DashboardSummary = {
   total: number;
-  pendingReview: number;
-  readyToDispatch: number;
-  dispatched: number;
-  pendingDriver: number;
-  pendingReturn: number;
+  waitingFleetReply: number;
+  incompleteDriver: number;
+  readyIwayReturn: number;
   exceptions: number;
 };

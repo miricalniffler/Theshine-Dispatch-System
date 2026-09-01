@@ -56,11 +56,9 @@ export const demoOrderRepository: OrderRepository = {
     const orders = await this.list(filters);
     return {
       total: orders.length,
-      pendingReview: orders.filter((order) => order.status === "PENDING_REVIEW").length,
-      readyToDispatch: orders.filter((order) => order.status === "READY_TO_DISPATCH").length,
-      dispatched: orders.filter((order) => order.status === "DISPATCHED").length,
-      pendingDriver: orders.filter((order) => order.status === "DISPATCHED").length,
-      pendingReturn: orders.filter((order) => order.status === "DRIVER_CONFIRMED" || order.status === "RETURNED").length,
+      waitingFleetReply: orders.filter((order) => !order.driverDetail).length,
+      incompleteDriver: orders.filter((order) => order.driverDetail && (!order.driverDetail.confirmedDriverName || !order.driverDetail.normalizedDriverPhone || !order.driverDetail.confirmedVehicleModel || !order.driverDetail.licensePlate)).length,
+      readyIwayReturn: orders.filter((order) => order.driverDetail && order.driverDetail.confirmedDriverName && order.driverDetail.normalizedDriverPhone && order.driverDetail.confirmedVehicleModel && order.driverDetail.licensePlate).length,
       exceptions: orders.filter((order) => order.exceptions.length > 0).length,
     };
   },

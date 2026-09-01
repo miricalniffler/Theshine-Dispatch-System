@@ -4,11 +4,10 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DispatchPreviewDialog } from "@/features/dispatch/DispatchPreviewDialog";
 import { OrderDetailDrawer } from "./OrderDetailDrawer";
-import type { DashboardSummary, Order, OrderFilters, OrderStatus } from "./types";
+import type { DashboardSummary, Order, OrderFilters } from "./types";
 import "./orders.css";
 import "./orders-table-layout.css";
 
-const statusLabels: Record<OrderStatus, string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派车", DISPATCHED: "待司机资料", DRIVER_CONFIRMED: "待回传平台", RETURNED: "已回传", COMPLETED: "已完成" };
 const exceptionLabels = { MISSING_FIELD: "字段缺失", DUPLICATE_SUSPECT: "疑似重复", DUE_SOON: "临近服务" };
 type SyncRun = { status: "REQUESTED" | "RUNNING" | "SUCCEEDED" | "FAILED"; createdCount: number; updatedCount: number; cancelledCount: number; skippedCount: number; errorMessage?: string | null };
 function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()); }
@@ -19,21 +18,29 @@ function displaySyncFailure(message: string) {
   }
   return "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
 }
-function nextAction(order: Order) {
-  if (order.status === "PENDING_REVIEW") return "核对订单";
-  if (order.status === "READY_TO_DISPATCH") return "去派车";
-  if (order.status === "DISPATCHED") return "录入司机资料";
-  if (order.status === "DRIVER_CONFIRMED" || order.status === "RETURNED") return "生成回传";
-  return "查看详情";
+function missingDriverFields(order: Order) {
+  const driver = order.driverDetail;
+  if (!driver) return ["司机资料"];
+  return [
+    !driver.confirmedDriverName ? "司机姓名" : "",
+    !driver.normalizedDriverPhone ? "司机电话" : "",
+    !driver.confirmedVehicleModel ? "车型" : "",
+    !driver.licensePlate ? "车牌" : "",
+  ].filter(Boolean);
+}
+function DriverVehicle({ order }: { order: Order }) {
+  const missing = missingDriverFields(order);
+  const driver = order.driverDetail;
+  if (!driver) return <span className="v3-driver-waiting">等待车队回复</span>;
+  if (missing.length) return <span className="v3-driver-missing">⚠ 缺{missing.join("、")}</span>;
+  return <><span className="v3-primary-line">{driver.confirmedDriverName}</span><small>{driver.confirmedVehicleModel} · {driver.licensePlate}</small></>;
 }
 function summaryFor(orders: Order[]): DashboardSummary {
   return {
     total: orders.length,
-    pendingReview: orders.filter((order) => order.status === "PENDING_REVIEW").length,
-    readyToDispatch: orders.filter((order) => order.status === "READY_TO_DISPATCH").length,
-    dispatched: orders.filter((order) => order.status === "DISPATCHED").length,
-    pendingDriver: orders.filter((order) => order.status === "DISPATCHED").length,
-    pendingReturn: orders.filter((order) => order.status === "DRIVER_CONFIRMED" || order.status === "RETURNED").length,
+    waitingFleetReply: orders.filter((order) => !order.driverDetail).length,
+    incompleteDriver: orders.filter((order) => Boolean(order.driverDetail) && missingDriverFields(order).length > 0).length,
+    readyIwayReturn: orders.filter((order) => Boolean(order.driverDetail) && missingDriverFields(order).length === 0).length,
     exceptions: orders.filter((order) => order.exceptions.length > 0).length,
   };
 }
@@ -96,7 +103,7 @@ export function OrderDashboard() {
   return <main className="v3-page">
     <header className="v3-top"><div><h1>订单工作台</h1><p>{displayToday()} · 默认今天至未来 7 日</p><small className="v3-sync-state">订单仅在首次打开、筛选变更或你手动刷新时更新{lastRefreshedAt ? ` · 最后刷新 ${lastRefreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}{syncMessage ? ` · ${syncMessage}` : ""}</small></div><div className="v3-top-actions"><a className="v3-secondary" href="/import">手动录入订单</a><button className="v3-secondary" type="button" onClick={syncMailAndRefresh} disabled={loading || syncingMail}>{syncingMail ? "正在同步飞书…" : "同步飞书并刷新"}</button></div></header>
     <section className="v3-metrics" aria-label="订单概览">
-      <Metric value={summary?.pendingReview} label="待核对"/><Metric value={summary?.readyToDispatch} label="待派车"/><Metric value={summary?.pendingDriver} label="待司机资料"/><Metric value={summary?.pendingReturn} label="待回传 i’way"/><Metric value={summary?.exceptions} label="异常 / 临近"/>
+      <Metric value={summary?.waitingFleetReply} label="等待车队回复"/><Metric value={summary?.incompleteDriver} label="司机资料需补充"/><Metric value={summary?.readyIwayReturn} label="可回传 i’way"/><Metric value={summary?.exceptions} label="异常订单"/>
     </section>
     <section className="v3-card">
       <button className="v3-mobile-filter-toggle" type="button" aria-expanded={mobileFiltersOpen} onClick={() => setMobileFiltersOpen((open) => !open)}>
@@ -107,27 +114,26 @@ export function OrderDashboard() {
         {filters.dateMode === "range" && <><input aria-label="开始日期" type="date" value={filters.startDate || today()} onInput={(event) => update("startDate", event.currentTarget.value)} onChange={(event) => update("startDate", event.target.value)}/><input aria-label="结束日期" type="date" value={filters.endDate || ""} onInput={(event) => update("endDate", event.currentTarget.value)} onChange={(event) => update("endDate", event.target.value)}/></>}
         <select aria-label="城市" value={filters.city || ""} onChange={(event) => update("city", event.target.value)}><option value="">全部城市</option><option>曼谷</option><option>苏梅</option></select>
         <select aria-label="车队" value={filters.fleet || ""} onChange={(event) => update("fleet", event.target.value)}><option value="">全部车队</option><option>曼谷车队</option><option>苏梅车队</option></select>
-        <select aria-label="状态" value={filters.status || ""} onChange={(event) => update("status", event.target.value)}><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
         <select aria-label="异常" value={filters.exception || ""} onChange={(event) => update("exception", event.target.value)}><option value="">全部异常</option>{Object.entries(exceptionLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
         <input aria-label="关键词" placeholder="订单号 / 乘客 / 电话" value={filters.keyword || ""} onChange={(event) => update("keyword", event.target.value)}/>
         <button className="v3-secondary v3-filter-desktop-button" type="button" onClick={() => setMobileFiltersOpen((open) => !open)}>筛选</button>
       </div>
-      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>派给车队：同一服务日、同一城市、同一车队。回传 i’way：先录入车队回复，再生成回传内容。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量派给车队</button><button className="v3-secondary" onClick={() => window.location.assign("/driver-details")}>回传 i’way</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
-      <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-status"/><col className="v3-col-action"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : orders.map((order) => order.id))}/>全选</label></th><th>接客时间</th><th>订单号</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>状态</th><th>下一步</th></tr></thead><tbody>
-        {loading ? <tr><td colSpan={7} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={7} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); setPreviewOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small></td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-status-cell"><span className={`v3-tag ${order.status}`}>{statusLabels[order.status]}</span></td><td className="v3-action-cell">{order.status === "READY_TO_DISPATCH" ? <button type="button" className="v3-secondary v3-next" onClick={() => setPreviewOrder(order)}>去派车</button> : order.status === "DISPATCHED" ? <Link className="v3-secondary v3-next" href={`/driver-details?orderId=${order.id}`}>录入司机资料</Link> : <Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} className="v3-secondary v3-next" href={`/orders/${order.id}`}>{nextAction(order)}</Link>}</td></tr>)}
+      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>同一服务日、同一城市、同一车队的订单可一起生成车队派单；车队回复和 i’way 回传统一在“车队回传”完成。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量生成车队派单</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
+      <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-driver"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : orders.map((order) => order.id))}/>全选</label></th><th>接客时间</th><th>订单号</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>司机 / 车辆</th></tr></thead><tbody>
+        {loading ? <tr><td colSpan={6} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={6} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small></td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-driver-cell"><DriverVehicle order={order} /></td></tr>)}
       </tbody></table></div>
       <div className="v3-mobile-orders" aria-live="polite">
         {loading ? <p className="v3-mobile-empty">正在加载订单…</p> : !orders.length ? <p className="v3-mobile-empty">当前范围没有已核实的订单</p> : orders.map((order) => <article className="v3-mobile-order" key={order.id}>
-          <header><label className="v3-mobile-select"><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label><span className={`v3-tag ${order.status}`}>{statusLabels[order.status]}</span></header>
-          <div className="v3-mobile-order-main"><div><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city} · {order.fleetName}</small></div><Link onClick={(event) => { event.preventDefault(); setPreviewOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></div>
+          <header><label className="v3-mobile-select"><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label></header>
+          <div className="v3-mobile-order-main"><div><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city} · {order.fleetName}</small></div><Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></div>
           <p className="v3-mobile-passenger">{order.passengerName}</p><p className="v3-mobile-route">{order.route}</p>
-          <footer><span>{order.vehicleType}</span>{order.status === "READY_TO_DISPATCH" ? <button type="button" className="v3-secondary v3-next" onClick={() => setPreviewOrder(order)}>去派车</button> : order.status === "DISPATCHED" ? <Link className="v3-secondary v3-next" href={`/driver-details?orderId=${order.id}`}>录入资料</Link> : <Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} className="v3-secondary v3-next" href={`/orders/${order.id}`}>{nextAction(order)}</Link>}</footer>
+          <footer><span>{order.vehicleType}</span><DriverVehicle order={order} /></footer>
         </article>)}
       </div>
     </section>
     {modal === "dispatch" && <DispatchPreviewDialog orderIds={selected} onClose={() => setModal(null)}/>}
     {previewOrder && <DispatchPreviewDialog orderIds={[previewOrder.id]} mode="single" onClose={() => setPreviewOrder(null)} editHref={`/orders/${previewOrder.id}`} />}
-    <OrderDetailDrawer order={detailOrder} onClose={() => setDetailOrder(null)} />
+    <OrderDetailDrawer order={detailOrder} onClose={() => setDetailOrder(null)} onDispatch={(order) => { setDetailOrder(null); setPreviewOrder(order); }} />
   </main>;
 }
 function Metric({ value, label }: { value?: number; label: string }) { return <article><b>{value ?? "–"}</b><span>{label}</span></article>; }
