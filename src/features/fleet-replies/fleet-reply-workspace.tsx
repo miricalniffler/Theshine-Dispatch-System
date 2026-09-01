@@ -7,6 +7,7 @@ type CandidateOrder = { id: string; orderNo: string; passengerName: string; pick
 type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
 type Result = { records: ReplyRecord[]; unmatched_items: { source_type: string; source_id: string; reason: string }[] };
 type Editable = { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleModel: string };
+type ReturnWorkItem = { order: CandidateOrder & { serviceDate: string; pickupTime: string; status: string }; driver: { confirmedDriverName: string | null; normalizedDriverPhone: string | null; confirmedVehicleModel: string | null; licensePlate: string | null } | null };
 
 function bangkokTomorrow() {
   const date = new Date();
@@ -76,6 +77,7 @@ export function FleetReplyWorkspace() {
   const [markedReturned, setMarkedReturned] = useState(false);
   const [unresolved, setUnresolved] = useState<string[]>([]);
   const [showEditor, setShowEditor] = useState(false);
+  const [returnItems, setReturnItems] = useState<ReturnWorkItem[]>([]);
 
   useEffect(() => {
     fetch("/api/fleet-replies/dates").then((response) => response.json()).then((payload) => {
@@ -84,6 +86,9 @@ export function FleetReplyWorkspace() {
       if (payload.data?.defaultDate) setServiceDate(payload.data.defaultDate);
     });
   }, []);
+
+  const loadReturnItems = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setReturnItems(payload.data || []));
+  useEffect(() => { void loadReturnItems(); }, []);
 
   async function selectImages(files: Iterable<File> | null | undefined) {
     if (!files) return;
@@ -109,6 +114,17 @@ export function FleetReplyWorkspace() {
     return [!form.orderId ? "对应订单" : "", !form.driverName.trim() ? "司机姓名" : "", !form.driverPhone.trim() ? "司机电话" : "", !form.vehicleModel.trim() ? "车型" : "", !form.licensePlate.trim() ? "车牌" : ""].filter(Boolean);
   }
   function isComplete(form: Editable) { return missingFields(form).length === 0; }
+  function missingReturnFields(item: ReturnWorkItem) {
+    const driver = item.driver;
+    return [!driver?.confirmedDriverName ? "司机姓名" : "", !driver?.normalizedDriverPhone ? "司机电话" : "", !driver?.confirmedVehicleModel ? "车型" : "", !driver?.licensePlate ? "车牌" : ""].filter(Boolean);
+  }
+  const datedReturnItems = returnItems.filter((item) => item.order.serviceDate === serviceDate && ["DISPATCHED", "DRIVER_CONFIRMED", "RETURNED"].includes(item.order.status));
+  useEffect(() => {
+    setReturnOrderIds(datedReturnItems.filter((item) => missingReturnFields(item).length === 0).map((item) => item.order.id));
+    setIwayText(""); setReturnBatchId(null); setMarkedReturned(false);
+  // The selection intentionally resets only when the displayed service date/data changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceDate, returnItems]);
 
   async function saveAndGenerate(currentReplyId: string, records: Editable[], currentExtractionId: string | null) {
     const errors: string[] = [];
@@ -136,6 +152,7 @@ export function FleetReplyWorkspace() {
     setReturnOrderIds(savedOrderIds);
     setReturnBatchId(null);
     setMarkedReturned(false);
+    void loadReturnItems();
     setNotice({ tone: errors.length ? "error" : "success", text: errors.length ? `已生成 ${savedOrderIds.length} 笔可回传内容；另有资料需要修改。` : `已自动保存并生成 ${savedOrderIds.length} 笔 i’way 回传内容。` });
   }
 
@@ -249,9 +266,9 @@ export function FleetReplyWorkspace() {
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
     </section>
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.text}</p>}
+    <section className="fleet-reply-results iway-return-queue"><h2>待回传 i’way</h2><p>当前日期：{serviceDate}。司机资料完整的订单已默认勾选；不完整订单会显示缺失项且不会勾选。</p>{datedReturnItems.length ? datedReturnItems.map((item) => { const missing = missingReturnFields(item); const complete = missing.length === 0; return <article className="reply-candidate reply-result-summary" key={item.order.id}><header><strong>{item.order.orderNo}</strong><span className={complete ? "reply-complete" : "reply-incomplete"}>{complete ? "资料完整" : `缺${missing.join("、")}`}</span></header><div className="reply-result-fields"><span>司机：{item.driver?.confirmedDriverName || "—"}</span><span>电话：{item.driver?.normalizedDriverPhone || "—"}</span><span>车型：{item.driver?.confirmedVehicleModel || "—"}</span><span>车牌：{item.driver?.licensePlate || "—"}</span></div><label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(item.order.id)} disabled={!complete} onChange={() => toggleReturnOrder(item.order.id)} />加入 i’way 回传</label></article>; }) : <p className="preview-empty">当前日期没有可回传的订单。</p>}{iwayText ? <pre tabIndex={0}>{iwayText}</pre> : <p className="preview-empty">选择订单后可直接生成 i’way 标准文本。</p>}<div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void generateSelectedReturn()} disabled={working || !returnOrderIds.length}>生成标准文本</button><button type="button" className="secondary-action" onClick={() => void copyIwayReturn()} disabled={working || !iwayText}>复制全部</button><button type="button" className="return-mark-action" onClick={() => void confirmIwayReturn()} disabled={working || !returnOrderIds.length || markedReturned}>{markedReturned ? "已标记为已回传" : "标记为已回传"}</button></div></section>
     {result && <section className="fleet-reply-results">
       <section className="fleet-reply-recognized"><h2>② 识别结果</h2><p>资料完整的订单已默认勾选进入 i’way 回传；缺少资料的订单不会被选中。</p>{result.records.map((record, index) => { const form = forms[index]; const missing = form ? missingFields(form) : ["资料"]; const complete = form ? isComplete(form) : false; const order = orders.find((item) => item.id === form?.orderId); return <article className="reply-candidate reply-result-summary" key={`${record.source_index}-${index}`}><header><strong>{order?.orderNo || record.order_match.platform_order_number || "未匹配订单"}</strong><span className={complete ? "reply-complete" : "reply-incomplete"}>{complete ? "资料完整" : `缺${missing.join("、")}`}</span></header><div className="reply-result-fields"><span>司机：{form?.driverName || "—"}</span><span>电话：{form?.driverPhone || "—"}</span><span>车型：{form?.vehicleModel || "—"}</span><span>车牌：{form?.licensePlate || "—"}</span></div>{complete && form?.orderId && <label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(form.orderId)} onChange={() => toggleReturnOrder(form.orderId)} />加入 i’way 回传</label>}</article>; })}</section>
-      <section className="iway-direct-result"><h2>③ i’way 回传</h2><p>选择完整资料的订单后，直接生成标准文本并复制；“标记为已回传”仅用于记录，不会阻塞其他操作。</p>{iwayText ? <pre tabIndex={0}>{iwayText}</pre> : <p className="preview-empty">{returnOrderIds.length ? "点击下方按钮生成 i’way 标准文本。" : "请先完成司机资料，或勾选一笔资料完整的订单。"}</p>}<div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void generateSelectedReturn()} disabled={working || !returnOrderIds.length}>生成标准文本</button><button type="button" className="secondary-action" onClick={() => void copyIwayReturn()} disabled={working || !iwayText}>复制全部</button><button type="button" className="return-mark-action" onClick={() => void confirmIwayReturn()} disabled={working || !returnOrderIds.length || markedReturned}>{markedReturned ? "已标记为已回传" : "标记为已回传"}</button></div></section>
       {unresolved.length > 0 && <div className="unmatched-block"><h3>有资料需要修改</h3>{unresolved.map((item, index) => <p key={`${item}-${index}`}>{item}</p>)}</div>}
       <button type="button" className="secondary-action" onClick={() => setShowEditor((current) => !current)}>{showEditor ? "收起修改资料" : "修改回传资料"}</button>
       {showEditor && <><h2>修改回传资料</h2>{result.records.map((record, index) => <article className="reply-candidate" key={`${record.source_index}-${index}`}>

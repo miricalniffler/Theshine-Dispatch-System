@@ -64,6 +64,14 @@ test.describe("已登录后的手机工作台", () => {
     await expectNoDocumentOverflow(page);
   });
 
+  test("订单和车队回传页面都提供 i’way 批量入口", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "批量回传 i’way" })).toBeVisible();
+    await page.goto("/driver-details");
+    await expect(page.getByRole("heading", { name: "待回传 i’way" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "生成标准文本" })).toBeVisible();
+    await expectNoDocumentOverflow(page);
+  });
+
   test("手机可打开并关闭更多导航，不触发业务写入", async ({ page }, testInfo) => {
     test.skip(!isMobileProject(testInfo.project.name), "桌面端不显示手机更多导航。");
     await page.getByLabel("打开更多功能").click();
