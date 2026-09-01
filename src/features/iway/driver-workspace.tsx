@@ -114,8 +114,11 @@ export function DriverWorkspace() {
 
 export function IwayReturnWorkspace() {
   const [items, setItems] = useState<WorkItem[]>([]); const [selected, setSelected] = useState<string[]>([]); const [preview, setPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion: string } | null>(null); const [batchId, setBatchId] = useState<string | null>(null); const [notice, setNotice] = useState<Notice>(null);
+  const searchParams = useSearchParams();
+  const initialOrderIds = useMemo(() => (searchParams.get("orderIds") || "").split(",").filter(Boolean), [searchParams]);
   const refresh = () => fetch("/api/driver-details").then((r) => r.json()).then((payload) => setItems(payload.data));
   useEffect(() => { refresh(); }, []);
+  useEffect(() => { if (initialOrderIds.length && items.length) setSelected(initialOrderIds.filter((id) => items.some((item) => item.order.id === id))); }, [initialOrderIds, items]);
   const selectable = useMemo(() => items.filter((item) => ["DRIVER_CONFIRMED", "RETURNED", "COMPLETED"].includes(item.order.status)), [items]);
   const readyByDate = useMemo(() => {
     const dates = new Map<string, WorkItem[]>();
