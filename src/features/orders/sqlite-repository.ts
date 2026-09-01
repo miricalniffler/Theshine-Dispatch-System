@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { Order, OrderFilters } from "./types";
 import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
@@ -41,37 +42,48 @@ function bangkokToday() {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-function matchesFilters(order: Order, filters: OrderFilters) {
+function bangkokDateRange(filters: OrderFilters) {
   const today = bangkokToday();
   const offsetDate = (days: number) => {
     const value = new Date(`${today}T12:00:00+07:00`);
     value.setUTCDate(value.getUTCDate() + days);
     return value.toISOString().slice(0, 10);
   };
-  if (filters.dateMode === "window" && (order.serviceDate < today || order.serviceDate > offsetDate(7))) return false;
-  if (filters.dateMode === "today" && order.serviceDate !== today) return false;
-  if (filters.dateMode === "tomorrow" && order.serviceDate !== offsetDate(1)) return false;
-  if (filters.dateMode === "future" && order.serviceDate <= today) return false;
-  if (filters.dateMode === "month" && order.serviceDate.slice(0, 7) !== today.slice(0, 7)) return false;
-  if (filters.dateMode === "range") {
-    if (filters.startDate && order.serviceDate < filters.startDate) return false;
-    if (filters.endDate && order.serviceDate > filters.endDate) return false;
-  }
-  if (filters.city && order.city !== filters.city) return false;
-  if (filters.fleet && order.fleetName !== filters.fleet) return false;
-  if (filters.status && order.status !== filters.status) return false;
-  if (filters.exception && !order.exceptions.includes(filters.exception as Order["exceptions"][number])) return false;
-  if (filters.keyword) {
-    const keyword = filters.keyword.trim().toLowerCase();
-    const searchable = [order.orderNo, order.passengerName, order.passengerPhone, order.route].join(" ").toLowerCase();
-    if (!searchable.includes(keyword)) return false;
-  }
-  return true;
+  if (filters.dateMode === "window") return { gte: today, lte: offsetDate(7) };
+  if (filters.dateMode === "today") return { equals: today };
+  if (filters.dateMode === "tomorrow") return { equals: offsetDate(1) };
+  if (filters.dateMode === "future") return { gt: today };
+  if (filters.dateMode === "month") return { startsWith: today.slice(0, 7) };
+  if (filters.dateMode === "range") return { ...(filters.startDate ? { gte: filters.startDate } : {}), ...(filters.endDate ? { lte: filters.endDate } : {}) };
+  return undefined;
 }
 
 export async function listSqliteOrders(filters: OrderFilters = {}) {
-  const rows = await db.order.findMany({ include: { fleet: true }, orderBy: { pickupDateTime: "asc" } });
+  const keyword = filters.keyword?.trim();
+  const dateRange = bangkokDateRange(filters);
+  const where: Prisma.OrderWhereInput = {
+    ...(dateRange ? { serviceDate: dateRange } : {}),
+    ...(filters.city ? { city: filters.city } : {}),
+    ...(filters.fleet ? { fleet: { name: filters.fleet } } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    // Exceptions are currently calculated only in the presentation model, not
+    // stored in PostgreSQL. Keep the existing behavior (no matches when one is
+    // selected) instead of silently returning unrelated orders.
+    ...(filters.exception ? { id: { in: [] } } : {}),
+    ...(keyword ? {
+      OR: [
+        { platformOrderNumber: { contains: keyword, mode: "insensitive" } },
+        { passengerName: { contains: keyword, mode: "insensitive" } },
+        { passengerPhone: { contains: keyword, mode: "insensitive" } },
+        { pickupAddress: { contains: keyword, mode: "insensitive" } },
+        { dropoffAddress: { contains: keyword, mode: "insensitive" } },
+      ],
+    } : {}),
+  };
+  // The dashboard used to load every historical order and filter it in the
+  // browser.  Let PostgreSQL apply the selected conditions before data leaves
+  // the server, so the page remains quick as order history grows.
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true }, orderBy: { pickupDateTime: "asc" } });
   return rows
-    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString() }))
-    .filter((order) => matchesFilters(order, filters));
+    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null }));
 }

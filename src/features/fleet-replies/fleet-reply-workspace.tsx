@@ -73,7 +73,7 @@ export function FleetReplyWorkspace() {
   const [iwayText, setIwayText] = useState("");
   const [returnOrderIds, setReturnOrderIds] = useState<string[]>([]);
   const [returnBatchId, setReturnBatchId] = useState<string | null>(null);
-  const [returned, setReturned] = useState(false);
+  const [markedReturned, setMarkedReturned] = useState(false);
   const [unresolved, setUnresolved] = useState<string[]>([]);
   const [showEditor, setShowEditor] = useState(false);
 
@@ -105,12 +105,20 @@ export function FleetReplyWorkspace() {
     });
   }
 
+  function missingFields(form: Editable) {
+    return [!form.orderId ? "对应订单" : "", !form.driverName.trim() ? "司机姓名" : "", !form.driverPhone.trim() ? "司机电话" : "", !form.vehicleModel.trim() ? "车型" : "", !form.licensePlate.trim() ? "车牌" : ""].filter(Boolean);
+  }
+  function isComplete(form: Editable) { return missingFields(form).length === 0; }
+
   async function saveAndGenerate(currentReplyId: string, records: Editable[], currentExtractionId: string | null) {
     const errors: string[] = [];
     const savedOrderIds: string[] = [];
-    for (const record of records.filter((item) => item.orderId)) {
+    // 每笔订单互不依赖；并行保存可以避免 5 笔资料就把等待时间放大为 5 倍。
+    const confirmations = await Promise.all(records.filter((item) => item.orderId).map(async (record) => {
       const response = await fetch(`/api/fleet-replies/${currentReplyId}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extractionId: currentExtractionId, records: [record] }) });
-      const payload = await response.json();
+      return { record, response, payload: await response.json() };
+    }));
+    for (const { record, response, payload } of confirmations) {
       if (response.ok && payload.data?.valid) savedOrderIds.push(record.orderId);
       else errors.push(payload.data?.errors?.map((item: { message: string }) => item.message).join("；") || payload.error?.message || "这笔资料未能保存。");
     }
@@ -127,7 +135,7 @@ export function FleetReplyWorkspace() {
     setUnresolved([...new Set(errors)]);
     setReturnOrderIds(savedOrderIds);
     setReturnBatchId(null);
-    setReturned(false);
+    setMarkedReturned(false);
     setNotice({ tone: errors.length ? "error" : "success", text: errors.length ? `已生成 ${savedOrderIds.length} 笔可回传内容；另有资料需要修改。` : `已自动保存并生成 ${savedOrderIds.length} 笔 i’way 回传内容。` });
   }
 
@@ -142,12 +150,11 @@ export function FleetReplyWorkspace() {
       return;
     }
     setReturnBatchId(payload.data.batchId);
-    setNotice({ tone: "success", text: "回传内容已复制。请粘贴至 i’way 发送；发送完成后点击“已向 i’way 回传”。" });
+    setNotice({ tone: "success", text: "回传内容已复制，可直接粘贴至 i’way。是否标记为已回传由你自行决定。" });
   }
 
   async function confirmIwayReturn() {
-    if (!returnOrderIds.length || returned) return;
-    if (!window.confirm("确认这批内容已经发送给 i’way 吗？确认后订单将标记为已完成回传。")) return;
+    if (!returnOrderIds.length || markedReturned) return;
     setWorking(true);
     try {
       let batchId = returnBatchId;
@@ -160,8 +167,8 @@ export function FleetReplyWorkspace() {
       const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "无法确认回传。");
-      setReturned(true);
-      window.location.assign("/orders");
+      setMarkedReturned(true);
+      setNotice({ tone: "success", text: "已记录为 i’way 回传完成。你可以继续处理其他车队回复。" });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "确认回传失败。" });
     } finally { setWorking(false); }
@@ -195,6 +202,27 @@ export function FleetReplyWorkspace() {
     setForms((current) => current.map((form, position) => position === index ? { ...form, [key]: value } : form));
   }
 
+  function toggleReturnOrder(orderId: string) {
+    setReturnOrderIds((current) => current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId]);
+    setIwayText("");
+    setReturnBatchId(null);
+    setMarkedReturned(false);
+  }
+
+  async function generateSelectedReturn() {
+    if (!returnOrderIds.length) return;
+    setWorking(true);
+    try {
+      const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: returnOrderIds }) });
+      const payload = await response.json();
+      if (!response.ok || !payload.data?.valid || !payload.data?.text) throw new Error(payload.data?.errors?.join("；") || payload.error?.message || "暂时无法生成回传内容。");
+      setIwayText(payload.data.text);
+      setNotice({ tone: "success", text: `已生成 ${returnOrderIds.length} 笔 i’way 回传内容。` });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "暂时无法生成回传内容。" });
+    } finally { setWorking(false); }
+  }
+
   async function saveAssigned() {
     if (!replyId) return;
     if (!forms.some((form) => form.orderId)) { setNotice({ tone: "error", text: "请先选择对应订单，或补充订单号。" }); return; }
@@ -210,8 +238,8 @@ export function FleetReplyWorkspace() {
   }
 
   return <main className="workflow-page fleet-reply-page">
-    <nav className="workflow-nav"><a href="/orders">订单工作台</a><a className="active" href="/driver-details">车队回传信息</a><a href="/iway-return">i’way 回传</a></nav>
-    <header className="workflow-header"><p className="workflow-kicker">03 · 车队回传信息</p><h1>粘贴车队回复，自动生成 i’way 所需资料</h1><p>订单号、电话、车牌和回传格式由网站规则处理；AI 只用于泰语姓名转写和逐张车辆图片识别。</p></header>
+    <nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav>
+    <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>识别、核对和 i’way 文本生成在同一页完成。订单号、电话、车牌和回传格式由网站规则处理；AI 只用于泰语姓名转写和逐张车辆图片识别。</p></header>
     <section className="fleet-reply-source">
       <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
@@ -222,7 +250,8 @@ export function FleetReplyWorkspace() {
     </section>
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.text}</p>}
     {result && <section className="fleet-reply-results">
-      {iwayText && <section className="iway-direct-result"><h2>i’way 回传内容</h2><p>已按正确格式生成；复制后直接粘贴到 i’way 即可。如自动复制失败，可长按文本手动复制。</p><pre tabIndex={0}>{iwayText}</pre><div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void copyIwayReturn()} disabled={working || returned}>复制回传内容</button><button type="button" className="secondary-action" onClick={() => void confirmIwayReturn()} disabled={working || returned}>{returned ? "已向 i’way 回传" : "已向 i’way 回传"}</button></div></section>}
+      <section className="fleet-reply-recognized"><h2>② 识别结果</h2><p>资料完整的订单已默认勾选进入 i’way 回传；缺少资料的订单不会被选中。</p>{result.records.map((record, index) => { const form = forms[index]; const missing = form ? missingFields(form) : ["资料"]; const complete = form ? isComplete(form) : false; const order = orders.find((item) => item.id === form?.orderId); return <article className="reply-candidate reply-result-summary" key={`${record.source_index}-${index}`}><header><strong>{order?.orderNo || record.order_match.platform_order_number || "未匹配订单"}</strong><span className={complete ? "reply-complete" : "reply-incomplete"}>{complete ? "资料完整" : `缺${missing.join("、")}`}</span></header><div className="reply-result-fields"><span>司机：{form?.driverName || "—"}</span><span>电话：{form?.driverPhone || "—"}</span><span>车型：{form?.vehicleModel || "—"}</span><span>车牌：{form?.licensePlate || "—"}</span></div>{complete && form?.orderId && <label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(form.orderId)} onChange={() => toggleReturnOrder(form.orderId)} />加入 i’way 回传</label>}</article>; })}</section>
+      <section className="iway-direct-result"><h2>③ i’way 回传</h2><p>选择完整资料的订单后，直接生成标准文本并复制；“标记为已回传”仅用于记录，不会阻塞其他操作。</p>{iwayText ? <pre tabIndex={0}>{iwayText}</pre> : <p className="preview-empty">{returnOrderIds.length ? "点击下方按钮生成 i’way 标准文本。" : "请先完成司机资料，或勾选一笔资料完整的订单。"}</p>}<div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void generateSelectedReturn()} disabled={working || !returnOrderIds.length}>生成标准文本</button><button type="button" className="secondary-action" onClick={() => void copyIwayReturn()} disabled={working || !iwayText}>复制全部</button><button type="button" className="return-mark-action" onClick={() => void confirmIwayReturn()} disabled={working || !returnOrderIds.length || markedReturned}>{markedReturned ? "已标记为已回传" : "标记为已回传"}</button></div></section>
       {unresolved.length > 0 && <div className="unmatched-block"><h3>有资料需要修改</h3>{unresolved.map((item, index) => <p key={`${item}-${index}`}>{item}</p>)}</div>}
       <button type="button" className="secondary-action" onClick={() => setShowEditor((current) => !current)}>{showEditor ? "收起修改资料" : "修改回传资料"}</button>
       {showEditor && <><h2>修改回传资料</h2>{result.records.map((record, index) => <article className="reply-candidate" key={`${record.source_index}-${index}`}>

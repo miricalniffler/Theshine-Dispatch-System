@@ -1,4 +1,5 @@
 :root { --work-navy:#162b49; --work-blue:#2766d7; --work-ink:#18263a; --work-muted:#69798e; --work-paper:#f4f7fb; --work-line:#dce5f0; --work-mint:#e8f6ef; --work-amber:#fff6df; }
+.fleet-reply-recognized{margin-bottom:20px}.reply-result-summary{display:grid;gap:10px}.reply-result-summary header{margin:0}.reply-result-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;color:#50627a;font-size:13px}.reply-complete{color:#20704b;font-weight:800}.reply-incomplete{color:#9a6422;font-weight:800}.reply-return-select{display:flex;align-items:center;gap:8px;color:#244f9b;font-size:13px;font-weight:800;cursor:pointer}.reply-return-select input{width:18px;height:18px;accent-color:var(--work-blue)}.return-mark-action{border:1px solid #c9d5e4;background:#fff;color:#52677f}
 .vehicle-preview-wrap{grid-column:1/-1;display:flex;align-items:flex-start;gap:10px}.remove-vehicle-image{align-self:stretch;background:#8e3140;font-size:13px}.whatsapp-share{background:#168b4e}
 /* iPhone 16 (393px) touch layout. Rules use !important because the legacy desktop styles follow below. */
 @media(max-width:600px){

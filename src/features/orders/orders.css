@@ -16,3 +16,7 @@
   .v3-mobile-select{display:flex;align-items:center;gap:7px;color:#254bb0;font-size:13px;font-weight:800}.v3-mobile-select input{appearance:none;width:22px;height:22px;margin:0;border:2px solid #5f82e8;border-radius:5px;background:#fff}.v3-mobile-select input:checked{border-color:#326cf4;background:#326cf4}.v3-mobile-select input:checked:after{content:"✓";display:block;color:#fff;font-size:16px;line-height:18px;text-align:center}
   .v3-mobile-order-main{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 12px 0}.v3-mobile-order-main b{display:block;font-size:15px;color:#172b4d}.v3-mobile-order-main small{display:block;margin-top:3px;color:#667085;font-size:12px}.v3-mobile-order-main>a{flex:0 0 auto;color:#254bb0;font-weight:800;text-decoration:none}.v3-mobile-passenger{margin:11px 12px 3px;color:#172b4d;font-size:16px;font-weight:800}.v3-mobile-route{display:-webkit-box;margin:0 12px 12px;overflow:hidden;color:#667085;font-size:13px;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}.v3-next{min-height:36px;padding:7px 10px}
 }
+
+/* Workflow-light dashboard overrides. */
+.v3-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.v3-driver-waiting{color:#667085}.v3-driver-missing{color:#a56318;font-weight:700}

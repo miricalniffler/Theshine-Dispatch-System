@@ -183,20 +183,30 @@ function parseBangkokRecords(text: string, orders: CandidateOrder[]): Analysis {
 }
 
 function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
-  const starts = [...text.matchAll(/(?:^|\n)\s*(\d{3}\s*\d{3})\b/g)];
+  // i'way 订单号原先多为 6 位，现在也会出现 7 位，并且 esforty 常把
+  // 7 位订单号显示成 “1 015 534”。三种写法都必须识别为一笔新回复，
+  // 否则下一笔的姓名和电话会被并入前一笔。
+  const orderNoPattern = "(?:\\d{3}\\s*\\d{3,4}|\\d\\s+\\d{3}\\s+\\d{3})";
+  const starts = [...text.matchAll(new RegExp(`(?:^|\\n)\\s*(${orderNoPattern})\\b`, "g"))];
   const blocks = starts.length ? starts.map((match, index) => text.slice(match.index, starts[index + 1]?.index ?? text.length)) : [text];
   const records = blocks.map((block, source_index) => {
-    const orderNo = firstMatch(block, /^\s*(\d{3}\s*\d{3})\b/m);
+    const orderNo = firstMatch(block, new RegExp(`^\\s*(${orderNoPattern})\\b`, "m"));
     const exact = orderNo ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(orderNo)) : undefined;
     const phone = readPhone(block);
-    const model = firstMatch(block, /\b((?:toyota\s+commut(?:er)?|toyota\s+ventury|mitsubishi\s+pajero|toyota\s+hiace[^,\n]*|hyundai[^,\n]*|honda[^,\n]*)\b)/i);
+    const model = readVehicleModel(block)?.replace(/\s+(?:\d{1,2}-\d{3,5}|\d{3,5})\s*$/, "") ?? null;
     const plate = block.match(/(?:,|\s)(\d{1,2}-\d{3,5}|\d{3,5})\s*$/m)?.[1]
       ?? firstMatch(block, /(?:toyota\s+ventury|toyota\s+commut(?:er)?|mitsubishi\s+pajero)\s+(\d{3,5})\b/i)
       ?? readPlate(block);
-    const beforePhone = phone ? block.slice(0, Math.max(0, block.indexOf(phone))) : block;
+    // readPhone returns several contacts joined by “/”. That joined string
+    // does not occur literally in the source. Use its first raw contact to
+    // locate the name, rather than slicing at -1 and accidentally producing
+    // an empty driver name.
+    const firstPhone = phone?.split("/")[0] ?? null;
+    const phoneAt = firstPhone ? block.indexOf(firstPhone) : -1;
+    const beforePhone = phoneAt >= 0 ? block.slice(0, phoneAt) : block;
     const name = beforePhone
-      .replace(/^\s*\d{3}\s*\d{3}\s*[,，:]?\s*/m, "")
-      .replace(/\b(?:toyota\s+commut(?:er)?|toyota\s+ventury|mitsubishi\s+pajero|toyota\s+hiace)\b/ig, "")
+      .replace(new RegExp(`^\\s*${orderNoPattern}\\s*[,，:]?\\s*`, "m"), "")
+      .replace(/\b(?:toyota\s+commut(?:er)?|commut(?:er)?\s+toyota|toyota\s+ventury|mitsubishi\s+pajero|(?:toyota\s+)?all\s+new\s+v9|toyota\s+hiace)\b/ig, "")
       .replace(/\b\d{1,2}-\d{3,5}\b|\b\d{3,5}\b/g, "")
       .split(/[,，]/).map((value) => value.trim()).filter(Boolean).at(-1) || null;
     return {

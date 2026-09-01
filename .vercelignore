@@ -5,5 +5,7 @@ tmp
 output
 docs
 原始素材
+*.docx
+business-rules .yaml
 .env
 .env.local
