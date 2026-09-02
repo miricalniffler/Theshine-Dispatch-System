@@ -1,5 +1,5 @@
 export type OrderStatus = "PENDING_REVIEW" | "READY_TO_DISPATCH" | "DISPATCHED" | "DRIVER_CONFIRMED" | "RETURNED" | "COMPLETED";
-export type OrderException = "MISSING_FIELD" | "DUPLICATE_SUSPECT" | "DUE_SOON";
+export type OrderException = string;
 
 export type Order = {
   id: string;

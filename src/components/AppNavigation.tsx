@@ -83,7 +83,7 @@ export function AppNavigation({ children }: { children: React.ReactNode }) {
         <button className="mobile-more-trigger" type="button" onClick={() => setMobileMoreOpen(true)} aria-label="打开更多功能">更多</button>
       </nav>
       <p className="nav-customize-tip">拖动 ⠿ 调整顺序；再次点击当前标签可改名。</p>
-      <div className="app-nav-note"><span>人工发送模式</span>微信与 WhatsApp 只生成、复制，不会自动发送。</div>
+      <div className="app-nav-note"><span>客户通知准备模式</span>客人联系会生成并保存待发送内容；当前不会真实发送 WhatsApp。</div>
     </aside>
     <div className="app-content">{children}</div>
     {mobileMoreOpen && <div className="mobile-more-overlay" role="presentation" onMouseDown={() => setMobileMoreOpen(false)}>

@@ -66,10 +66,7 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
     ...(filters.city ? { city: filters.city } : {}),
     ...(filters.fleet ? { fleet: { name: filters.fleet } } : {}),
     ...(filters.status ? { status: filters.status } : {}),
-    // Exceptions are currently calculated only in the presentation model, not
-    // stored in PostgreSQL. Keep the existing behavior (no matches when one is
-    // selected) instead of silently returning unrelated orders.
-    ...(filters.exception ? { id: { in: [] } } : {}),
+    ...(filters.exception ? { customerCommunicationExceptions: { some: { status: "OPEN", exceptionType: filters.exception } } } : {}),
     ...(keyword ? {
       OR: [
         { platformOrderNumber: { contains: keyword, mode: "insensitive" } },
@@ -83,7 +80,7 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
   // The dashboard used to load every historical order and filter it in the
   // browser.  Let PostgreSQL apply the selected conditions before data leaves
   // the server, so the page remains quick as order history grows.
-  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true }, orderBy: { pickupDateTime: "asc" } });
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } } }, orderBy: { pickupDateTime: "asc" } });
   return rows
-    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: [], createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null }));
+    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null }));
 }

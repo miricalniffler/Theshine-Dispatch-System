@@ -3,6 +3,7 @@ import type { DriverDetail, Order as PersistedOrder } from "@prisma/client";
 import type { Order } from "@/features/orders/types";
 import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { loadRules } from "@/lib/rules/load-rules";
+import { prepareDriverNotificationForOrder } from "@/features/customer-notifications/service";
 
 export type DriverDetails = {
   orderId: string;
@@ -185,5 +186,12 @@ export async function confirmIwayReturn(batchId: string) {
     }
     return updated;
   });
+  // The i’way confirmation is the business fact. Customer-notification
+  // preparation runs afterwards and is intentionally best-effort: a future
+  // transport failure must never undo a confirmed i’way return.
+  await Promise.all(orderIds.map(async (orderId) => {
+    try { await prepareDriverNotificationForOrder(orderId); }
+    catch { await db.activityLog.create({ data: { orderId, action: "司机资料客人通知准备失败", actor: "系统", metadata: "i’way 回传已保留；请在订单详情重新生成。" } }); }
+  }));
   return toIwayBatch(completed);
 }
