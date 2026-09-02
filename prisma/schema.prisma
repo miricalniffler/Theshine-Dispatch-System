@@ -39,9 +39,20 @@ model Order {
   iwayLinks     IwayReturnBatchOrder[]
   activityLogs  ActivityLog[]
   driverConfirmations DriverDetailConfirmation[]
+  customerNotifications CustomerNotification[]
+  customerInboundMessages CustomerInboundMessage[]
+  customerCommunicationExceptions CustomerCommunicationException[]
+  customerConfirmationStatus String?
+  customerConfirmedAt DateTime?
+  customerLargeLuggageCount Int?
+  customerCarryOnCount Int?
+  customerStrollerCount Int?
+  customerBulkyItems String?
+  customerLuggageUpdatedAt DateTime?
 
   @@index([serviceDate, city, fleetId])
   @@index([status, pickupDateTime])
+  @@index([customerConfirmationStatus])
 }
 
 model Fleet {
@@ -253,4 +264,150 @@ model ImportedSourceMessage {
 
   @@unique([connector, externalId])
   @@index([orderId])
+}
+
+// 一条 AirportGuide 就是一份可保留的指引版本。新版本启用时，旧版本保留但停用，
+// 使后续通知快照不会依赖会被改写的当前文案。
+model AirportGuide {
+  id            String   @id @default(cuid())
+  airportName   String
+  iataCode      String?
+  terminal      String?
+  matchKey      String
+  guideText     String
+  isActive      Boolean  @default(true)
+  deactivatedAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  aliases AirportGuideAlias[]
+  images  AirportGuideImage[]
+
+  @@index([iataCode, isActive])
+  @@index([isActive, updatedAt])
+  @@index([matchKey])
+}
+
+model AirportGuideAlias {
+  id              String   @id @default(cuid())
+  airportGuideId  String
+  matchKind       String   @default("ALIAS")
+  value           String
+  normalizedValue String
+  createdAt       DateTime @default(now())
+
+  airportGuide AirportGuide @relation(fields: [airportGuideId], references: [id], onDelete: Cascade)
+
+  @@unique([airportGuideId, matchKind, normalizedValue])
+  @@index([matchKind, normalizedValue])
+}
+
+model AirportGuideImage {
+  id               String   @id @default(cuid())
+  airportGuideId   String
+  storageBucket    String
+  storagePath      String
+  originalFilename String?
+  mimeType         String
+  byteSize         Int?
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  airportGuide AirportGuide @relation(fields: [airportGuideId], references: [id], onDelete: Cascade)
+
+  @@unique([storageBucket, storagePath])
+  @@index([airportGuideId, sortOrder])
+}
+
+model RegionNotificationSetting {
+  id                          String   @id @default(cuid())
+  region                      String   @unique
+  customerWhatsAppEnabled     Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+}
+
+// 本阶段只建立 outbox/历史快照，不接入任何 WhatsApp 发送行为。
+// JSON 快照为后续入站回复、行李识别和司机资料更新比较保留扩展空间。
+model CustomerNotification {
+  id                    String   @id @default(cuid())
+  orderId               String
+  notificationType      String
+  recipientPhone        String
+  status                String   @default("PENDING")
+  idempotencyKey        String   @unique
+  contentSnapshot       Json?
+  templateSnapshot      Json?
+  driverVehicleSnapshot Json?
+  airportGuideSnapshot  Json?
+  providerMessageId     String?  @unique
+  attemptCount          Int      @default(0)
+  lastError             String?
+  sentAt                DateTime?
+  failedAt              DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  inboundMessages CustomerInboundMessage[]
+
+  @@index([orderId, notificationType, createdAt])
+  @@index([status, createdAt])
+  @@index([recipientPhone, createdAt])
+}
+
+// 客人原话始终独立保存；解析结果只能补充内部沟通数据，绝不改写 i’way 原始订单字段。
+model CustomerInboundMessage {
+  id                     String   @id @default(cuid())
+  orderId                String?
+  customerNotificationId String?
+  senderPhone            String
+  providerMessageId      String?  @unique
+  rawText                String
+  parseStatus            String   @default("PENDING")
+  parsedSnapshot         Json?
+  receivedAt             DateTime @default(now())
+  createdAt              DateTime @default(now())
+
+  order                Order?                @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customerNotification CustomerNotification? @relation(fields: [customerNotificationId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, receivedAt])
+  @@index([senderPhone, receivedAt])
+}
+
+// 只有确实需要运营人员处理的客户沟通问题才出现在订单首页。
+model CustomerCommunicationException {
+  id             String   @id @default(cuid())
+  orderId        String
+  exceptionType  String
+  severity       String   @default("WARNING")
+  status         String   @default("OPEN")
+  idempotencyKey String   @unique
+  details        Json?
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, status, createdAt])
+  @@index([status, severity, createdAt])
+}
+
+// 初始不预置任何车型容量，避免系统凭空猜测车队承载能力。
+// 运营人员可按已确认的真实车型资料维护这些阈值。
+model VehicleCapacityRule {
+  id                    String   @id @default(cuid())
+  vehicleModel          String   @unique
+  normalizedVehicleModel String  @unique
+  maxPassengers         Int?
+  normalLargeLuggage    Int?
+  warningLargeLuggage   Int?
+  note                  String?
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([isActive, normalizedVehicleModel])
 }
