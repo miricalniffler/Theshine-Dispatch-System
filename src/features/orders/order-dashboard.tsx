@@ -10,14 +10,13 @@ import "./orders.css";
 import "./orders-table-layout.css";
 
 const exceptionLabels = { MISSING_CUSTOMER_PHONE: "缺少客人电话", AIRPORT_GUIDE_MISSING: "缺少机场指引", AIRPORT_UNRESOLVED: "机场无法确定", CUSTOMER_REPLY_REVIEW: "客人回复待查看", CUSTOMER_ORDER_DISCREPANCY: "客人说订单有误", UNUSUAL_LUGGAGE: "行李偏多", VEHICLE_CAPACITY_RISK: "车型承载风险", VEHICLE_CAPACITY_RULE_MISSING: "缺车型承载规则", DRIVER_NOTIFICATION_INCOMPLETE: "司机通知资料不完整" };
-type SyncRun = { status: "REQUESTED" | "RUNNING" | "SUCCEEDED" | "FAILED"; createdCount: number; updatedCount: number; cancelledCount: number; skippedCount: number; errorMessage?: string | null };
 function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()); }
 function displayToday() { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Bangkok", year: "numeric", month: "long", day: "numeric" }).format(new Date()); }
 function displaySyncFailure(message: string) {
   if (/need_user_authorization|token_missing|lark-cli auth login/i.test(message)) {
     return "飞书邮箱授权已失效，暂时无法同步。请在安装同步助手的电脑上重新登录飞书后再试。";
   }
-  return "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
+  return message || "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
 }
 function missingDriverFields(order: Order) {
   const driver = order.driverDetail;
@@ -74,24 +73,18 @@ export function OrderDashboard() {
   }, [query, refreshVersion]);
   async function syncMailAndRefresh() {
     setSyncingMail(true);
-    setSyncMessage("正在请求飞书订单。这台电脑会在约 1 分钟内开始读取，请稍候…");
+    setSyncMessage("正在从飞书读取订单…");
     try {
       const response = await fetch("/api/import-sync/feishu-mail", { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "同步请求发送失败");
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 150_000) {
-        await new Promise((resolve) => window.setTimeout(resolve, 5_000));
-        const statusResponse = await fetch("/api/import-sync/feishu-mail", { cache: "no-store" });
-        const statusPayload = await statusResponse.json();
-        const run = statusPayload.data?.latestRun as SyncRun | undefined;
-        if (!run || run.status === "REQUESTED" || run.status === "RUNNING") continue;
-        if (run.status === "FAILED") throw new Error(displaySyncFailure(run.errorMessage || ""));
-        setRefreshVersion((version) => version + 1);
-        setSyncMessage(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔。订单列表已刷新。`);
+      if (payload.data?.alreadyRunning) {
+        setSyncMessage("已有一轮飞书同步正在进行，请等待完成后刷新订单列表。");
         return;
       }
-      setSyncMessage("同步请求已发出，仍在处理中。请稍后再点击一次；订单不会丢失。");
+      const result = payload.data;
+      setRefreshVersion((version) => version + 1);
+      setSyncMessage(`飞书同步完成：新增 ${result.created} 笔，更新 ${result.updated} 笔，取消 ${result.cancelled} 笔，跳过 ${result.skipped} 笔。订单列表已刷新。`);
     } catch (error) {
       setSyncMessage(error instanceof Error ? displaySyncFailure(error.message) : "飞书同步失败，请稍后重试。");
     } finally {

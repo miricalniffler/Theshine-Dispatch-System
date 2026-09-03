@@ -23,8 +23,6 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
     fetch("/api/orders/import/connectors").then((r) => r.json()).then((data) => setConnectors(data.data?.connectors || []));
     const loadSyncStatus = () => fetch("/api/import-sync/feishu-mail").then((r) => r.json()).then((data) => setLatestRun(data.data?.latestRun || null));
     loadSyncStatus();
-    const timer = window.setInterval(loadSyncStatus, 10_000);
-    return () => window.clearInterval(timer);
   }, []);
 
   async function parse() {
@@ -56,13 +54,14 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
     const payload = await response.json();
     setSyncing(false);
     if (!response.ok) { setNote(payload.error?.message || "同步失败"); return; }
+    if (payload.data?.alreadyRunning) { setNote("已有一轮飞书同步正在进行，请等待完成后查看结果。"); return; }
     const now = new Date().toISOString();
-    setLatestRun({ status: "REQUESTED", startedAt: now, createdCount: 0, updatedCount: 0, cancelledCount: 0, skippedCount: 0 });
-    setNote(payload.data.alreadyQueued ? "同步请求已在等待本机处理，请稍后刷新查看结果。" : "同步请求已发送；本机在线时会在约 1 分钟内读取飞书订单。");
+    setLatestRun({ status: "SUCCEEDED", startedAt: now, completedAt: now, createdCount: payload.data.created, updatedCount: payload.data.updated, cancelledCount: payload.data.cancelled, skippedCount: payload.data.skipped });
+    setNote(`飞书同步完成：新增 ${payload.data.created} 笔，更新 ${payload.data.updated} 笔，取消 ${payload.data.cancelled} 笔，跳过 ${payload.data.skipped} 笔。`);
   }
 
   const latestRunText = latestRun
-    ? `${latestRun.status === "SUCCEEDED" ? "上次同步成功" : latestRun.status === "FAILED" ? "上次同步失败" : latestRun.status === "REQUESTED" ? "已请求，等待本机处理" : "同步处理中"} · ${new Date(latestRun.completedAt || latestRun.startedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+    ? `${latestRun.status === "SUCCEEDED" ? "上次同步成功" : latestRun.status === "FAILED" ? "上次同步失败" : latestRun.status === "REQUESTED" ? "已请求" : "同步处理中"} · ${new Date(latestRun.completedAt || latestRun.startedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
     : "尚未同步过飞书订单";
 
   const body = <section className="import-dialog" role={onClose ? "dialog" : undefined} aria-modal={onClose ? "true" : undefined} aria-labelledby="import-title">
@@ -70,7 +69,7 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
     <ol className="import-steps"><li className={step >= 1 ? "active" : ""}>1. 获取订单</li><li className={step >= 2 ? "active" : ""}>2. 核对结果</li><li className={step >= 3 ? "active" : ""}>3. 查重保存</li></ol>
     {note && <p className="import-note" role="status">{note}</p>}
     {step === 1 && <div className="import-source">
-      <section className="import-sync-panel" aria-label="飞书订单同步"><div><strong>飞书订单同步</strong><p>{latestRunText}</p></div><button className="import-sync-button" onClick={runManualSync} disabled={syncing}>{syncing ? "正在请求…" : "立即同步"}</button></section>
+      <section className="import-sync-panel" aria-label="飞书订单同步"><div><strong>飞书订单同步</strong><p>{latestRunText}</p></div><button className="import-sync-button" onClick={runManualSync} disabled={syncing}>{syncing ? "正在同步…" : "立即同步"}</button></section>
       <label>订单来源<select value={sourceType} onChange={(event) => { setSourceType(event.target.value as SourceType); setConfirmedSource(false); }}><option value="iway_feishu">i’way 飞书邮件（New ride）</option><option value="esforty">esforty 订单</option><option value="manual">手工新增</option></select></label>
       <div className="import-connectors">{connectors.filter((connector) => connector.id !== "feishu-mail").map((connector) => <button key={connector.id} disabled={!connector.configured} title={connector.message} onClick={() => pull(connector.id)}>{connector.configured ? `从${connector.label}读取` : `${connector.label}尚未接入`}</button>)}</div>
       <label>订单原文<textarea value={text} autoCapitalize="none" onChange={(event) => setText(event.target.value)} placeholder="粘贴整封 i’way New ride 邮件或 esforty 订单文字" /></label>
