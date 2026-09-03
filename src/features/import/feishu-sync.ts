@@ -3,7 +3,17 @@ import { pullConnectorMessages, type ImportedMessage } from "./connectors";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { detectDispatchCity } from "@/lib/city/detect-city";
 
-type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
+export type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
+
+const staleRunMs = 5 * 60_000;
+let activeFeishuMailSync: Promise<SyncSummary> | null = null;
+
+export class FeishuMailSyncInProgressError extends Error {
+  constructor(public readonly runId: string) {
+    super("飞书邮件同步正在进行中，请等待当前同步完成。");
+    this.name = "FeishuMailSyncInProgressError";
+  }
+}
 
 function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
@@ -83,7 +93,18 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   return "created";
 }
 
-export async function runFeishuMailSync(): Promise<SyncSummary> {
+async function startFeishuMailSync(): Promise<SyncSummary> {
+  const staleBefore = new Date(Date.now() - staleRunMs);
+  await db.importSyncRun.updateMany({
+    where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
+    data: { status: "FAILED", completedAt: new Date(), errorMessage: "飞书同步超过 5 分钟未完成，已自动释放；请重新同步。" },
+  });
+  const running = await db.importSyncRun.findFirst({
+    where: { connector: "feishu-mail", status: "RUNNING" },
+    orderBy: { startedAt: "desc" },
+  });
+  if (running) throw new FeishuMailSyncInProgressError(running.id);
+
   const run = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
   try {
     const { items } = await pullConnectorMessages("feishu-mail", { allowEmpty: true });
@@ -95,6 +116,17 @@ export async function runFeishuMailSync(): Promise<SyncSummary> {
     const errorMessage = error instanceof Error ? error.message : "未知同步错误";
     await db.importSyncRun.update({ where: { id: run.id }, data: { status: "FAILED", completedAt: new Date(), errorMessage } });
     throw error;
+  }
+}
+
+export async function runFeishuMailSync(): Promise<SyncSummary> {
+  if (activeFeishuMailSync) throw new FeishuMailSyncInProgressError("当前服务实例");
+  const sync = startFeishuMailSync();
+  activeFeishuMailSync = sync;
+  try {
+    return await sync;
+  } finally {
+    if (activeFeishuMailSync === sync) activeFeishuMailSync = null;
   }
 }
 

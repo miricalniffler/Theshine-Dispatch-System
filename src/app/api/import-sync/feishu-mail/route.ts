@@ -1,9 +1,8 @@
 import { getFeishuSyncStatus } from "@/features/import/feishu-sync";
+import { executeManualFeishuSync } from "@/features/import/manual-feishu-sync";
 import { listConnectorStatus } from "@/features/import/connectors";
-import { success } from "@/lib/api-response";
+import { failure, success } from "@/lib/api-response";
 import { db } from "@/lib/db";
-
-const staleRunMs = 5 * 60_000;
 
 export async function GET() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
@@ -12,18 +11,14 @@ export async function GET() {
 }
 
 export async function POST() {
-  const staleBefore = new Date(Date.now() - staleRunMs);
-  // Never let an interrupted local mailbox worker block every later refresh.
-  // The next request becomes a fresh job that the local helper can collect.
-  const expired = await db.importSyncRun.updateMany({
-    where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
-    data: { status: "FAILED", completedAt: new Date(), errorMessage: "同步助手超过 5 分钟未完成，已自动释放；请重新同步。" },
+  // REQUESTED is a legacy local-helper queue state. Vercel has no persistent
+  // local helper, so record its release and run the existing sync service now.
+  await db.importSyncRun.updateMany({
+    where: { connector: "feishu-mail", status: "REQUESTED" },
+    data: { status: "FAILED", completedAt: new Date(), errorMessage: "旧版本地同步请求未执行；现已改由服务器直接同步。" },
   });
-  const pending = await db.importSyncRun.findFirst({
-    where: { connector: "feishu-mail", status: { in: ["REQUESTED", "RUNNING"] } },
-    orderBy: { startedAt: "desc" },
-  });
-  if (pending) return success({ queued: true, alreadyQueued: true, runId: pending.id, recoveredStaleRuns: expired.count });
-  const request = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "REQUESTED" } });
-  return success({ queued: true, alreadyQueued: false, runId: request.id, recoveredStaleRuns: expired.count });
+  const result = await executeManualFeishuSync();
+  if (result.kind === "completed") return success({ completed: true, ...result.summary });
+  if (result.kind === "in-progress") return success({ completed: false, alreadyRunning: true, runId: result.runId, message: result.message });
+  return failure("FEISHU_SYNC_FAILED", result.message, undefined, 502);
 }
