@@ -3,7 +3,15 @@ import { dirname } from "node:path";
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 
-const db = new PrismaClient();
+// LaunchAgent runs unattended. Without a database connection timeout, a
+// transient Supabase network stall can leave its single process alive forever,
+// which prevents launchd from starting the next 10-second check and makes a
+// website-requested sync appear to wait indefinitely.
+const databaseUrl = new URL(process.env.DATABASE_URL);
+if (!databaseUrl.searchParams.has("connect_timeout")) {
+  databaseUrl.searchParams.set("connect_timeout", "10");
+}
+const db = new PrismaClient({ datasources: { db: { url: databaseUrl.toString() } } });
 const cli = process.env.LARK_CLI_PATH || "/Users/muzitong/.local/bin/lark-cli";
 const mailbox = process.env.IWAY_MAILBOX || "dingdan@theshine.com.cn";
 const officialSender = "control@iwayex.com";
