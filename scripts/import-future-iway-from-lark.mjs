@@ -21,6 +21,18 @@ const requestedOnly = process.argv.includes("--when-requested");
 let syncRequestId = null;
 const staleRunMs = 5 * 60_000;
 const cliTimeoutMs = 75_000;
+const maxRunMs = Number(process.env.IWAY_LOCAL_SYNC_MAX_RUN_MS || 120_000);
+
+// Prisma's network engine can very occasionally stay alive after a connection
+// has already been established but a query never resolves. A connection option
+// alone cannot reliably interrupt that state. This outer watchdog makes the
+// launchd helper self-healing: it exits instead of occupying the only worker
+// slot forever, and launchd can start the next scheduled check.
+const hardStopTimer = setTimeout(() => {
+  console.error(JSON.stringify({ status: "timeout", message: `本地飞书同步超过 ${maxRunMs / 1000} 秒仍未结束，已停止本次任务，稍后会自动重试。` }));
+  process.exit(1);
+}, maxRunMs);
+hardStopTimer.unref();
 
 // The local mail bridge can occasionally leave a database or mail request
 // waiting forever. The timeout is applied to each blocking lark-cli call:
@@ -327,5 +339,6 @@ main().catch(async (error) => {
   }
   throw error;
 }).finally(async () => {
+  clearTimeout(hardStopTimer);
   await db.$disconnect();
 });
