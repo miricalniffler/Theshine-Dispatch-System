@@ -17,7 +17,6 @@ const mailbox = process.env.IWAY_MAILBOX || "dingdan@theshine.com.cn";
 const officialSender = "control@iwayex.com";
 const newRideSender = "noreply@iway.ru";
 const dryRun = process.argv.includes("--dry-run");
-const requestedOnly = process.argv.includes("--when-requested");
 let syncRequestId = null;
 const staleRunMs = 5 * 60_000;
 const cliTimeoutMs = 75_000;
@@ -162,27 +161,17 @@ function todayBangkok() {
 }
 
 async function main() {
-  if (requestedOnly && !dryRun) {
+  if (!dryRun) {
     const staleBefore = new Date(Date.now() - staleRunMs);
-    // A previous worker can be interrupted by sleep, a closed terminal, or a
-    // stopped CLI. Reclaim only a clearly stale RUNNING request; an active
-    // worker is still left alone.
-    const request = await db.importSyncRun.findFirst({
-      where: {
-        connector: "feishu-mail",
-        OR: [
-          { status: "REQUESTED" },
-          { status: "RUNNING", startedAt: { lt: staleBefore } },
-        ],
-      },
-      orderBy: { startedAt: "asc" },
+    // ImportSyncRun is an execution log, not a prerequisite for starting the
+    // local mailbox reader. Every scheduled LaunchAgent invocation reads
+    // Feishu directly, then records its own result below.
+    await db.importSyncRun.updateMany({
+      where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
+      data: { status: "FAILED", completedAt: new Date(), errorMessage: "本机飞书同步超过 5 分钟未完成，已由下一轮周期同步自动释放。" },
     });
-    if (!request) {
-      console.log(JSON.stringify({ status: "idle", message: "没有待处理的网站同步请求。" }));
-      return;
-    }
-    syncRequestId = request.id;
-    await db.importSyncRun.update({ where: { id: request.id }, data: { status: "RUNNING", startedAt: new Date(), completedAt: null, errorMessage: null } });
+    const run = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
+    syncRequestId = run.id;
   }
   // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
   // 再合并结果，既不会漏掉 New ride，也不必下载整个邮箱的 400 封目录。

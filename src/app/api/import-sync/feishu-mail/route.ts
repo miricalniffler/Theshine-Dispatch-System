@@ -4,31 +4,19 @@ import { listConnectorStatus } from "@/features/import/connectors";
 import { failure, success } from "@/lib/api-response";
 import { db } from "@/lib/db";
 
-const staleRunMs = 5 * 60_000;
-
 export async function GET() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
   const scheduleEnabled = process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1";
-  return success({ connector, scheduleEnabled, cronSecretConfigured: Boolean(process.env.CRON_SECRET), syncMode: connector?.configured ? "server" : "local-helper", latestRun: await getFeishuSyncStatus() });
+  return success({ connector, scheduleEnabled, cronSecretConfigured: Boolean(process.env.CRON_SECRET), syncMode: connector?.configured ? "server" : "local-scheduled", latestRun: await getFeishuSyncStatus() });
 }
 
 export async function POST() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
   if (!connector?.configured) {
-    // This Vercel project has no Feishu bridge yet. Use the signed-in Mac
-    // helper instead of silently failing a manual refresh.
-    const staleBefore = new Date(Date.now() - staleRunMs);
-    await db.importSyncRun.updateMany({
-      where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
-      data: { status: "FAILED", completedAt: new Date(), errorMessage: "本机飞书同步助手超过 5 分钟未完成，已自动释放；请重新同步。" },
-    });
-    const pending = await db.importSyncRun.findFirst({
-      where: { connector: "feishu-mail", status: { in: ["REQUESTED", "RUNNING"] } },
-      orderBy: { startedAt: "desc" },
-    });
-    if (pending) return success({ completed: false, queuedLocalHelper: true, alreadyQueued: true, runId: pending.id, message: "已交由这台电脑上的飞书同步助手处理。" });
-    const request = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "REQUESTED" } });
-    return success({ completed: false, queuedLocalHelper: true, alreadyQueued: false, runId: request.id, message: "已交由这台电脑上的飞书同步助手处理。" });
+    // The production server has no authorised Feishu bridge. The Mac
+    // LaunchAgent reads Feishu on its own schedule, irrespective of this UI
+    // action; a click only asks the page to wait for the next recorded run.
+    return success({ completed: false, localScheduled: true, message: "服务器飞书连接未启用；本机同步助手会按周期自动读取飞书。" });
   }
 
   // Once Vercel has a real Feishu bridge, clear legacy local-helper requests
