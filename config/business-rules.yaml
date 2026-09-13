@@ -72,6 +72,7 @@ transforms:
     seadan: "Sedan"
     toyota commut: "Toyota Commut"
     toyota ventury: "Toyota Ventury"
+    pajero: "Mitsubishi Pajero"
     standard: "Standard"
   # 以下只是车辆大类，不能作为 i’way 回传中的具体车型。
   generic_vehicle_labels_not_allowed_for_return: ["Van", "Minibus", "Sedan", "Standard", "Minivan"]
