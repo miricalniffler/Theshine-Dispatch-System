@@ -105,6 +105,7 @@ export async function getDriverDetails(orderId: string) {
 export async function saveDriverDetails(orderId: string, input: DriverDetailsInput) {
   const persisted = await findOrderWithDriver(orderId);
   if (!persisted) throw new Error("ORDER_NOT_FOUND");
+  if (persisted.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
   const order = toOrder(persisted);
   const rules = loadRules();
   const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
@@ -177,6 +178,8 @@ export async function confirmIwayReturn(batchId: string) {
   const batch = await db.iwayReturnBatch.findUnique({ where: { id: batchId }, include: { orders: true } });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
   const orderIds = batch.orders.map((link) => link.orderId);
+  const cancelled = await db.order.count({ where: { id: { in: orderIds }, status: "CANCELLED" } });
+  if (cancelled) throw new Error("CANCELLED_ORDER_IN_BATCH");
   const completed = await db.$transaction(async (tx) => {
     const confirmedAt = new Date();
     const updated = await tx.iwayReturnBatch.update({ where: { id: batchId }, data: { confirmedAt }, include: { orders: true } });
