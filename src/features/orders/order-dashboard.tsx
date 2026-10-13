@@ -58,6 +58,27 @@ export function OrderDashboard() {
   const [syncingMail, setSyncingMail] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [iwayPreview, setIwayPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion?: string } | null>(null);
+  const [iwayBusy, setIwayBusy] = useState(false);
+  const [iwayNotice, setIwayNotice] = useState("");
+  async function showIwayPreview() {
+    if (!selected.length) return;
+    setIwayBusy(true); setIwayNotice(""); setIwayPreview(null);
+    try {
+      const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "生成回传信息失败");
+      setIwayPreview(payload.data);
+    } catch (error) { setIwayNotice(error instanceof Error ? error.message : "生成回传信息失败"); }
+    finally { setIwayBusy(false); }
+  }
+  async function copyIwayPreview() {
+    if (!iwayPreview?.valid || !iwayPreview.text) return;
+    try {
+      await navigator.clipboard.writeText(iwayPreview.text);
+      setIwayNotice("已复制回传信息，可以粘贴到 i’way 群聊。复制不代表已发送。");
+    } catch { setIwayNotice("自动复制失败，请选中下方文本手动复制。"); }
+  }
   const query = useMemo(() => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return params.toString(); }, [filters]);
   useEffect(() => {
     let active = true;
@@ -110,7 +131,7 @@ export function OrderDashboard() {
       setSyncingMail(false);
     }
   }
-  const update = (key: keyof OrderFilters, value: string) => { setSelected([]); setFilters((current) => ({ ...current, [key]: value || undefined })); };
+  const update = (key: keyof OrderFilters, value: string) => { setIwayPreview(null); setSelected([]); setFilters((current) => ({ ...current, [key]: value || undefined })); };
   const allSelected = orders.length > 0 && selected.length === orders.length;
   const toggleOne = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <main className="v3-page">
@@ -131,7 +152,17 @@ export function OrderDashboard() {
         <input aria-label="关键词" placeholder="订单号 / 乘客 / 电话" value={filters.keyword || ""} onChange={(event) => update("keyword", event.target.value)}/>
         <button className="v3-secondary v3-filter-desktop-button" type="button" onClick={() => setMobileFiltersOpen((open) => !open)}>筛选</button>
       </div>
-      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>可批量生成车队派单、i’way 回传或客人首联内容。客人联系目前只生成内部待发送记录，不会真实发送 WhatsApp。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量生成车队派单</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setModal("customer-contact")}>批量联系客人</button><button className="v3-secondary" disabled={!selected.length} onClick={() => window.location.assign(`/iway-return?orderIds=${selected.join(",")}`)}>批量回传 i’way</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
+      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>可批量生成车队派单、i’way 回传或客人首联内容。客人联系目前只生成内部待发送记录，不会真实发送 WhatsApp。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量生成车队派单</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setModal("customer-contact")}>批量联系客人</button><button className="v3-secondary" disabled={!selected.length} onClick={() => void showIwayPreview()}>{iwayBusy ? "正在生成…" : "批量回传 i’way"}</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
+      {iwayPreview && <section aria-label="iway 回传预览" style={{ border: "1px solid #cbd5e1", borderRadius: 12, padding: 18, margin: "16px 0", background: "#f8fafc" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}><h2 style={{ margin: 0, fontSize: 19 }}>i’way 回传信息 · {iwayPreview.orderCount} 笔订单</h2><button className="v3-secondary" type="button" onClick={() => setIwayPreview(null)}>关闭预览</button></div>
+        {iwayPreview.ruleVersion && <p style={{ fontSize: 12, color: "#64748b" }}>回传规则：{iwayPreview.ruleVersion}</p>}
+        {iwayPreview.errors?.length ? <div role="alert" style={{ color: "#b42318" }}><strong>部分资料不完整，请补充后重新生成：</strong>{iwayPreview.errors.map((message, index) => <p key={index}>{message}</p>)}</div> : null}
+        {iwayPreview.text && <textarea aria-label="可复制的 iway 回传内容" readOnly value={iwayPreview.text} rows={Math.min(20, Math.max(7, iwayPreview.text.split("\\n").length + 1))} style={{ display: "block", width: "100%", marginTop: 12, padding: 12, border: "1px solid #cbd5e1", borderRadius: 8, fontFamily: "monospace", whiteSpace: "pre-wrap" }} />}
+        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}><button className="v3-primary" type="button" disabled={!iwayPreview.valid || !iwayPreview.text} onClick={() => void copyIwayPreview()}>复制回传信息</button><button className="v3-secondary" type="button" onClick={() => void showIwayPreview()}>重新生成</button></div>
+        {iwayNotice && <p role="status">{iwayNotice}</p>}
+        <p style={{ color: "#64748b", fontSize: 12 }}>仅生成和复制文本，不会自动发送，也不会改变订单回传状态。</p>
+      </section>}
+      {!iwayPreview && iwayNotice && <p role="alert">{iwayNotice}</p>}
       <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-driver"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : orders.map((order) => order.id))}/>全选</label></th><th>接客时间</th><th>订单号</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>司机 / 车辆</th></tr></thead><tbody>
         {loading ? <tr><td colSpan={6} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={6} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small></td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-driver-cell"><DriverVehicle order={order} /></td></tr>)}
       </tbody></table></div>
