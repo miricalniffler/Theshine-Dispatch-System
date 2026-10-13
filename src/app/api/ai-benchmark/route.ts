@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 const maxImageBytes = 3 * 1024 * 1024;
 const maxRequestBytes = 4_300_000;
 const vehiclePrompt = `请识别照片中的车辆，只输出以下四行，不要标题、序号、Markdown、推理过程或额外解释：\n品牌：<品牌中文名或无法确认>\n车型：<最可能的具体车型/车系，无法确认则写无法确认>\n车辆类别：<Sedan/SUV/Minivan/Van/无法确认>\n置信度：<高/中/低>\n严格依据可见证据，不需要识别车辆代际、生产年份或具体配置；不要猜测准确座位数、行李容量或车辆许可。`;
-const orderPrompt = `请严格逐字识别这张接送机订单截图中的信息，并按以下字段分行输出：订单号、乘客姓名、电话、航班、接送时间（保留原时区）、上车地址、下车地址、车型、成人、儿童、行李、其他备注。所有字段只能基于图片可见内容，不得凭空补全或翻译专名；无法辨识的写“无法确认”。保留原始拼写、号码和时间。`;
+const orderPrompt = `请对接送机订单或车队司机信息截图进行多语言文字识别（OCR），必须完整识别泰文、英文、中文以及混合文字和数字。先忠实逐字提取原文，再整理字段，不得跳过泰文字段、猜测姓名或擅自翻译、音译、改写专名。\n按图片实际出现的内容输出：订单号、乘客姓名、乘客电话、航班、接送时间（保留原时区）、上车地址、下车地址、车型、成人、儿童、行李、司机姓名（保留泰文原文）、司机电话、车牌号码（保留泰文字母与数字）、其他备注。\n特别注意泰文标签：ชื่อ / ชื่อคนขับ / คนขับ 常表示姓名或司机，เบอร์โทร / โทร 表示电话，ทะเบียน / ทะเบียนรถ 表示车牌。根据上下文判断是司机还是乘客，无法判断身份时放在其他备注中，不得擅自归类。车牌中的泰文字母与数字必须保持原样。\n仅输出图片中确实可见的字段，每个字段单独一行；无法辨认的内容标注“无法确认”，不要用相似字母替代。对于混合泰文和英文的姓名、地点及号码，保留原始拼写、空格、符号与数字；不要编造图片未提供的信息。`;
 
 function reply(data: unknown, status = 200) { return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } }); }
 function authorized(request: NextRequest) { return Boolean(process.env.TEAM_ACCESS_TOKEN && request.cookies.get("iway-team-access")?.value === process.env.TEAM_ACCESS_TOKEN); }
