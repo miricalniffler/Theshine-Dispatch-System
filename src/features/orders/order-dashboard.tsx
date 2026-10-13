@@ -30,6 +30,7 @@ function missingDriverFields(order: Order) {
   ].filter(Boolean);
 }
 function DriverVehicle({ order }: { order: Order }) {
+  if (order.status === "CANCELLED") return <span className="v3-driver-missing">已取消</span>;
   const missing = missingDriverFields(order);
   const driver = order.driverDetail;
   if (!driver) return <span className="v3-driver-waiting">等待车队回复</span>;
@@ -39,9 +40,9 @@ function DriverVehicle({ order }: { order: Order }) {
 function summaryFor(orders: Order[]): DashboardSummary {
   return {
     total: orders.length,
-    waitingFleetReply: orders.filter((order) => !order.driverDetail).length,
-    incompleteDriver: orders.filter((order) => Boolean(order.driverDetail) && missingDriverFields(order).length > 0).length,
-    readyIwayReturn: orders.filter((order) => Boolean(order.driverDetail) && missingDriverFields(order).length === 0).length,
+    waitingFleetReply: orders.filter((order) => order.status !== "CANCELLED" && !order.driverDetail).length,
+    incompleteDriver: orders.filter((order) => order.status !== "CANCELLED" && Boolean(order.driverDetail) && missingDriverFields(order).length > 0).length,
+    readyIwayReturn: orders.filter((order) => order.status !== "CANCELLED" && Boolean(order.driverDetail) && missingDriverFields(order).length === 0).length,
     exceptions: orders.filter((order) => order.exceptions.length > 0).length,
   };
 }

@@ -15,6 +15,7 @@ export async function recordOrderActivity(orderId: string, action: string, metad
 export async function updatePersistedOrder(id: string, input: OrderEditInput) {
   const existing = await db.order.findUnique({ where: { id } });
   if (!existing) return { kind: "not-found" as const };
+  if (existing.status === "CANCELLED") return { kind: "cancelled" as const };
   const pickupDateTime = toBangkokDate(input.pickupDateTime);
   const routedFleet = await canonicalFleetForCity(db, input.city);
   const values = { platformOrderNumber: input.platformOrderNumber, city: input.city, fleetId: routedFleet.id, pickupDateTime: pickupDateTime.toISOString(), pickupAddress: input.pickupAddress, dropoffAddress: input.dropoffAddress, passengerName: input.passengerName, passengerPhone: input.passengerPhone, flightNumber: input.flightNumber, platformVehicleType: input.platformVehicleType, seatCount: input.seatCount, adults: input.adults, children: input.children, luggage: input.luggage, childSeatLine: input.childSeatLine, meetGreetLine: input.meetGreetLine, otherNotes: input.otherNotes };
@@ -23,7 +24,7 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
     const fleet = await canonicalFleetForCity(tx, input.city);
     const { fleetId: _ignoredFleetId, ...editableFields } = input;
     const result = await tx.order.update({ where: { id }, data: { ...editableFields, fleetId: fleet.id, serviceDate: input.pickupDateTime.slice(0, 10), pickupDateTime } });
-    if (updatedFields.length) await tx.activityLog.create({ data: { orderId: id, action: "订单信息已编辑", actor: "运营人员", metadata: JSON.stringify({ fields: updatedFields }) } });
+    if (updatedFields.length) await tx.activityLog.create({ data: { orderId: id, action: "订单信息已编辑", actor: "运营人员", metadata: JSON.stringify({ changes: Object.fromEntries(updatedFields.map((field) => [field, { from: existing[field as keyof typeof existing] instanceof Date ? (existing[field as keyof typeof existing] as Date).toISOString() : existing[field as keyof typeof existing], to: values[field as keyof typeof values] }])) }) } });
     return result;
   });
   return { kind: "updated" as const, order, updatedFields };
