@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 
 const maxImageBytes = 3 * 1024 * 1024;
 const maxRequestBytes = 4_300_000;
-const vehiclePrompt = `请识别照片中的车辆，只输出以下四行，不要标题、序号、Markdown、推理过程或额外解释：\n品牌：<品牌中文名或无法确认>\n车型：<最可能的具体车型/车系，无法确认则写无法确认>\n代际：<仅当照片证据足够时填写代际代号，否则写无法确认；不要猜测年份>\n置信度：<高/中/低>\n严格依据可见证据；不要猜测准确座位数、行李容量、车辆许可或具体配置。`;
+const vehiclePrompt = `请识别照片中的车辆，只输出以下四行，不要标题、序号、Markdown、推理过程或额外解释：\n品牌：<品牌中文名或无法确认>\n车型：<最可能的具体车型/车系，无法确认则写无法确认>\n车辆类别：<Sedan/SUV/Minivan/Van/无法确认>\n置信度：<高/中/低>\n严格依据可见证据，不需要识别车辆代际、生产年份或具体配置；不要猜测准确座位数、行李容量或车辆许可。`;
 const orderPrompt = `请严格逐字识别这张接送机订单截图中的信息，并按以下字段分行输出：订单号、乘客姓名、电话、航班、接送时间（保留原时区）、上车地址、下车地址、车型、成人、儿童、行李、其他备注。所有字段只能基于图片可见内容，不得凭空补全或翻译专名；无法辨识的写“无法确认”。保留原始拼写、号码和时间。`;
 
 function reply(data: unknown, status = 200) { return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } }); }
