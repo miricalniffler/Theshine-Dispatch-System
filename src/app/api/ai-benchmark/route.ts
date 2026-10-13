@@ -36,9 +36,15 @@ export async function POST(request: NextRequest) {
   try { selections = resolveSelections(body.models); }
   catch (error) { return reply({ error: "所选模型或地域不在测试白名单中。", code: error instanceof Error ? error.message : "INVALID_MODEL_CONFIGURATION" }, 422); }
   const provider = body.provider;
-  if (provider !== undefined && !["qwen", "deepseek", "glm"].includes(provider)) return reply({ error: "无效服务商。" }, 422);
-  const selected = provider ? [selections[provider as BenchmarkProvider]] : Object.values(selections);
+  if (provider !== undefined && !["auto", "qwen", "deepseek", "glm"].includes(provider)) return reply({ error: "无效服务商。" }, 422);
   const prompt = mode === "vehicle" ? vehiclePrompt : orderPrompt;
+  if (provider === "auto") {
+    const primary = await runVisionBenchmark(selections.glm, image, prompt, 30_000);
+    if (primary.status === "ok") return reply({ mode, results: [primary], fallbackUsed: false });
+    const backup = await runVisionBenchmark(selections.qwen, image, prompt, 30_000);
+    return reply({ mode, results: [primary, backup], fallbackUsed: true });
+  }
+  const selected = provider ? [selections[provider as BenchmarkProvider]] : [selections.glm, selections.qwen];
   const results = await Promise.all(selected.map((selection) => runVisionBenchmark(selection, image, prompt)));
   return reply({ mode, results });
 }
