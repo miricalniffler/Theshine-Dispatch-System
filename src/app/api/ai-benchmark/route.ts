@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publicCatalog, resolveSelections } from "@/features/ai-benchmark/catalog";
+import { type BenchmarkProvider, publicCatalog, resolveSelections } from "@/features/ai-benchmark/catalog";
 import { runVisionBenchmark } from "@/features/ai-benchmark/providers";
 
 export const maxDuration = 60;
@@ -35,7 +35,10 @@ export async function POST(request: NextRequest) {
   let selections;
   try { selections = resolveSelections(body.models); }
   catch (error) { return reply({ error: "所选模型或地域不在测试白名单中。", code: error instanceof Error ? error.message : "INVALID_MODEL_CONFIGURATION" }, 422); }
+  const provider = body.provider;
+  if (provider !== undefined && !["qwen", "deepseek", "glm"].includes(provider)) return reply({ error: "无效服务商。" }, 422);
+  const selected = provider ? [selections[provider as BenchmarkProvider]] : Object.values(selections);
   const prompt = mode === "vehicle" ? vehiclePrompt : orderPrompt;
-  const results = await Promise.all(Object.values(selections).map((selection) => runVisionBenchmark(selection, image, prompt)));
+  const results = await Promise.all(selected.map((selection) => runVisionBenchmark(selection, image, prompt)));
   return reply({ mode, results });
 }
