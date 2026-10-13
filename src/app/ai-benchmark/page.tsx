@@ -20,7 +20,7 @@ export default function AiBenchmarkPage() {
     setError("");
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setError("只支持 JPG、PNG、WebP 图片。"); return; }
-    if (file.size > 4 * 1024 * 1024) { setError("图片不能超过 4 MB。"); return; }
+    if (file.size > 3 * 1024 * 1024) { setError("图片不能超过 3 MB。这样编码后仍可稳定通过线上服务。"); return; }
     const reader = new FileReader();
     reader.onload = () => { if (typeof reader.result === "string") { setImage(reader.result); setFileName(file.name); } };
     reader.readAsDataURL(file);
@@ -63,7 +63,7 @@ export default function AiBenchmarkPage() {
         <button type="button" onClick={() => setMode("vehicle")} aria-pressed={mode === "vehicle"} style={tab(mode === "vehicle")}>车辆车型识别</button>
         <button type="button" onClick={() => setMode("order")} aria-pressed={mode === "order"} style={tab(mode === "order")}>订单截图识别</button>
       </div>
-      <label style={{ display: "block", fontWeight: 700, marginBottom: 10 }}>上传测试图片（JPG / PNG / WebP，最多 4 MB）</label>
+      <label style={{ display: "block", fontWeight: 700, marginBottom: 10 }}>上传测试图片（JPG / PNG / WebP，最多 3 MB）</label>
       <input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => loadFile(e.target.files?.[0])} style={{ maxWidth: "100%" }} />
       {image && <div style={{ marginTop: 14 }}><img src={image} alt="上传的测试图片" style={{ maxWidth: "100%", maxHeight: 300, objectFit: "contain", borderRadius: 10 }} /><p style={{ color: "#64748b", fontSize: 13 }}>{fileName}</p></div>}
       <label style={{ display: "block", marginTop: 18, marginBottom: 7, fontWeight: 700 }}>正确答案（可选，用于人工对比）</label>

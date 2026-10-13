@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
+export const runtime = "nodejs";
 
 type Provider = "qwen" | "deepseek" | "glm";
+const maxImageBytes = 3 * 1024 * 1024;
+const maxRequestBytes = 4_300_000;
 const providers: Record<Provider, { model: string; endpoint: string; key: string | undefined }> = {
   qwen: { model: "qwen3-vl-flash", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", key: process.env.DASHSCOPE_API_KEY },
   deepseek: { model: "deepseek-flash", endpoint: "https://api.deepseek.com/chat/completions", key: process.env.DEEPSEEK_API_KEY },
@@ -17,11 +20,16 @@ export async function POST(request: NextRequest) {
   if (!process.env.TEAM_ACCESS_TOKEN || request.cookies.get("iway-team-access")?.value !== process.env.TEAM_ACCESS_TOKEN) {
     return reply({ error: "请先登录工作台。" }, 401);
   }
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxRequestBytes) {
+    return reply({ error: "图片不可超过 3 MB，请压缩后重试。" }, 413);
+  }
   const body = await request.json().catch(() => ({}));
   const image = typeof body.imageDataUrl === "string" ? body.imageDataUrl : "";
-  if (!/^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/i.test(image)) return reply({ error: "请上传 JPG、PNG 或 WebP 图片。" }, 422);
-  const bytes = Math.floor(image.slice(image.indexOf(",") + 1).length * 3 / 4);
-  if (bytes > 4 * 1024 * 1024) return reply({ error: "图片不可超过 4 MB（兼容 GLM 限制），请压缩后重试。" }, 413);
+  const imageMatch = /^data:image\/(?:png|jpe?g|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(image);
+  if (!imageMatch || imageMatch[1].length % 4 !== 0) return reply({ error: "请上传 JPG、PNG 或 WebP 图片。" }, 422);
+  const bytes = Math.floor(imageMatch[1].length * 3 / 4) - (imageMatch[1].endsWith("==") ? 2 : imageMatch[1].endsWith("=") ? 1 : 0);
+  if (bytes > maxImageBytes) return reply({ error: "图片不可超过 3 MB，请压缩后重试。" }, 413);
   const mode = body.mode === "order" ? "order" : body.mode === "vehicle" ? "vehicle" : null;
   if (!mode) return reply({ error: "无效测试类型。" }, 422);
   const prompt = mode === "vehicle" ? vehiclePrompt : orderPrompt;
