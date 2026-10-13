@@ -11,7 +11,10 @@ const providers: Record<BenchmarkProvider, ProviderConfig> = {
     { id: "qwen3.7-flash", label: "Qwen3.7-Flash（候选）", imageInput: true, verification: "documentation" },
   ], regions: [{ id: "cn-beijing", label: "北京" }, { id: "ap-southeast-1", label: "新加坡" }] },
   deepseek: { id: "deepseek", label: "DeepSeek", defaultModelId: "deepseek-flash", models: [{ id: "deepseek-flash", label: "DeepSeek Flash", imageInput: true, verification: "documentation" }] },
-  glm: { id: "glm", label: "GLM（智谱）", defaultModelId: "glm-4.6v-flash", models: [{ id: "glm-4.6v-flash", label: "GLM-4.6V-Flash（现有默认）", imageInput: true, verification: "documentation" }] },
+  glm: { id: "glm", label: "GLM（智谱）", defaultModelId: "glm-5.3-flash", models: [
+    { id: "glm-5.3-flash", label: "GLM-5.3-Flash（新默认，待实测）", imageInput: true, verification: "documentation" },
+    { id: "glm-4.6v-flash", label: "GLM-4.6V-Flash（旧版对照）", imageInput: true, verification: "documentation" },
+  ] },
 };
 
 export type ResolvedSelection = { provider: BenchmarkProvider; modelId: string; region?: string };
