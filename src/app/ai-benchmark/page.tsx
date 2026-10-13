@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-type Result = { provider: string; model: string; region?: string; status: string; text?: string; error?: string; errorCode?: string; elapsedMs: number; usage?: { inputTokens: number | null; outputTokens: number | null } };
+type Result = { provider: string; model: string; region?: string; status: string; text?: string; error?: string; errorCode?: string; elapsedMs: number; diagnostic?: string; usage?: { inputTokens: number | null; outputTokens: number | null } };
 type CatalogProvider = { id: string; label: string; defaultModelId: string; models: Array<{ id: string; label: string; verification: "documentation" | "live" }>; regions: Array<{ id: string; label: string }> };
 type Selections = Record<string, { modelId: string; region?: string }>;
 const names: Record<string, string> = { qwen: "Qwen", deepseek: "DeepSeek", glm: "GLM" };
@@ -38,17 +38,17 @@ export default function AiBenchmarkPage() {
     reader.onload = () => { if (typeof reader.result === "string") { setImage(reader.result); setFileName(file.name); } };
     reader.readAsDataURL(file);
   }
-  async function run() {
+  async function run(provider?: string) {
     if (!image || busy || catalog.length === 0) return;
-    setBusy(true); setError(""); setResults([]); setRatings({});
+    setBusy(true); setError(""); if (!provider) { setResults([]); setRatings({}); }
     try {
       const response = await fetch("/api/ai-benchmark", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageDataUrl: image, mode, models }), cache: "no-store",
+        body: JSON.stringify({ imageDataUrl: image, mode, models, ...(provider ? { provider } : {}) }), cache: "no-store",
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "测试失败。");
-      setResults(data.results || []);
+      setResults(current => provider ? [...current.filter(item => item.provider !== provider), ...(data.results || [])] : data.results || []);
     } catch (err) { setError(err instanceof Error ? err.message : "请求失败"); }
     finally { setBusy(false); }
   }
@@ -64,6 +64,7 @@ export default function AiBenchmarkPage() {
       "Tokens：" + (r.usage ? `${r.usage.inputTokens ?? "?"}/${r.usage.outputTokens ?? "?"}` : "未知"),
       "人工评分：" + (ratings[r.provider] || "未评分"),
       "识别：" + (r.text || r.error || "无"),
+      "诊断：" + (r.diagnostic || "无"),
     ].join("\n")),
   ].join("\n");
   return <main style={{ maxWidth: 1250, padding: "36px 22px 80px", margin: "0 auto" }}>
@@ -95,6 +96,7 @@ export default function AiBenchmarkPage() {
       <label style={{ display: "block", marginTop: 18, marginBottom: 7, fontWeight: 700 }}>正确答案（可选，用于人工对比）</label>
       <textarea placeholder={mode === "vehicle" ? "例如：Toyota Commuter，2019年以后的车系" : "填写已核实的订单关键信息"} value={truth} onChange={e => setTruth(e.target.value)} rows={2} style={{ width: "100%", borderRadius: 8, border: "1px solid #cbd5e1", padding: 12 }} />
       <button type="button" disabled={!image || busy || catalog.length === 0} onClick={() => void run()} style={{ marginTop: 16, border: 0, borderRadius: 9, background: "#315fe9", color: "#fff", padding: "12px 20px", fontWeight: 800, cursor: "pointer", opacity: !image || busy || catalog.length === 0 ? .55 : 1 }}>{busy ? "正在并行识别…" : "开始三模型对比测试"}</button>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>{catalog.map(p => <button key={p.id} type="button" disabled={!image || busy} onClick={() => void run(p.id)} style={{ ...tab(false), opacity: !image || busy ? .5 : 1 }}>仅测试 {names[p.id]}</button>)}</div>
       {error && <p role="alert" style={{ color: "#b42318" }}>{error}</p>}
     </section>
     {results.length > 0 && <section style={{ marginTop: 22 }}>
@@ -107,7 +109,7 @@ export default function AiBenchmarkPage() {
           <h3 style={{ margin: "0 0 6px" }}>{names[r.provider]}</h3>
           <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>{r.model}{r.region ? ` · ${r.region}` : ""} · {r.elapsedMs ? (r.elapsedMs / 1000).toFixed(2) + " 秒" : "未请求"}</p>
           <p style={{ fontSize: 12, color: r.status === "ok" ? "#16835d" : "#a33b24" }}>{r.status === "ok" ? "识别完成" : r.status === "unconfigured" ? "未配置 API Key" : "调用失败"}{r.usage && ` · 输入 ${r.usage.inputTokens ?? "?"} / 输出 ${r.usage.outputTokens ?? "?"} Tokens`}</p>
-          <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "inherit", lineHeight: 1.6, minHeight: 120, background: "#f7f9fc", padding: 12, borderRadius: 9 }}>{r.text || r.error || "未返回内容"}{r.errorCode ? `\n\n原因代码：${r.errorCode}` : ""}</pre>
+          <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "inherit", lineHeight: 1.6, minHeight: 120, background: "#f7f9fc", padding: 12, borderRadius: 9 }}>{r.text || r.error || "未返回内容"}{r.errorCode ? `\n\n原因代码：${r.errorCode}` : ""}{r.diagnostic ? `\n诊断：${r.diagnostic}` : ""}</pre>
           {r.status === "ok" && <div><p style={{ fontSize: 13, fontWeight: 700 }}>人工判定</p><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{labels.map(label => <button key={label} type="button" onClick={() => setRatings(x => ({ ...x, [r.provider]: label }))} style={tab(ratings[r.provider] === label)}>{label}</button>)}</div></div>}
         </article>)}
       </div>
