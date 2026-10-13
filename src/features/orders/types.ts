@@ -1,4 +1,4 @@
-export type OrderStatus = "PENDING_REVIEW" | "READY_TO_DISPATCH" | "DISPATCHED" | "DRIVER_CONFIRMED" | "RETURNED" | "COMPLETED";
+export type OrderStatus = "PENDING_REVIEW" | "READY_TO_DISPATCH" | "DISPATCHED" | "DRIVER_CONFIRMED" | "RETURNED" | "COMPLETED" | "CANCELLED";
 export type OrderException = string;
 
 export type Order = {
