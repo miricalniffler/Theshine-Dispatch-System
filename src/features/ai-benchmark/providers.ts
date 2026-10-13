@@ -21,7 +21,7 @@ export async function runVisionBenchmark(selection: ResolvedSelection, image: st
   if (!key) return { ...base, status: "unconfigured", error: "未配置 API Key", errorCode: "API_KEY_MISSING", elapsedMs: 0 };
   const started = Date.now();
   try {
-    const response = await fetch(endpoint(selection), { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: selection.modelId, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] }], max_tokens: selection.provider === "deepseek" ? 3000 : 1400, ...(selection.provider === "glm" ? { thinking: { type: "disabled" } } : {}) }), signal: AbortSignal.timeout(48_000), cache: "no-store" });
+    const response = await fetch(endpoint(selection), { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: selection.modelId, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] }], max_tokens: selection.provider === "deepseek" ? 3000 : 1400, ...(selection.provider === "glm" && selection.modelId === "glm-4.6v-flash" ? { thinking: { type: "disabled" } } : {}) }), signal: AbortSignal.timeout(48_000), cache: "no-store" });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) { const error = friendlyHttpError(response.status); const retry = response.headers.get("retry-after"); const retryInfo = retry && /^\\d{1,5}$/.test(retry) ? `建议等待 ${retry} 秒后再试。` : ""; return { ...base, status: "error", error: error.message + retryInfo, errorCode: error.code, elapsedMs: Date.now() - started }; }
     const choice = data?.choices?.[0];
