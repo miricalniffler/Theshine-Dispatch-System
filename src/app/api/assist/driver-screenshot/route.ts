@@ -1,10 +1,13 @@
 import { failure, success } from "@/lib/api-response";
 import { recognizeDriverScreenshot } from "@/features/assist/driver-screenshot";
 import { z } from "zod";
+import { NextRequest } from "next/server";
+import { hasTeamAccess } from "@/lib/team-access";
 
 const requestSchema = z.object({ imageUrl: z.string().startsWith("data:image/").max(8_000_000) });
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);
   try {
     const { imageUrl } = requestSchema.parse(await request.json());
     return success(await recognizeDriverScreenshot(imageUrl));

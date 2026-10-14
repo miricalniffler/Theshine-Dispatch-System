@@ -16,6 +16,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     const code = error instanceof Error ? error.message : "";
     if (code === "ORDER_NOT_FOUND") return failure("ORDER_NOT_FOUND", "订单不存在。", undefined, 404);
     if (code === "ORDER_CANCELLED") return failure("ORDER_CANCELLED", "订单已取消，不能再确认司机资料。", undefined, 409);
+    if (code === "ORDER_CHANGED") return failure("ORDER_CHANGED", "订单状态刚刚发生变化，请刷新后重试。", undefined, 409);
     return failure("DRIVER_DETAILS_SAVE_FAILED", "司机资料保存失败。", undefined, 500);
   }
 }

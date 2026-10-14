@@ -2,20 +2,22 @@ import { failure, success } from "@/lib/api-response";
 import { findVehicleArchive, saveVehicleArchive } from "@/features/vehicles/archive-service";
 import { z } from "zod";
 import { NextRequest } from "next/server";
+import { hasTeamAccess } from "@/lib/team-access";
 
 const input = z.object({
   rawPlate: z.string().min(1).max(80), brand: z.string().max(80).optional().nullable(),
   model: z.string().max(120).optional().nullable(), vehicleClass: z.string().max(80).optional().nullable(),
   driverName: z.string().max(120).optional().nullable(), normalizedPhone: z.string().max(40).optional().nullable(),
-  source: z.enum(["MANUAL_CONFIRMATION", "ORDER_DRIVER_CONFIRMATION", "AI_SUGGESTION"]), replaceConfirmed: z.boolean().optional(),
 });
 
 export async function GET(request: NextRequest) {
+  if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);
   const plate = request.nextUrl.searchParams.get("plate") ?? "";
   return success(await findVehicleArchive(plate));
 }
 
 export async function POST(request: NextRequest) {
+  if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);
   try { return success(await saveVehicleArchive(input.parse(await request.json()))); }
   catch (error) {
     if (error instanceof z.ZodError) return failure("INVALID_VEHICLE_ARCHIVE", "车辆档案资料格式不正确。", undefined, 400);

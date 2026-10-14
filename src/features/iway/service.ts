@@ -25,7 +25,16 @@ export type DriverDetails = {
 export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & {
   driverNameSource?: DriverNameSource;
   driverNameSourceDetail?: string | null;
+  // Accepted only after an explicit operator acknowledgement in the UI.
+  confirmDriverName?: boolean;
 };
+
+export function resolveDriverNameSource(previous: DriverNameSource | null | undefined, requested: DriverNameSource | undefined, explicitlyConfirmed: boolean) {
+  const pending = previous === "SYSTEM_GENERATED" || previous === "IMAGE_TRANSLITERATED";
+  if (pending && !explicitlyConfirmed) return previous;
+  if (explicitlyConfirmed) return "MANUAL" as const;
+  return requested === "SYSTEM_GENERATED" || requested === "IMAGE_TRANSLITERATED" ? requested : "MANUAL" as const;
+}
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -120,10 +129,10 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const order = toOrder(persisted);
   const rules = loadRules();
   const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
-  // API callers cannot claim an arbitrary source. A manual save is the only
-  // way to turn a temporary/generated name into a usable confirmed identity.
+  // A pending AI name remains pending on ordinary saves. It can only become
+  // MANUAL after the authenticated operator explicitly confirms it.
   const requestedSource = driverNameSources.includes(input.driverNameSource as DriverNameSource) ? input.driverNameSource as DriverNameSource : "MANUAL";
-  const driverNameSource: DriverNameSource = requestedSource === "SYSTEM_GENERATED" || requestedSource === "IMAGE_TRANSLITERATED" ? requestedSource : "MANUAL";
+  const driverNameSource = resolveDriverNameSource(persisted.driverDetail?.driverNameSource as DriverNameSource | null, requestedSource, input.confirmDriverName === true);
   const record: DriverDetails = {
     orderId,
     rawReply: input.rawReply?.trim() ?? "",
@@ -139,13 +148,20 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const check = validateRequiredFields(iwayContext(order, record), "before_iway_return", rules);
   const confirmedAt = check.valid ? new Date() : null;
   const driver = await db.$transaction(async (tx) => {
+    // Conditional write acquires a row lock without copying a stale status.
+    // If cancellation won the race, no driver data or status can be written.
+    const active = await tx.order.updateMany({ where: { id: orderId, status: { not: "CANCELLED" } }, data: { updatedAt: new Date() } });
+    if (!active.count) throw new Error("ORDER_CANCELLED");
+    const current = await tx.order.findUnique({ where: { id: orderId }, select: { status: true } });
+    if (!current || current.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
     const saved = await tx.driverDetail.upsert({
       where: { orderId },
       update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, driverNameSource: record.driverNameSource, driverNameSourceDetail: record.driverNameSourceDetail, confirmedAt },
       create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, driverNameSource: record.driverNameSource, driverNameSourceDetail: record.driverNameSourceDetail, confirmedAt },
     });
-    if (check.valid && persisted.status !== "DRIVER_CONFIRMED") {
-      await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
+    if (check.valid && current.status === "DISPATCHED") {
+      const transitioned = await tx.order.updateMany({ where: { id: orderId, status: "DISPATCHED" }, data: { status: "DRIVER_CONFIRMED" } });
+      if (!transitioned.count) throw new Error("ORDER_CHANGED");
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     }
     return saved;
@@ -173,7 +189,7 @@ export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview
     const order = toOrder(row);
     const driver = row.driverDetail ? toDriverDetails(row.driverDetail) : null;
     if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
-    if (driver?.driverNameSource === "SYSTEM_GENERATED") errors.push(`${order.orderNo} 的司机姓名为系统临时生成，必须人工核对后才能回传。`);
+    if (driver?.driverNameSource === "SYSTEM_GENERATED" || driver?.driverNameSource === "IMAGE_TRANSLITERATED") errors.push(`${order.orderNo} 的司机姓名尚未人工核对，不能回传。`);
     const check = validateRequiredFields(iwayContext(order, driver), "before_iway_return", rules);
     if (!check.valid) errors.push(`${order.orderNo} 缺少：${fieldLabels(check.missingFields).join("、")}`);
   });
@@ -199,23 +215,28 @@ export async function saveIwayCopy(orderIds: string[]) {
 }
 
 export async function confirmIwayReturn(batchId: string) {
-  const batch = await db.iwayReturnBatch.findUnique({ where: { id: batchId }, include: { orders: true } });
-  if (!batch) throw new Error("BATCH_NOT_FOUND");
-  const orderIds = batch.orders.map((link) => link.orderId);
-  const cancelled = await db.order.count({ where: { id: { in: orderIds }, status: "CANCELLED" } });
-  if (cancelled) throw new Error("CANCELLED_ORDER_IN_BATCH");
   const completed = await db.$transaction(async (tx) => {
+    const batch = await tx.iwayReturnBatch.findUnique({ where: { id: batchId }, include: { orders: true } });
+    if (!batch) throw new Error("BATCH_NOT_FOUND");
+    if (batch.confirmedAt) throw new Error("BATCH_ALREADY_CONFIRMED");
+    const orderIds = batch.orders.map((link) => link.orderId);
     const confirmedAt = new Date();
-    const updated = await tx.iwayReturnBatch.update({ where: { id: batchId }, data: { confirmedAt }, include: { orders: true } });
+    const claimed = await tx.iwayReturnBatch.updateMany({ where: { id: batchId, confirmedAt: null }, data: { confirmedAt } });
+    if (!claimed.count) throw new Error("BATCH_ALREADY_CONFIRMED");
     if (orderIds.length) {
-      await tx.order.updateMany({ where: { id: { in: orderIds } }, data: { status: "COMPLETED" } });
+      // Only the two return-ready states are allowed to become completed.
+      // A cancellation or a concurrent state transition makes the whole
+      // transaction roll back, including the batch confirmation claim.
+      const transitioned = await tx.order.updateMany({ where: { id: { in: orderIds }, status: { in: ["DRIVER_CONFIRMED", "RETURNED"] } }, data: { status: "COMPLETED" } });
+      if (transitioned.count !== orderIds.length) throw new Error("CANCELLED_ORDER_IN_BATCH");
       await tx.activityLog.createMany({ data: orderIds.map((orderId) => ({ orderId, action: "确认 i’way 回传完成", actor: "运营人员", metadata: `回传批次：${batchId}` })) });
     }
-    return updated;
+    return tx.iwayReturnBatch.findUniqueOrThrow({ where: { id: batchId }, include: { orders: true } });
   });
   // The i’way confirmation is the business fact. Customer-notification
   // preparation runs afterwards and is intentionally best-effort: a future
   // transport failure must never undo a confirmed i’way return.
+  const orderIds = completed.orders.map((link) => link.orderId);
   await Promise.all(orderIds.map(async (orderId) => {
     try { await prepareDriverNotificationForOrder(orderId); }
     catch { await db.activityLog.create({ data: { orderId, action: "司机资料客人通知准备失败", actor: "系统", metadata: "i’way 回传已保留；请在订单详情重新生成。" } }); }

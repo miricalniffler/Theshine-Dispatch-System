@@ -50,7 +50,8 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   const [notice, setNotice] = useState<Notice>(null);
   const [assistantNotes, setAssistantNotes] = useState<string[]>([]);
   const [vehicleImage, setVehicleImage] = useState("");
-  useEffect(() => setForm({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id }), [item]);
+  const [nameConfirmed, setNameConfirmed] = useState(false);
+  useEffect(() => { setForm({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id }); setNameConfirmed(false); }, [item]);
   const set = (key: keyof DriverDetails, value: string) => setForm((current) => ({ ...current, [key]: value }));
   function attachVehicleImage(file: File | undefined) {
     if (!file || !file.type.startsWith("image/")) { setAssistantNotes(["请选择或粘贴车辆图片文件。"]); return; }
@@ -87,9 +88,10 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
     finally { setAnalysing(false); }
   }
   async function save() {
+    const pendingName = form.driverNameSource === "SYSTEM_GENERATED" || form.driverNameSource === "IMAGE_TRANSLITERATED";
+    if (pendingName && !nameConfirmed) { setNotice({ tone: "error", message: "这是 AI 建议的姓名。请先核对真实司机姓名并勾选确认，系统才允许用于回传。" }); return; }
     setSaving(true); setNotice(null);
-    // Clicking 保存 is an explicit human confirmation of the visible name.
-    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, driverNameSource: "MANUAL", driverNameSourceDetail: "运营人员在司机资料页确认" }) });
+    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, confirmDriverName: nameConfirmed, ...(nameConfirmed ? { driverNameSourceDetail: "运营人员已核对 AI 建议姓名" } : {}) }) });
     const payload = await response.json();
     setSaving(false);
     if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "保存失败" }); return; }
@@ -113,7 +115,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
       <label>确认车型<input value={form.confirmedVehicleModel ?? ""} onChange={(event) => set("confirmedVehicleModel", event.target.value)} placeholder="例如 Toyota Commut" /></label>
       <label>车牌号<input value={form.licensePlate ?? ""} onChange={(event) => set("licensePlate", event.target.value)} placeholder="例如 1กข 2345" /></label>
     </div>
-    {form.driverNameSource && form.driverNameSource !== "MANUAL" && <p className="normalized">姓名来源：<strong>{form.driverNameSource === "SYSTEM_GENERATED" ? "系统临时生成，尚未核实" : "截图泰语转写，尚待人工确认"}</strong></p>}
+    {form.driverNameSource && form.driverNameSource !== "MANUAL" && <><p className="normalized">姓名来源：<strong>{form.driverNameSource === "SYSTEM_GENERATED" ? "系统临时生成，尚未核实" : "截图泰语转写，尚待人工确认"}</strong></p><label className="normalized"><input type="checkbox" checked={nameConfirmed} onChange={(event) => setNameConfirmed(event.target.checked)} /> 我已核对这是真实司机姓名，允许用于 i’way 回传</label></>}
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
     <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
