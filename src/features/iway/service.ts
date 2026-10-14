@@ -4,6 +4,10 @@ import type { Order } from "@/features/orders/types";
 import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { loadRules } from "@/lib/rules/load-rules";
 import { prepareDriverNotificationForOrder } from "@/features/customer-notifications/service";
+import { saveVehicleArchive } from "@/features/vehicles/archive-service";
+
+export const driverNameSources = ["MANUAL", "IMAGE_TRANSLITERATED", "SYSTEM_GENERATED", "UNKNOWN"] as const;
+export type DriverNameSource = typeof driverNameSources[number];
 
 export type DriverDetails = {
   orderId: string;
@@ -13,10 +17,15 @@ export type DriverDetails = {
   normalizedDriverPhone: string | null;
   confirmedVehicleModel: string | null;
   licensePlate: string | null;
+  driverNameSource: DriverNameSource | null;
+  driverNameSourceDetail: string | null;
   confirmedAt: string | null;
 };
 
-export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate">;
+export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & {
+  driverNameSource?: DriverNameSource;
+  driverNameSourceDetail?: string | null;
+};
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -51,6 +60,8 @@ function toDriverDetails(row: DriverDetail): DriverDetails {
     normalizedDriverPhone: row.normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
     licensePlate: normalizeLicensePlateForReturn(row.licensePlate),
+    driverNameSource: driverNameSources.includes(row.driverNameSource as DriverNameSource) ? row.driverNameSource as DriverNameSource : null,
+    driverNameSourceDetail: row.driverNameSourceDetail,
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
   };
 }
@@ -109,6 +120,10 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const order = toOrder(persisted);
   const rules = loadRules();
   const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
+  // API callers cannot claim an arbitrary source. A manual save is the only
+  // way to turn a temporary/generated name into a usable confirmed identity.
+  const requestedSource = driverNameSources.includes(input.driverNameSource as DriverNameSource) ? input.driverNameSource as DriverNameSource : "MANUAL";
+  const driverNameSource: DriverNameSource = requestedSource === "SYSTEM_GENERATED" || requestedSource === "IMAGE_TRANSLITERATED" ? requestedSource : "MANUAL";
   const record: DriverDetails = {
     orderId,
     rawReply: input.rawReply?.trim() ?? "",
@@ -117,6 +132,8 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(input.confirmedVehicleModel, rules),
     licensePlate: normalizeLicensePlateForReturn(input.licensePlate),
+    driverNameSource,
+    driverNameSourceDetail: input.driverNameSourceDetail?.trim() || null,
     confirmedAt: null,
   };
   const check = validateRequiredFields(iwayContext(order, record), "before_iway_return", rules);
@@ -124,8 +141,8 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const driver = await db.$transaction(async (tx) => {
     const saved = await tx.driverDetail.upsert({
       where: { orderId },
-      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
-      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
+      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, driverNameSource: record.driverNameSource, driverNameSourceDetail: record.driverNameSourceDetail, confirmedAt },
+      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, driverNameSource: record.driverNameSource, driverNameSourceDetail: record.driverNameSourceDetail, confirmedAt },
     });
     if (check.valid && persisted.status !== "DRIVER_CONFIRMED") {
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
@@ -133,6 +150,12 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     }
     return saved;
   });
+  // Archive is deliberately best-effort and outside the order transaction:
+  // a lookup aid can never block or roll back a confirmed operational order.
+  if (record.licensePlate) {
+    try { await saveVehicleArchive({ rawPlate: record.licensePlate, model: record.confirmedVehicleModel, driverName: record.confirmedDriverName, normalizedPhone: record.normalizedDriverPhone, source: "ORDER_DRIVER_CONFIRMATION" }); }
+    catch { /* Driver data remains the source of truth when the optional archive is unavailable. */ }
+  }
   return { driver: toDriverDetails(driver), valid: check.valid, missingFields: fieldLabels(check.missingFields), ruleVersion: rules.rules_version };
 }
 
@@ -150,6 +173,7 @@ export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview
     const order = toOrder(row);
     const driver = row.driverDetail ? toDriverDetails(row.driverDetail) : null;
     if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
+    if (driver?.driverNameSource === "SYSTEM_GENERATED") errors.push(`${order.orderNo} 的司机姓名为系统临时生成，必须人工核对后才能回传。`);
     const check = validateRequiredFields(iwayContext(order, driver), "before_iway_return", rules);
     if (!check.valid) errors.push(`${order.orderNo} 缺少：${fieldLabels(check.missingFields).join("、")}`);
   });

@@ -10,10 +10,11 @@ import "./iway.css";
 type WorkItem = { order: Order; driver: DriverDetails | null };
 type Notice = { tone: "success" | "error"; message: string } | null;
 type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY"; message: string; value?: string; confidence?: number };
+type ScreenshotResult = { driverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleModel: string | null; note: string; provider: string; model: string | null; fallbackReason: string | null };
 
 const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成", CANCELLED: "已取消" };
 
-function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, confirmedAt: null }; }
+function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, driverNameSource: null, driverNameSourceDetail: null, confirmedAt: null }; }
 
 function bangkokTomorrowDate() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -60,19 +61,35 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   async function analyseReply() {
     setAnalysing(true); setAssistantNotes([]);
     try {
-      const requests: Promise<AssistResult>[] = [];
-      if (form.rawReply?.trim()) requests.push(fetch("/api/assist/thai-translation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: form.rawReply }) }).then((response) => response.json()).then((payload) => payload.data));
-      if (vehicleImage) requests.push(fetch("/api/assist/vehicle-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: vehicleImage }) }).then((response) => response.json()).then((payload) => payload.data));
-      const results = await Promise.all(requests);
-      const vehicleSuggestion = results.find((result) => result?.value && result.confidence !== undefined)?.value;
-      if (vehicleSuggestion && !form.confirmedVehicleModel) set("confirmedVehicleModel", vehicleSuggestion);
-      setAssistantNotes(results.filter(Boolean).map((result) => result.value ? `${result.message} 建议：${result.value}` : result.message));
+      const notes: string[] = [];
+      if (form.rawReply?.trim()) {
+        const response = await fetch("/api/assist/thai-translation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: form.rawReply }) });
+        const result = (await response.json()).data as AssistResult | undefined;
+        if (result) notes.push(result.value ? `${result.message} 建议：${result.value}` : result.message);
+      }
+      if (vehicleImage) {
+        const response = await fetch("/api/assist/driver-screenshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: vehicleImage }) });
+        const result = (await response.json()).data as ScreenshotResult | undefined;
+        if (result) {
+          setForm((current) => ({ ...current,
+            confirmedDriverName: current.confirmedDriverName || result.driverName,
+            rawDriverPhone: current.rawDriverPhone || result.driverPhone,
+            licensePlate: current.licensePlate || result.licensePlate,
+            confirmedVehicleModel: current.confirmedVehicleModel || result.vehicleModel,
+            driverNameSource: result.driverNameSource === "NOT_FOUND" ? current.driverNameSource : result.driverNameSource,
+            driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图识别/泰语转写，待人工确认",
+          }));
+          notes.push(`${result.note}${result.fallbackReason ? `（${result.fallbackReason}）` : ""}`);
+        }
+      }
+      setAssistantNotes(notes);
     } catch { setAssistantNotes(["分析暂时无法完成。原始回复仍已保留，请人工填写并保存。"]); }
     finally { setAnalysing(false); }
   }
   async function save() {
     setSaving(true); setNotice(null);
-    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+    // Clicking 保存 is an explicit human confirmation of the visible name.
+    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, driverNameSource: "MANUAL", driverNameSourceDetail: "运营人员在司机资料页确认" }) });
     const payload = await response.json();
     setSaving(false);
     if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "保存失败" }); return; }
@@ -96,6 +113,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
       <label>确认车型<input value={form.confirmedVehicleModel ?? ""} onChange={(event) => set("confirmedVehicleModel", event.target.value)} placeholder="例如 Toyota Commut" /></label>
       <label>车牌号<input value={form.licensePlate ?? ""} onChange={(event) => set("licensePlate", event.target.value)} placeholder="例如 1กข 2345" /></label>
     </div>
+    {form.driverNameSource && form.driverNameSource !== "MANUAL" && <p className="normalized">姓名来源：<strong>{form.driverNameSource === "SYSTEM_GENERATED" ? "系统临时生成，尚未核实" : "截图泰语转写，尚待人工确认"}</strong></p>}
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
     <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
