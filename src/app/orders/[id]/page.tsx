@@ -5,6 +5,12 @@ import "@/features/orders/order-detail.css";
 import { CustomerCommunicationPanel } from "@/features/customer-notifications/CustomerCommunicationPanel";
 
 type Detail = Record<string, any>;
+async function readResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return { error: { message: `服务暂时无响应（${response.status}）` } };
+  try { return JSON.parse(text); }
+  catch { return { error: { message: `服务返回了无法识别的内容（${response.status}），请刷新后重试。` } }; }
+}
 function localDateTime(value?: string) {
   if (!value) return "";
   const parts = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(value));
@@ -18,14 +24,24 @@ function formValues(order: Detail) {
 
 export default function OrderDetail({ params }: { params: Promise<{ id: string }> }) {
   const [id, setId] = useState(""); const [order, setOrder] = useState<Detail | null>(null); const [form, setForm] = useState<Record<string, any>>({});
-  const [activity, setActivity] = useState<any[]>([]); const [activityOpen, setActivityOpen] = useState(false); const [error, setError] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [cancelReason, setCancelReason] = useState(""); const [exceptionNote, setExceptionNote] = useState(""); const [lifecycleBusy, setLifecycleBusy] = useState(false);
-  const refresh = (orderId: string) => Promise.all([fetch(`/api/orders/${orderId}`).then((r) => r.json()), fetch(`/api/orders/${orderId}/activity`).then((r) => r.json())]).then(([detail, timeline]) => { setOrder(detail.data ?? null); if (detail.data) setForm(formValues(detail.data)); setActivity(timeline.data ?? []); });
+  const [activity, setActivity] = useState<any[]>([]); const [activityOpen, setActivityOpen] = useState(false); const [error, setError] = useState(""); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false); const [cancelReason, setCancelReason] = useState(""); const [exceptionNote, setExceptionNote] = useState(""); const [lifecycleBusy, setLifecycleBusy] = useState(false); const [loading, setLoading] = useState(true);
+  const refresh = async (orderId: string) => {
+    setLoading(true); setError("");
+    try {
+      const [detailResponse, activityResponse] = await Promise.all([fetch(`/api/orders/${orderId}`), fetch(`/api/orders/${orderId}/activity`)]);
+      const [detail, timeline] = await Promise.all([readResponse(detailResponse), readResponse(activityResponse)]);
+      if (!detailResponse.ok) throw new Error(detail.error?.message ?? "订单读取失败，请稍后重试。");
+      if (!activityResponse.ok) throw new Error(timeline.error?.message ?? "操作记录读取失败，请稍后重试。");
+      setOrder(detail.data); setForm(formValues(detail.data)); setActivity(timeline.data ?? []);
+    } catch (err) { setOrder(null); setActivity([]); setError(err instanceof Error ? err.message : "订单读取失败，请稍后重试。"); }
+    finally { setLoading(false); }
+  };
   useEffect(() => { params.then(({ id: orderId }) => { setId(orderId); void refresh(orderId); }); }, [params]);
   const change = (key: string, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
   const save = async (event: FormEvent) => {
     event.preventDefault(); setError(""); setMessage(""); setSaving(true);
     const body = { ...form, fleetId: form.fleetId || null, seatCount: form.seatCount === "" ? null : Number(form.seatCount), adults: Number(form.adults), children: Number(form.children), luggage: Number(form.luggage) };
-    const response = await fetch(`/api/orders/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); setSaving(false);
+    const response = await fetch(`/api/orders/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); const data = await readResponse(response); setSaving(false);
     if (!response.ok) { setError(data.error?.message ?? "保存失败，请稍后重试。"); return; }
     setMessage(data.updatedFields?.length ? "已保存订单信息，并记录本次修改。" : "没有需要保存的修改。"); await refresh(id);
   };
@@ -37,7 +53,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
     setLifecycleBusy(true); setError(""); setMessage("");
     try {
       const response = await fetch(`/api/orders/${id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "cancel" ? { reason: value } : { note: value }) });
-      const data = await response.json();
+      const data = await readResponse(response);
       if (!response.ok) throw new Error(data.error?.message || "操作失败");
       setMessage(action === "cancel" ? "订单已取消，历史记录已保留。" : "异常备注已保存到操作记录。");
       if (action === "cancel") setCancelReason(""); else setExceptionNote("");
@@ -58,7 +74,7 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
       return item.metadata;
     } catch { return item.metadata; }
   }
-  return <main className="rules-page"><nav><a href="/orders">订单工作台</a><a className="active" href="#">订单详情</a></nav><header><p>订单详情</p><h1>{order?.platformOrderNumber || "正在读取订单…"}</h1></header>{order && <><div className="order-detail-grid"><section className="order-detail-card"><h2>编辑订单{order.status === "CANCELLED" ? " · 已取消" : ""}</h2>{error && <p className="order-error">{error}</p>}<form className="order-edit-form" onSubmit={save}><fieldset disabled={order.status === "CANCELLED" || saving} style={{ display: "contents" }}>
+  return <main className="rules-page"><nav><a href="/orders">订单工作台</a><a className="active" href="#">订单详情</a></nav><header><p>订单详情</p><h1>{loading ? "正在读取订单…" : order?.platformOrderNumber || "订单暂时无法读取"}</h1></header>{error && <section className="order-detail-card"><p className="order-error">{error}</p><button type="button" onClick={() => id && void refresh(id)}>重试读取</button><a className="order-cancel-link" href="/orders">返回订单工作台</a></section>}{order && <><div className="order-detail-grid"><section className="order-detail-card"><h2>编辑订单{order.status === "CANCELLED" ? " · 已取消" : ""}</h2>{error && <p className="order-error">{error}</p>}<form className="order-edit-form" onSubmit={save}><fieldset disabled={order.status === "CANCELLED" || saving} style={{ display: "contents" }}>
     <label>平台订单号<input value={form.platformOrderNumber} onChange={(e) => change("platformOrderNumber", e.target.value)} required /></label><label>服务城市<select value={form.city} onChange={(e) => change("city", e.target.value)}><option value="曼谷">曼谷</option><option value="苏梅">苏梅</option></select></label>
     <label>接客日期与时间<input type="datetime-local" value={form.pickupDateTime} onChange={(e) => change("pickupDateTime", e.target.value)} required /><span className="hint">按泰国当地时间填写</span></label><label>派送车队<input value={form.city === "苏梅" ? "苏梅车队（自动分配）" : "曼谷车队（自动分配）"} disabled /></label>
     <label>乘客姓名<input value={form.passengerName} onChange={(e) => change("passengerName", e.target.value)} required /></label><label>乘客电话<input value={form.passengerPhone} onChange={(e) => change("passengerPhone", e.target.value)} required /></label><label>航班号<input value={form.flightNumber} onChange={(e) => change("flightNumber", e.target.value)} /></label><label>平台车型<input value={form.platformVehicleType} onChange={(e) => change("platformVehicleType", e.target.value)} required /></label>

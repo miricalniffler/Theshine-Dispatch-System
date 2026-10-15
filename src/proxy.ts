@@ -7,7 +7,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (request.cookies.get("iway-team-access")?.value !== process.env.TEAM_ACCESS_TOKEN) {
+  const accessToken = process.env.TEAM_ACCESS_TOKEN;
+  // Missing configuration must protect the application, rather than making
+  // an absent cookie compare equal to an absent environment variable.
+  if (!accessToken || request.cookies.get("iway-team-access")?.value !== accessToken) {
     const login = new URL("/login", request.url);
     login.searchParams.set("next", request.nextUrl.pathname);
     return NextResponse.redirect(login);

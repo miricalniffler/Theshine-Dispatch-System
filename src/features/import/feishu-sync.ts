@@ -57,12 +57,16 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (message.action === "cancel") {
     if (!existing) { await recordMessage(message); return "skipped"; }
-    await db.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: existing.id }, data: { status: "CANCELLED", rawSource: message.text } });
+    const cancelled = await db.$transaction(async (tx) => {
+      // Never let an asynchronous cancellation mail overwrite an order that
+      // has already been confirmed as returned/completed by an operator.
+      const cancelled = await tx.order.updateMany({ where: { id: existing.id, status: { notIn: ["CANCELLED", "COMPLETED"] } }, data: { status: "CANCELLED", rawSource: message.text } });
+      if (!cancelled.count) return false;
       await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
+      return true;
     });
     await recordMessage(message, existing.id);
-    return "cancelled";
+    return cancelled ? "cancelled" : "skipped";
   }
   const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
   const passengerName = pick(message.text, "Passenger Name");

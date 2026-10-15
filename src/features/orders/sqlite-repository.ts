@@ -5,7 +5,26 @@ import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 export async function findPersistedOrder(id: string) {
-  return db.order.findUnique({ where: { id }, include: { driverDetail: true, activityLogs: { orderBy: { createdAt: "asc" } } } });
+  // Keep the critical order screen compatible while an additive, optional
+  // DriverDetail migration is being rolled out.  Reading every column from
+  // that table made the whole order detail API fail on a lagging test DB.
+  return db.order.findUnique({
+    where: { id },
+    include: {
+      driverDetail: {
+        select: {
+          confirmedDriverName: true,
+          rawDriverPhone: true,
+          normalizedDriverPhone: true,
+          confirmedVehicleModel: true,
+          licensePlate: true,
+          rawReply: true,
+          confirmedAt: true,
+        },
+      },
+      activityLogs: { orderBy: { createdAt: "asc" } },
+    },
+  });
 }
 
 export async function recordOrderActivity(orderId: string, action: string, metadata?: string) {
@@ -23,10 +42,15 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
   const order = await db.$transaction(async (tx) => {
     const fleet = await canonicalFleetForCity(tx, input.city);
     const { fleetId: _ignoredFleetId, ...editableFields } = input;
-    const result = await tx.order.update({ where: { id }, data: { ...editableFields, fleetId: fleet.id, serviceDate: input.pickupDateTime.slice(0, 10), pickupDateTime } });
+    // Do the state check as part of the write.  A cancellation that happens
+    // after the initial read must never be followed by an edit write.
+    const changed = await tx.order.updateMany({ where: { id, status: { not: "CANCELLED" } }, data: { ...editableFields, fleetId: fleet.id, serviceDate: input.pickupDateTime.slice(0, 10), pickupDateTime } });
+    if (!changed.count) return null;
+    const result = await tx.order.findUniqueOrThrow({ where: { id } });
     if (updatedFields.length) await tx.activityLog.create({ data: { orderId: id, action: "订单信息已编辑", actor: "运营人员", metadata: JSON.stringify({ changes: Object.fromEntries(updatedFields.map((field) => [field, { from: existing[field as keyof typeof existing] instanceof Date ? (existing[field as keyof typeof existing] as Date).toISOString() : existing[field as keyof typeof existing], to: values[field as keyof typeof values] }])) }) } });
     return result;
   });
+  if (!order) return { kind: "cancelled" as const };
   return { kind: "updated" as const, order, updatedFields };
 }
 
