@@ -19,6 +19,11 @@ function displaySyncFailure(message: string) {
   }
   return message || "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
 }
+function displaySyncSummary(run: Pick<SyncRun, "createdCount" | "updatedCount" | "cancelledCount" | "skippedCount">) {
+  const { createdCount, updatedCount, cancelledCount, skippedCount } = run;
+  if (!createdCount && !updatedCount && !cancelledCount && !skippedCount) return "飞书同步本轮未收到可处理的新邮件；这不表示原有订单已被删除。订单列表已刷新。";
+  return `飞书同步完成：新增 ${createdCount} 笔，更新 ${updatedCount} 笔，取消 ${cancelledCount} 笔，跳过 ${skippedCount} 笔。订单列表已刷新。`;
+}
 function missingDriverFields(order: Order) {
   const driver = order.driverDetail;
   if (!driver) return ["司机资料"];
@@ -58,6 +63,7 @@ export function OrderDashboard() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [syncingMail, setSyncingMail] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [iwayPreview, setIwayPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion?: string } | null>(null);
   const [iwayBusy, setIwayBusy] = useState(false);
@@ -84,14 +90,22 @@ export function OrderDashboard() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetch(`/api/orders?${query}`, { cache: "no-store" }).then((response) => response.json())
-      .then((orderResponse) => {
+    setLoadError("");
+    void (async () => {
+      try {
+        const response = await fetch(`/api/orders?${query}`, { cache: "no-store" });
+        const orderResponse = await response.json().catch(() => null);
+        if (!response.ok || !Array.isArray(orderResponse?.data)) throw new Error(orderResponse?.error?.message || "订单读取失败，请重试。");
         if (!active) return;
-        const nextOrders = orderResponse.data || [];
-        setOrders(nextOrders);
-        setSummary(summaryFor(nextOrders));
+        setOrders(orderResponse.data);
+        setSummary(summaryFor(orderResponse.data));
         setLastRefreshedAt(new Date());
-      }).finally(() => active && setLoading(false));
+      } catch (error) {
+        if (!active) return;
+        setOrders([]); setSummary(null);
+        setLoadError(error instanceof Error ? error.message : "订单读取失败，请重试。");
+      } finally { if (active) setLoading(false); }
+    })();
     return () => { active = false; };
   }, [query, refreshVersion]);
   async function syncMailAndRefresh() {
@@ -113,7 +127,7 @@ export function OrderDashboard() {
           if (!run || run.status === "RUNNING" || Number.isNaN(completedAt) || completedAt < requestedAt) continue;
           if (run.status === "FAILED") throw new Error(displaySyncFailure(run.errorMessage || ""));
           setRefreshVersion((version) => version + 1);
-          setSyncMessage(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔，取消 ${run.cancelledCount} 笔，跳过 ${run.skippedCount} 笔。订单列表已刷新。`);
+          setSyncMessage(displaySyncSummary(run));
           return;
         }
         setSyncMessage("本机同步助手尚未完成下一轮。请保持这台电脑唤醒；它会继续自动同步，不需要再次点击按钮。");
@@ -125,7 +139,7 @@ export function OrderDashboard() {
       }
       const result = payload.data;
       setRefreshVersion((version) => version + 1);
-      setSyncMessage(`飞书同步完成：新增 ${result.created} 笔，更新 ${result.updated} 笔，取消 ${result.cancelled} 笔，跳过 ${result.skipped} 笔。订单列表已刷新。`);
+      setSyncMessage(displaySyncSummary({ createdCount: result.created, updatedCount: result.updated, cancelledCount: result.cancelled, skippedCount: result.skipped }));
     } catch (error) {
       setSyncMessage(error instanceof Error ? displaySyncFailure(error.message) : "飞书同步失败，请稍后重试。");
     } finally {
@@ -142,6 +156,7 @@ export function OrderDashboard() {
       <Metric value={summary?.waitingFleetReply} label="等待车队回复"/><Metric value={summary?.incompleteDriver} label="司机资料需补充"/><Metric value={summary?.readyIwayReturn} label="可回传 i’way"/><Metric value={summary?.exceptions} label="异常订单"/>
     </section>
     <section className="v3-card">
+      {loadError && <p className="inline-notice error" role="alert">订单未能读取：{loadError}<button type="button" className="v3-secondary" onClick={() => setRefreshVersion((version) => version + 1)}>重试</button></p>}
       <button className="v3-mobile-filter-toggle" type="button" aria-expanded={mobileFiltersOpen} onClick={() => setMobileFiltersOpen((open) => !open)}>
         {mobileFiltersOpen ? "收起筛选" : "筛选订单"}
       </button>
