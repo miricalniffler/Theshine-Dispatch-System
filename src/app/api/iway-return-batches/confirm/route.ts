@@ -1,4 +1,4 @@
 import { failure, success } from "@/lib/api-response";
 import { confirmIwayReturn } from "@/features/iway/service";
 import { NextRequest } from "next/server";
-export async function POST(request: NextRequest) { const body = await request.json(); if (!body.batchId) return failure("INVALID_REQUEST", "缺少回传批次。", undefined, 422); try { return success(await confirmIwayReturn(body.batchId)); } catch { return failure("BATCH_NOT_FOUND", "未找到该回传批次，请重新生成。", undefined, 404); } }
+export async function POST(request: NextRequest) { const body = await request.json(); if (!body.batchId) return failure("INVALID_REQUEST", "缺少回传批次。", undefined, 422); try { return success(await confirmIwayReturn(body.batchId)); } catch (error) { const code = error instanceof Error ? error.message : ""; if (code === "BATCH_NOT_FOUND") return failure(code, "未找到该回传批次，请重新生成。", undefined, 404); if (code === "BATCH_ALREADY_CONFIRMED") return failure(code, "该批次已确认，不能重复提交。", undefined, 409); if (code === "CANCELLED_ORDER_IN_BATCH") return failure(code, "批次中有订单已取消或状态已变化，未完成回传。请重新生成。", undefined, 409); return failure("IWAY_RETURN_CONFIRM_FAILED", "确认回传失败，请刷新后重试。", undefined, 500); } }

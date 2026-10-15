@@ -78,12 +78,65 @@ model DriverDetail {
   normalizedDriverPhone String?
   confirmedVehicleModel String?
   licensePlate          String?
+  // 姓名是人工确认、截图转写还是系统临时生成，不能混为一谈。
+  driverNameSource      String?
+  driverNameSourceDetail String?
   rawReply              String?
   confirmedAt           DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+// 车辆档案只服务于司机资料核对。它不参与订单、派单或 i'way 的主业务写入。
+// 同一车辆可以关联多位司机，历史记录保留冲突和人工确认的来由。
+model VehicleArchive {
+  id              String   @id @default(cuid())
+  normalizedPlate String   @unique
+  rawPlate        String
+  brand           String?
+  model           String?
+  vehicleClass    String?
+  confirmationStatus String @default("SUGGESTED")
+  source          String
+  confirmedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  drivers VehicleArchiveDriver[]
+  history VehicleArchiveHistory[]
+
+  @@index([confirmationStatus, updatedAt])
+}
+
+model VehicleArchiveDriver {
+  id               String   @id @default(cuid())
+  vehicleArchiveId String
+  driverName       String?
+  normalizedPhone  String?
+  source           String
+  isConfirmed      Boolean  @default(false)
+  firstSeenAt      DateTime @default(now())
+  lastSeenAt       DateTime @default(now())
+
+  vehicle VehicleArchive @relation(fields: [vehicleArchiveId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleArchiveId, lastSeenAt])
+  @@index([normalizedPhone])
+}
+
+model VehicleArchiveHistory {
+  id               String   @id @default(cuid())
+  vehicleArchiveId String
+  action           String
+  source           String
+  snapshot         String?
+  createdAt        DateTime @default(now())
+
+  vehicle VehicleArchive @relation(fields: [vehicleArchiveId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleArchiveId, createdAt])
 }
 
 model DispatchBatch {

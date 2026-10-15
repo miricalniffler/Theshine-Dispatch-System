@@ -53,7 +53,7 @@ function bangkokDateRange(filters: OrderFilters) {
   if (filters.dateMode === "window") return { gte: today, lte: offsetDate(7) };
   if (filters.dateMode === "today") return { equals: today };
   if (filters.dateMode === "tomorrow") return { equals: offsetDate(1) };
-  if (filters.dateMode === "future") return { gt: today };
+  if (filters.dateMode === "future") return { gte: today };
   if (filters.dateMode === "month") return { startsWith: today.slice(0, 7) };
   if (filters.dateMode === "range") return { ...(filters.startDate ? { gte: filters.startDate } : {}), ...(filters.endDate ? { lte: filters.endDate } : {}) };
   return undefined;
@@ -61,7 +61,10 @@ function bangkokDateRange(filters: OrderFilters) {
 
 export async function listSqliteOrders(filters: OrderFilters = {}) {
   const keyword = filters.keyword?.trim();
-  const dateRange = bangkokDateRange(filters);
+  // Searching a known order number is a recovery path as well as a filter:
+  // do not hide a historical order merely because the workbench is currently
+  // showing upcoming dates. The normal unsearched dashboard remains bounded.
+  const dateRange = keyword ? undefined : bangkokDateRange(filters);
   const where: Prisma.OrderWhereInput = {
     ...(dateRange ? { serviceDate: dateRange } : {}),
     ...(filters.city ? { city: filters.city } : {}),
@@ -81,7 +84,10 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
   // The dashboard used to load every historical order and filter it in the
   // browser.  Let PostgreSQL apply the selected conditions before data leaves
   // the server, so the page remains quick as order history grows.
-  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } } }, orderBy: { pickupDateTime: "asc" } });
+  // Deliberately select only the long-established driver columns used by the
+  // dashboard. A newly deployed optional DriverDetail column must not make
+  // every legacy order invisible before its additive migration is applied.
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: { select: { confirmedDriverName: true, normalizedDriverPhone: true, confirmedVehicleModel: true, licensePlate: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } } }, orderBy: { pickupDateTime: "asc" } });
   return rows
     .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null }));
 }
