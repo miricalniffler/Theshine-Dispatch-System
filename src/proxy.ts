@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isolatedPreviewValue } from "@/lib/isolated-preview";
 
 const publicPaths = ["/login", "/api/access/login", "/api/access/logout"];
 
@@ -7,7 +8,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const accessToken = process.env.TEAM_ACCESS_TOKEN;
+  const accessToken = isolatedPreviewValue("TEAM_ACCESS_TOKEN");
   // Missing configuration must protect the application, rather than making
   // an absent cookie compare equal to an absent environment variable.
   if (!accessToken || request.cookies.get("iway-team-access")?.value !== accessToken) {

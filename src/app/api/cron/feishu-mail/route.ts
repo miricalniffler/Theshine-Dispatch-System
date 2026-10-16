@@ -1,10 +1,11 @@
 import { runFeishuMailSync } from "@/features/import/feishu-sync";
 import { failure, success } from "@/lib/api-response";
 import { NextRequest } from "next/server";
+import { isIsolatedPreview } from "@/lib/isolated-preview";
 
 export const dynamic = "force-dynamic";
 
-function enabled() { return process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1"; }
+function enabled() { return !isIsolatedPreview && (process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1"); }
 
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
