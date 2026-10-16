@@ -43,7 +43,9 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
     const body = { ...form, fleetId: form.fleetId || null, seatCount: form.seatCount === "" ? null : Number(form.seatCount), adults: Number(form.adults), children: Number(form.children), luggage: Number(form.luggage) };
     const response = await fetch(`/api/orders/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); const data = await readResponse(response); setSaving(false);
     if (!response.ok) { setError(data.error?.message ?? "保存失败，请稍后重试。"); return; }
-    setMessage(data.updatedFields?.length ? "已保存订单信息，并记录本次修改。" : "没有需要保存的修改。"); await refresh(id);
+    // API responses wrap their payload in `data`. Reading the top-level field
+    // made a successful edit look like a no-op to operators.
+    setMessage(data.data?.updatedFields?.length ? "已保存订单信息，并记录本次修改。" : "没有需要保存的修改。"); await refresh(id);
   };
   async function submitLifecycle(action: "cancel" | "notes") {
     if (!id) return;

@@ -6,8 +6,11 @@ const enabled = process.env.RUN_CORE_E2E === "true";
 const token = process.env.E2E_TEAM_ACCESS_TOKEN;
 const baseUrl = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:3100";
 const suffix = `${Date.now()}`;
-const orderA = `E2E-${suffix}-A`;
-const orderB = `E2E-${suffix}-B`;
+// The fleet-reply matcher normalizes an order number to its digits. Keep the
+// two orders numerically distinct as well as textually distinct, otherwise a
+// realistic same-day reply can be matched to the wrong test order.
+const orderA = `E2E-${suffix}1-A`;
+const orderB = `E2E-${suffix}2-B`;
 
 function tomorrowBangkok() {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric" }).formatToParts(new Date());
@@ -35,6 +38,10 @@ test.describe("隔离数据库的核心订单业务流程", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ context }) => {
+    // This suite writes lifecycle state and the later checks depend on the
+    // preceding order. Run it in exactly one browser project, rather than
+    // letting five configured device projects race over one disposable DB.
+    test.skip(test.info().project.name !== "desktop-chrome", "写入隔离数据库的验收仅使用一个浏览器项目");
     await context.addCookies([{ name: "iway-team-access", value: token!, url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
   });
 
@@ -63,14 +70,17 @@ test.describe("隔离数据库的核心订单业务流程", () => {
     await page.getByRole("button", { name: "保存订单" }).click();
     await expect(page.getByText("已保存订单信息", { exact: false })).toBeVisible();
     await page.getByLabel("异常备注").fill("E2E 异常备注需保留");
+    await expect(page.getByRole("button", { name: "保存异常备注" })).toBeEnabled();
     await page.getByRole("button", { name: "保存异常备注" }).click();
+    await expect(page.getByText("异常备注已保存到操作记录。")).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: "查看操作记录" }).click();
     await expect(page.getByText("E2E 异常备注需保留")).toBeVisible();
     await page.getByLabel("取消原因").fill("E2E 取消验证");
+    await expect(page.getByRole("button", { name: "确认取消订单" })).toBeEnabled();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "确认取消订单" }).click();
-    await expect(page.getByText("订单已取消", { exact: false })).toBeVisible();
+    await expect(page.getByText("订单已取消，历史记录已保留。", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存订单" })).toBeDisabled();
   });
 
@@ -78,9 +88,10 @@ test.describe("隔离数据库的核心订单业务流程", () => {
     await importOrder(page, orderB, "E2E Passenger B");
     await page.goto("/orders");
     await page.getByLabel("关键词").fill(orderB);
-    await expect(page.getByLabel(`选择 ${orderB}`)).toBeVisible();
+    const orderBSelection = page.getByRole("checkbox", { name: `选择 ${orderB}` }).first();
+    await expect(orderBSelection).toBeVisible();
     const detailHref = await page.getByRole("link", { name: orderB }).getAttribute("href");
-    await page.getByLabel(`选择 ${orderB}`).check();
+    await orderBSelection.check();
     await page.getByRole("button", { name: "批量生成车队派单" }).click();
     await expect(page.getByRole("button", { name: "复制派单文本" })).toBeVisible();
     await page.getByRole("button", { name: "复制派单文本" }).click();
@@ -89,26 +100,23 @@ test.describe("隔离数据库的核心订单业务流程", () => {
     await expect(page.getByRole("button", { name: "已确认派单" })).toBeVisible();
     await page.goto("/driver-details");
     await expect(page.getByText(orderB)).toBeVisible();
-    await page.getByLabel("司机姓名").fill("E2E Driver");
-    await page.getByLabel("司机电话").fill("0812345678");
-    await page.getByLabel("确认车型").fill("Toyota Commuter");
-    await page.getByLabel("车牌号").fill("1กข 2345");
-    await page.getByRole("button", { name: "保存并校验" }).click();
-    await expect(page.getByText("资料完整，订单已进入待回传。")).toBeVisible();
-    await page.goto("/iway-return");
-    await page.getByLabel(`选择 ${orderB}`).check();
-    await page.getByRole("button", { name: "生成所选订单预览" }).click();
-    await expect(page.getByText("i’way 正确格式")).toBeVisible();
-    await page.getByRole("button", { name: "复制回传内容" }).click();
-    await expect(page.getByRole("button", { name: "我已在 i’way 发送，确认回传" })).toBeEnabled();
+    await page.getByLabel("车队原始回复（完整保留）").fill(`Order Number: ${orderB}\nMeet & Greet\nDriver Name: E2E Driver\nPhone: 0812345678\nVehicle Model: Toyota Commuter\nPlate: 1กข 2345`);
+    await page.getByLabel("车队规则").selectOption("BANGKOK");
+    await page.getByRole("button", { name: /整理并匹配/ }).click();
+    await expect(page.getByText("已自动保存并生成 1 笔 i’way 回传内容。")).toBeVisible();
+    await expect(page.getByText("司机：E2E Driver").first()).toBeVisible();
+    await page.getByRole("button", { name: "复制全部" }).click();
+    await expect(page.getByText("回传内容已复制，可直接粘贴至 i’way。是否标记为已回传由你自行决定。")).toBeVisible();
+    await expect(page.getByRole("button", { name: "标记为已回传" })).toBeEnabled();
 
     const cancelPage = await context.newPage();
     await cancelPage.goto(detailHref!);
     await cancelPage.getByLabel("取消原因").fill("E2E 回传批次并发取消");
+    await expect(cancelPage.getByRole("button", { name: "确认取消订单" })).toBeEnabled();
     cancelPage.once("dialog", (dialog) => dialog.accept());
     await cancelPage.getByRole("button", { name: "确认取消订单" }).click();
-    await expect(cancelPage.getByText("订单已取消", { exact: false })).toBeVisible();
-    await page.getByRole("button", { name: "我已在 i’way 发送，确认回传" }).click();
+    await expect(cancelPage.getByText("订单已取消，历史记录已保留。", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "标记为已回传" }).click();
     await expect(page.getByText("批次中有订单已取消或状态已变化，未完成回传。请重新生成。")).toBeVisible();
     await cancelPage.close();
   });
@@ -120,6 +128,6 @@ test.describe("隔离数据库的核心订单业务流程", () => {
     expect(payload.data.syncMode).toBe("local-scheduled");
     await page.goto("/orders");
     await page.getByLabel("关键词").fill(orderA);
-    await expect(page.getByText(orderA)).toBeVisible();
+    await expect(page.getByRole("link", { name: orderA }).first()).toBeVisible();
   });
 });
