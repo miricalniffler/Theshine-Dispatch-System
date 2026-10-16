@@ -37,6 +37,7 @@ function fileToDataUrl(file: File) {
 
 export function ManualOrderImport() {
   const fileInput = useRef<HTMLInputElement>(null);
+  const textInput = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
   const [imagePreview, setImagePreview] = useState("");
   const [fields, setFields] = useState<Fields | null>(null);
@@ -67,9 +68,14 @@ export function ManualOrderImport() {
   }
 
   async function parseOrder() {
+    // Some embedded/mobile browsers update a textarea before React's change
+    // event reaches the component. Read the current control as a safe fallback
+    // so a valid pasted order is never left behind a disabled action.
+    const sourceText = text.trim() || textInput.current?.value.trim() || "";
+    if (!sourceText) { setNotice({ tone: "error", text: "请先粘贴订单原文。" }); return; }
     setWorking("parse"); setNotice(null);
     try {
-      const response = await fetch("/api/orders/import/parse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, sourceType: "manual", confirmedSource: true }) });
+      const response = await fetch("/api/orders/import/parse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: sourceText, sourceType: "manual", confirmedSource: true }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "订单字段识别失败。");
       const parsedBatch = Array.isArray(payload.data.orders) ? payload.data.orders.map((item: { fields: Fields }) => item.fields) : [payload.data.fields];
@@ -120,11 +126,11 @@ export function ManualOrderImport() {
     <ol className="import-steps"><li className="active">1. 提供订单</li><li className={fields ? "active" : ""}>2. 核对字段</li><li>3. 保存订单</li></ol>
     {notice && <p className={`import-note ${notice.tone}`}>{notice.text}</p>}
     {!fields && <section className="import-source">
-      <label>订单原文<textarea value={text} autoCapitalize="none" onChange={(event) => setText(event.target.value)} onPaste={(event) => { const pasted = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (pasted) { event.preventDefault(); void chooseImage(pasted); } }} placeholder="直接粘贴整封 i’way / esforty 订单文字；也可以在此处粘贴订单截图。" /></label>
+      <label>订单原文<textarea ref={textInput} value={text} autoCapitalize="none" onChange={(event) => setText(event.currentTarget.value)} onInput={(event) => setText(event.currentTarget.value)} onPaste={(event) => { const pasted = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (pasted) { event.preventDefault(); void chooseImage(pasted); } }} placeholder="直接粘贴整封 i’way / esforty 订单文字；也可以在此处粘贴订单截图。" /></label>
       <div className="manual-image-actions"><button type="button" className="v3-secondary" onClick={() => fileInput.current?.click()}>上传订单截图</button><input ref={fileInput} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseImage(event.currentTarget.files?.[0])}/>{imagePreview && <button type="button" className="v3-primary" onClick={scanImage} disabled={working !== null}>{working === "scan" ? "正在识别截图…" : "识别这张订单截图"}</button>}</div>
       {imagePreview && <div className="manual-image-preview"><img src={imagePreview} alt="待识别的订单截图"/><button type="button" onClick={() => setImagePreview("")}>删除截图</button></div>}
       <p>截图只用于本次文字转写，不会作为订单资料保存。AI 不会补猜看不清的信息。</p>
-      <footer><a className="v3-secondary" href="/orders">取消并返回工作台</a><button className="v3-secondary" type="button" onClick={startDirectEntry} disabled={working !== null}>直接填写订单</button><button className="v3-primary" type="button" onClick={parseOrder} disabled={working !== null || !text.trim()}>{working === "parse" ? "正在整理字段…" : "识别订单字段"}</button></footer>
+      <footer><a className="v3-secondary" href="/orders">取消并返回工作台</a><button className="v3-secondary" type="button" onClick={startDirectEntry} disabled={working !== null}>直接填写订单</button><button className="v3-primary" type="button" onClick={parseOrder} disabled={working !== null}>{working === "parse" ? "正在整理字段…" : "识别订单字段"}</button></footer>
     </section>}
     {fields && <section className="import-review"><div><h3>核对订单字段</h3>{batch.length > 1 && <div className="import-batch-nav"><b>本次识别到 {batch.length} 笔订单</b><div>{batch.map((item, index) => <button type="button" className={index === batchIndex ? "v3-primary" : "v3-secondary"} key={item.platformOrderNumber as string || index} onClick={() => selectBatchOrder(index)}>{index + 1} · {String(item.platformOrderNumber || "待补订单号")}</button>)}</div></div>}{Object.entries(fields).filter(([key]) => key !== "cityDetection").map(([key, value]) => key === "city" ? <label key={key}>服务城市<select value={String(value ?? "")} onChange={(event) => updateField("city", event.target.value)}><option value="">请选择服务城市</option><option value="曼谷">曼谷</option><option value="苏梅">苏梅</option></select></label> : <label key={key}>{fieldLabels[key] || key}<input type={key === "pickupDateTime" ? "datetime-local" : "text"} value={String(value ?? "")} onChange={(event) => updateField(key, event.target.value)}/></label>)}</div><div><h3>{text ? "订单原文" : "直接填写模式"}</h3>{text ? <><pre>{text}</pre><p>紧凑列表会按订单号自动拆分；你可以逐笔修改字段后一次保存。</p></> : <p>请至少填入订单号、接客时间和服务城市；其余信息可先留空，订单会作为待核对保存。</p>}</div><footer><button className="v3-secondary" type="button" onClick={() => { setFields(null); setBatch([]); setSource(null); }}>返回修改</button><button className="v3-primary" type="button" onClick={saveOrder} disabled={working !== null || (batch.length <= 1 && duplicates.exact.length > 0)}>{duplicates.exact.length && batch.length <= 1 ? "订单号已存在" : working === "save" ? "正在保存…" : batch.length > 1 ? `确认并保存 ${batch.length} 笔订单` : "确认并保存订单"}</button></footer></section>}
   </section></main>;

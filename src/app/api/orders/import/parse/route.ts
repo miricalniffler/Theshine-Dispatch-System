@@ -9,7 +9,7 @@ function pick(text: string, label: string) {
 }
 
 function normaliseOrderNumber(value: string) {
-  return value.replace(/^#/, "").replace(/\s/g, "");
+  return value.replace(/^\s*#?\s*/, "").replace(/[\s\u00a0-]/g, "");
 }
 
 function numberFrom(value: string) {
@@ -112,7 +112,9 @@ function parseStandardOrder(text: string) {
 type ParsedFields = ReturnType<typeof parseStandardOrder>;
 
 function compactOrderStarts(text: string) {
-  return [...text.matchAll(/^\s*\d{1,2}(?:[\s\u00a0]+\d{3}){2}\s*$/gm)].map((match) => match.index ?? 0);
+  // esforty exports use grouped order numbers, but the leading group varies
+  // in length and users often paste non-breaking spaces or dashes.
+  return [...text.matchAll(/^\s*#?\s*\d{1,3}(?:[\s\u00a0-]+\d{3}){1,3}\s*$/gm)].map((match) => match.index ?? 0);
 }
 
 function compactDateTime(value: string) {
@@ -125,7 +127,7 @@ function compactDateTime(value: string) {
 // 后面依次是电话、乘客、日期时间、平台车型、接人点、航班、送人点。
 function parseCompactEsfortyOrder(block: string): ParsedFields | null {
   const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const orderIndex = lines.findIndex((line) => /^\d{1,2}(?:[\s\u00a0]+\d{3}){2}$/.test(line));
+  const orderIndex = lines.findIndex((line) => /^#?\s*\d{1,3}(?:[\s\u00a0-]+\d{3}){1,3}$/.test(line));
   if (orderIndex < 0) return null;
   const orderNo = normaliseOrderNumber(lines[orderIndex]);
   const timeIndex = lines.findIndex((line) => /\d{1,2}[./-]\d{1,2}[./-]20\d{2}\s+\d{1,2}:\d{2}/.test(line));
@@ -138,7 +140,7 @@ function parseCompactEsfortyOrder(block: string): ParsedFields | null {
   const adults = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
 
   const afterTime = lines.slice(timeIndex + 1);
-  const vehicleIndex = afterTime.findIndex((line) => /^(?:economy|standard|comfort|business|premium|suv|minivan|minibus)$/i.test(line));
+  const vehicleIndex = afterTime.findIndex((line) => /^(?:e(?:conomy)?|s(?:tandard)?|c(?:omfort)?|b(?:usiness)?|premium|suv|minivan|minibus|van|sedan)(?:\s*(?:plus|\+))?$/i.test(line));
   const vehicleType = vehicleIndex >= 0 ? afterTime[vehicleIndex] : "";
   const afterVehicle = vehicleIndex >= 0 ? afterTime.slice(vehicleIndex + 1) : afterTime;
   const flightIndex = afterVehicle.findIndex((line) => /^flight\s*(?:number)?\s*:/i.test(line));

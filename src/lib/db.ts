@@ -1,4 +1,14 @@
 import { PrismaClient } from "@prisma/client";
+import { isIsolatedPreview } from "@/lib/isolated-preview";
+
+// The cloud acceptance Preview receives a separately prefixed Neon
+// connection. Keep this opt-in: ordinary Preview and Production deployments
+// continue using their own DATABASE_URL, while the isolated PR environment
+// cannot accidentally reach an existing business database.
+if (isIsolatedPreview) {
+  process.env.DATABASE_URL = process.env.PR12_TEST_DATABASE_URL;
+  if (process.env.PR12_TEST_DATABASE_URL_UNPOOLED) process.env.DIRECT_URL = process.env.PR12_TEST_DATABASE_URL_UNPOOLED;
+}
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 export const db = globalForPrisma.prisma ?? new PrismaClient();

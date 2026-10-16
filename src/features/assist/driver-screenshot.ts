@@ -1,4 +1,5 @@
 import { qwenJson, isQwenConfigured, type QwenContent } from "./qwen";
+import { isIsolatedPreview } from "@/lib/isolated-preview";
 
 export type ScreenshotNameSource = "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND";
 export type DriverScreenshotResult = {
@@ -46,7 +47,7 @@ function normalize(raw: Record<string, unknown>, provider: DriverScreenshotResul
 const prompt = "从这张泰语或中泰混合的接送机订单/车队截图提取结构化资料。只能依据画面，不得猜测。JSON 字段：order_number,pickup_time,route,passenger_name,passenger_count,luggage,driver_name,driver_name_source,driver_phone,license_plate,vehicle_model。未见字段填 null。driver_name_source 仅可为 IMAGE_TRANSLITERATED（画面有泰语司机名且转为英文）或 NOT_FOUND。";
 
 async function glmJson(imageUrl: string) {
-  const apiKey = process.env.ZHIPU_API_KEY;
+  const apiKey = isIsolatedPreview ? undefined : process.env.ZHIPU_API_KEY;
   if (!apiKey) throw new Error("GLM_NOT_CONFIGURED");
   const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },

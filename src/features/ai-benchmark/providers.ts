@@ -1,10 +1,11 @@
 import { type BenchmarkProvider, type ResolvedSelection } from "@/features/ai-benchmark/catalog";
+import { isIsolatedPreview } from "@/lib/isolated-preview";
 
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 export type ProviderResult = { provider: BenchmarkProvider; model: string; region?: string; status: "ok" | "error" | "unconfigured"; text?: string; error?: string; errorCode?: string; elapsedMs: number; usage?: Usage; diagnostic?: string };
 
 const endpoints = { qwen: { "cn-beijing": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "ap-southeast-1": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions" }, deepseek: "https://api.deepseek.com/chat/completions", glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions" } as const;
-function apiKey(provider: BenchmarkProvider) { return provider === "qwen" ? process.env.DASHSCOPE_API_KEY : provider === "deepseek" ? process.env.DEEPSEEK_API_KEY : process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY; }
+function apiKey(provider: BenchmarkProvider) { if (isIsolatedPreview) return undefined; return provider === "qwen" ? process.env.DASHSCOPE_API_KEY : provider === "deepseek" ? process.env.DEEPSEEK_API_KEY : process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY; }
 function endpoint(selection: ResolvedSelection) { return selection.provider === "qwen" ? endpoints.qwen[selection.region as keyof typeof endpoints.qwen] : endpoints[selection.provider]; }
 function friendlyHttpError(status: number) {
   if (status === 400 || status === 422) return { code: "PARAMETER_INCOMPATIBLE", message: "调用参数与该模型不兼容。请切换已验证型号或查看供应商文档。" };

@@ -1,3 +1,5 @@
+import { isIsolatedPreview } from "@/lib/isolated-preview";
+
 export type ImportConnectorId = "feishu-mail" | "esforty";
 
 export type ConnectorStatus = {
@@ -30,6 +32,7 @@ function truthy(value: string | undefined) {
 }
 
 function connectorConfig(id: ImportConnectorId): ConnectorConfig {
+  if (isIsolatedPreview) return { id, label: id === "feishu-mail" ? "飞书邮件" : "esforty", enabled: false, setupHint: "隔离测试环境已禁用外部订单同步。" };
   if (id === "feishu-mail") {
     return {
       id,

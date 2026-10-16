@@ -13,6 +13,11 @@ export type Order = {
   route: string;
   vehicleType: string;
   status: OrderStatus;
+  cancelReason?: string | null;
+  cancelledAt?: string | null;
+  restoreBlockedReason?: string | null;
+  latestExceptionNote?: string | null;
+  latestExceptionAt?: string | null;
   exceptions: OrderException[];
   createdAt: string;
   driverDetail?: {

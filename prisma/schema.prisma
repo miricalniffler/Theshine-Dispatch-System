@@ -240,6 +240,10 @@ model IwayReturnBatch {
   contentSnapshot String
   copiedAt        DateTime?
   confirmedAt     DateTime?
+  // A lifecycle change makes a copied preview stale. Keep the batch and its
+  // snapshot for audit, but never permit it to be confirmed later.
+  invalidatedAt   DateTime?
+  invalidatedReason String?
   createdAt       DateTime  @default(now())
 
   orders IwayReturnBatchOrder[]

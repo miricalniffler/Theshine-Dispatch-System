@@ -1,41 +1,35 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { Order } from "./types";
 import "./order-detail-drawer.css";
 
-type DetailedOrder = Record<string, unknown>;
-type DriverDetail = { confirmedDriverName?: string | null; normalizedDriverPhone?: string | null; confirmedVehicleModel?: string | null; licensePlate?: string | null };
+type Detail = Record<string, any>;
+export type DrawerAction = "edit" | "note" | "cancel";
 
-export function OrderDetailDrawer({ order, onClose, onDispatch }: { order: Order | null; onClose: () => void; onDispatch?: (order: Order) => void }) {
-  const [detail, setDetail] = useState<DetailedOrder | null>(null);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!order) { setDetail(null); return; }
-    setLoading(true); setDetail(null);
-    fetch(`/api/orders/${order.id}`, { cache: "no-store" }).then((response) => response.json()).then((json) => setDetail(json.data ?? null)).finally(() => setLoading(false));
-  }, [order]);
-  if (!order) return null;
-  const field = (key: string) => String(detail?.[key] ?? "待核对");
-  const driver = detail?.driverDetail as DriverDetail | null | undefined;
-  const phone = field("passengerPhone");
-  const pickupAddress = field("pickupAddress");
-  const dropoffAddress = field("dropoffAddress");
-  return <div className="order-drawer-overlay" role="presentation" onMouseDown={onClose}>
-    <aside className="order-drawer" role="dialog" aria-modal="true" aria-label="订单详情侧边栏" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><p>订单详情</p><h2>{order.orderNo}</h2></div><button type="button" aria-label="关闭订单详情" onClick={onClose}>×</button></header>
-      {loading ? <p className="order-drawer-loading">正在读取订单信息…</p> : <div className="order-drawer-body">
-        <section><h3>乘客与服务</h3><Row label="乘客" value={field("passengerName")} /><Row label="电话" value={phone} href={phone === "待核对" ? undefined : `tel:${phone.replace(/[^+\d]/g, "")}`} linkLabel="拨打" /><Row label="服务时间" value={detail?.pickupDateTime ? new Date(String(detail.pickupDateTime)).toLocaleString("zh-CN", { timeZone: "Asia/Bangkok" }) : `${order.serviceDate} ${order.pickupTime}`} /><Row label="城市" value={field("city")} /></section>
-        <section><h3>行程与车型</h3><Row label="上车地点" value={pickupAddress} href={pickupAddress === "待核对" ? undefined : `https://maps.apple.com/?q=${encodeURIComponent(pickupAddress)}`} linkLabel="地图" /><Row label="下车地点" value={dropoffAddress} href={dropoffAddress === "待核对" ? undefined : `https://maps.apple.com/?q=${encodeURIComponent(dropoffAddress)}`} linkLabel="地图" /><Row label="航班号" value={field("flightNumber")} /><Row label="平台车型" value={field("platformVehicleType")} /></section>
-        <section><h3>车队</h3><Row label="派送车队" value={order.fleetName} /></section>
-        {driver && <section><h3>司机和车辆信息</h3><Row label="司机姓名" value={driver.confirmedDriverName || "待核对"} /><Row label="司机电话" value={driver.normalizedDriverPhone || "待核对"} href={driver.normalizedDriverPhone ? `tel:${driver.normalizedDriverPhone.replace(/[^+\d]/g, "")}` : undefined} linkLabel="拨打" /><Row label="具体车型" value={driver.confirmedVehicleModel || "待核对"} /><Row label="车牌号" value={driver.licensePlate || "待核对"} /></section>}
-      </div>}
-      <footer>{onDispatch && <button type="button" className="order-drawer-dispatch" onClick={() => onDispatch(order)}>生成单笔派单</button>}<Link href={`/orders/${order.id}`}>打开完整订单并编辑</Link></footer>
-    </aside>
-  </div>;
+function localDateTime(value?: string) {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(value));
+  const valueOf = (type: string) => parts.find((item) => item.type === type)?.value ?? "00";
+  return `${valueOf("year")}-${valueOf("month")}-${valueOf("day")}T${valueOf("hour")}:${valueOf("minute")}`;
 }
-function Row({ label, value, href, linkLabel }: { label: string; value: string; href?: string; linkLabel?: string }) {
-  const displayValue = value === "null" ? "—" : value;
-  return <dl><dt>{label}</dt><dd><span>{displayValue}</span>{href && <a href={href} target={href.startsWith("http") ? "_blank" : undefined} rel={href.startsWith("http") ? "noreferrer" : undefined}>{linkLabel}</a>}</dd></dl>;
+function formValues(order: Detail) {
+  const adults = Number(order.adults ?? 0); const children = Number(order.children ?? 0);
+  return { platformOrderNumber: order.platformOrderNumber ?? "", city: order.city ?? "曼谷", pickupDateTime: localDateTime(order.pickupDateTime), pickupAddress: order.pickupAddress ?? "", dropoffAddress: order.dropoffAddress ?? "", passengerName: order.passengerName ?? "", passengerPhone: order.passengerPhone ?? "", flightNumber: order.flightNumber ?? "", platformVehicleType: order.platformVehicleType ?? "", seatCount: order.seatCount ?? "", adults, children, luggage: order.luggage ?? adults + children, childSeatLine: order.childSeatLine ?? "", meetGreetLine: order.meetGreetLine ?? "", otherNotes: order.otherNotes ?? "" };
+}
+
+export function OrderDetailDrawer({ order, onClose, onDispatch, onRestore, onChanged, initialAction = "edit" }: { order: Order | null; onClose: () => void; onDispatch?: (order: Order) => void; onRestore?: (order: Order) => void; onChanged?: () => void; initialAction?: DrawerAction }) {
+  const [detail, setDetail] = useState<Detail | null>(null); const [form, setForm] = useState<Record<string, any>>({});
+  const [action, setAction] = useState<DrawerAction>(initialAction); const [note, setNote] = useState(""); const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [message, setMessage] = useState("");
+  const load = async () => { if (!order) return; setLoading(true); setError(""); try { const response = await fetch(`/api/orders/${order.id}`, { cache: "no-store" }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "订单读取失败"); setDetail(payload.data); setForm(formValues(payload.data)); } catch (value) { setError(value instanceof Error ? value.message : "订单读取失败"); } finally { setLoading(false); } };
+  useEffect(() => { setAction(initialAction); setNote(""); setReason(""); setMessage(""); void load(); }, [order?.id, initialAction]);
+  if (!order) return null;
+  const orderId = order.id;
+  const isCancelled = detail?.status === "CANCELLED" || order.status === "CANCELLED";
+  const change = (key: string, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
+  async function save() { setBusy(true); setError(""); try { const body = { ...form, fleetId: null, seatCount: form.seatCount === "" ? null : Number(form.seatCount), adults: Number(form.adults), children: Number(form.children), luggage: Number(form.luggage) }; const response = await fetch(`/api/orders/${orderId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "保存失败"); setMessage("订单修改已保存。"); onChanged?.(); await load(); } catch (value) { setError(value instanceof Error ? value.message : "保存失败"); } finally { setBusy(false); } }
+  async function addNote() { if (!note.trim()) return; setBusy(true); setError(""); try { const response = await fetch(`/api/orders/${orderId}/notes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }) }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "备注保存失败"); setNote(""); setMessage("异常备注已保存。"); onChanged?.(); } catch (value) { setError(value instanceof Error ? value.message : "备注保存失败"); } finally { setBusy(false); } }
+  async function cancel() { if (!reason.trim() || !window.confirm("确认取消此订单？订单、司机资料、备注和历史都会保留。")) return; setBusy(true); setError(""); try { const response = await fetch(`/api/orders/${orderId}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error?.message || "取消失败"); setMessage("订单已取消，历史记录已保留。"); onChanged?.(); await load(); } catch (value) { setError(value instanceof Error ? value.message : "取消失败"); } finally { setBusy(false); } }
+  return <div className="order-drawer-overlay" role="presentation" onMouseDown={onClose}><aside className="order-drawer" role="dialog" aria-modal="true" aria-label="可编辑订单详情" onMouseDown={(event) => event.stopPropagation()}><header><div><p>订单详情 · 首页直接操作</p><h2>{order.orderNo}</h2></div><button type="button" aria-label="关闭订单详情" onClick={onClose}>×</button></header>{loading ? <p className="order-drawer-loading">正在读取订单信息…</p> : <div className="order-drawer-body">{error && <p className="order-drawer-error" role="alert">{error}</p>}{message && <p className="order-drawer-message" role="status">{message}</p>}{isCancelled ? <section><h3>已取消订单</h3><p>取消原因：{detail?.cancelReason ?? order.cancelReason ?? "未记录"}</p>{detail?.restoreBlockedReason ?? order.restoreBlockedReason ? <p className="order-drawer-error">{detail?.restoreBlockedReason ?? order.restoreBlockedReason}</p> : onRestore && <button type="button" className="order-drawer-primary" onClick={() => onRestore(order)}>恢复订单</button>}</section> : <><section className="order-drawer-tabs"><button type="button" className={action === "edit" ? "active" : ""} onClick={() => setAction("edit")}>编辑订单</button><button type="button" className={action === "note" ? "active" : ""} onClick={() => setAction("note")}>添加备注</button><button type="button" className={action === "cancel" ? "danger active" : "danger"} onClick={() => setAction("cancel")}>取消订单</button></section>{action === "edit" && <section className="order-drawer-editor"><h3>直接编辑订单</h3><label>订单号<input aria-label="浮窗订单号" value={form.platformOrderNumber ?? ""} onChange={(e) => change("platformOrderNumber", e.target.value)} /></label><label>城市<select aria-label="浮窗服务城市" value={form.city ?? "曼谷"} onChange={(e) => change("city", e.target.value)}><option>曼谷</option><option>苏梅</option></select></label><label>接客时间<input aria-label="浮窗接客时间" type="datetime-local" value={form.pickupDateTime ?? ""} onChange={(e) => change("pickupDateTime", e.target.value)} /></label><label>乘客姓名<input aria-label="浮窗乘客姓名" value={form.passengerName ?? ""} onChange={(e) => change("passengerName", e.target.value)} /></label><label>乘客电话<input aria-label="浮窗乘客电话" value={form.passengerPhone ?? ""} onChange={(e) => change("passengerPhone", e.target.value)} /></label><label>航班号<input aria-label="浮窗航班号" value={form.flightNumber ?? ""} onChange={(e) => change("flightNumber", e.target.value)} /></label><label>平台车型<input aria-label="浮窗平台车型" value={form.platformVehicleType ?? ""} onChange={(e) => change("platformVehicleType", e.target.value)} /></label><label>成人<input aria-label="浮窗成人" type="number" min="0" value={form.adults ?? 0} onChange={(e) => change("adults", e.target.value)} /></label><label>儿童<input aria-label="浮窗儿童" type="number" min="0" value={form.children ?? 0} onChange={(e) => change("children", e.target.value)} /></label><label>行李<input aria-label="浮窗行李" type="number" min="0" value={form.luggage ?? 0} onChange={(e) => change("luggage", e.target.value)} /></label><label>座位数<input aria-label="浮窗座位数" type="number" min="0" value={form.seatCount ?? ""} onChange={(e) => change("seatCount", e.target.value)} /></label><label className="wide">上车地点<textarea aria-label="浮窗上车地点" value={form.pickupAddress ?? ""} onChange={(e) => change("pickupAddress", e.target.value)} /></label><label className="wide">下车地点<textarea aria-label="浮窗下车地点" value={form.dropoffAddress ?? ""} onChange={(e) => change("dropoffAddress", e.target.value)} /></label><label className="wide">其他备注<textarea aria-label="浮窗其他备注" value={form.otherNotes ?? ""} onChange={(e) => change("otherNotes", e.target.value)} /></label><button type="button" className="order-drawer-primary" disabled={busy} onClick={() => void save()}>{busy ? "正在保存…" : "保存订单"}</button></section>}{action === "note" && <section><h3>添加异常备注</h3><textarea aria-label="浮窗异常备注" value={note} maxLength={2000} rows={5} onChange={(e) => setNote(e.target.value)} placeholder="记录司机、客人、车队或平台异常" /><button type="button" className="order-drawer-primary" disabled={busy || !note.trim()} onClick={() => void addNote()}>{busy ? "正在保存…" : "保存异常备注"}</button></section>}{action === "cancel" && <section><h3>取消订单</h3><textarea aria-label="浮窗取消原因" value={reason} maxLength={500} rows={4} onChange={(e) => setReason(e.target.value)} placeholder="填写取消原因（必填）" /><button type="button" className="order-drawer-danger" disabled={busy || !reason.trim()} onClick={() => void cancel()}>确认取消订单</button></section>}</>}{detail?.driverDetail && <section><h3>保留的司机资料</h3><p>{detail.driverDetail.confirmedDriverName || "待核对"} · {detail.driverDetail.confirmedVehicleModel || "待核对"} · {detail.driverDetail.licensePlate || "待核对"}</p></section>}</div>}<footer>{!isCancelled && onDispatch && <button type="button" className="order-drawer-dispatch" onClick={() => onDispatch(order)}>生成单笔派单</button>}<button type="button" className="order-drawer-close" onClick={onClose}>关闭</button></footer></aside></div>;
 }

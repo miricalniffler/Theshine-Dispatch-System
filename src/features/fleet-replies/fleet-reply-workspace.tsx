@@ -120,11 +120,18 @@ export function FleetReplyWorkspace() {
   }
   const datedReturnItems = returnItems.filter((item) => item.order.serviceDate === serviceDate && ["DISPATCHED", "DRIVER_CONFIRMED", "RETURNED"].includes(item.order.status));
   useEffect(() => {
-    setReturnOrderIds(datedReturnItems.filter((item) => missingReturnFields(item).length === 0).map((item) => item.order.id));
-    setIwayText(""); setReturnBatchId(null); setMarkedReturned(false);
-  // The selection intentionally resets only when the displayed service date/data changes.
+    const readyIds = new Set(datedReturnItems.filter((item) => missingReturnFields(item).length === 0).map((item) => item.order.id));
+    // A refresh after saving driver details must not erase the preview the
+    // operator is about to copy. Keep an existing valid selection, while the
+    // first load still selects every ready order for the chosen date.
+    setReturnOrderIds((current) => current.length ? current.filter((id) => readyIds.has(id)) : [...readyIds]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceDate, returnItems]);
+  useEffect(() => {
+    // Changing the displayed day creates a genuinely different batch, so its
+    // former preview and copy confirmation must never carry across days.
+    setIwayText(""); setReturnBatchId(null); setMarkedReturned(false);
+  }, [serviceDate]);
 
   async function saveAndGenerate(currentReplyId: string, records: Editable[], currentExtractionId: string | null) {
     const errors: string[] = [];

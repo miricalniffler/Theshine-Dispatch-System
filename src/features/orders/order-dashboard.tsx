@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DispatchPreviewDialog } from "@/features/dispatch/DispatchPreviewDialog";
 import { CustomerContactPreviewDialog } from "@/features/customer-notifications/CustomerContactPreviewDialog";
-import { OrderDetailDrawer } from "./OrderDetailDrawer";
+import { OrderDetailDrawer, type DrawerAction } from "./OrderDetailDrawer";
 import type { DashboardSummary, Order, OrderFilters } from "./types";
 import "./orders.css";
 import "./orders-table-layout.css";
@@ -58,6 +58,7 @@ export function OrderDashboard() {
   const [selected, setSelected] = useState<string[]>([]); const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"dispatch" | "customer-contact" | null>(null);
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
+  const [detailAction, setDetailAction] = useState<DrawerAction>("edit");
   const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -68,6 +69,19 @@ export function OrderDashboard() {
   const [iwayPreview, setIwayPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion?: string } | null>(null);
   const [iwayBusy, setIwayBusy] = useState(false);
   const [iwayNotice, setIwayNotice] = useState("");
+  async function restoreOrder(order: Order) {
+    if (order.restoreBlockedReason) { window.alert(order.restoreBlockedReason); return; }
+    if (!window.confirm(`确认恢复订单 ${order.orderNo}？\n\n订单会恢复到取消前状态；不会自动派单、联系乘客或回传 i’way。旧回传预览会失效。`)) return;
+    try {
+      const response = await fetch(`/api/orders/${order.id}/restore`, { method: "POST" });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message || "恢复订单失败");
+      setSelected((current) => current.filter((id) => id !== order.id));
+      setIwayPreview(null); setIwayNotice("订单已恢复到取消前状态；旧 i’way 回传预览已失效。");
+      setDetailOrder(null); setRefreshVersion((version) => version + 1);
+    } catch (error) { window.alert(error instanceof Error ? error.message : "恢复订单失败"); }
+  }
+  function openOrder(order: Order, action: DrawerAction = "edit") { setDetailAction(action); setDetailOrder(order); }
   async function showIwayPreview() {
     if (!selected.length) return;
     setIwayBusy(true); setIwayNotice(""); setIwayPreview(null);
@@ -115,6 +129,10 @@ export function OrderDashboard() {
       const response = await fetch("/api/import-sync/feishu-mail", { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "同步请求发送失败");
+      if (payload.data?.isolatedPreview) {
+        setSyncMessage(payload.data.message || "隔离测试环境已禁用飞书同步；测试订单仍可正常读取。");
+        return;
+      }
       if (payload.data?.localScheduled) {
         setSyncMessage("本机飞书助手正在按周期自动同步；正在等待下一轮结果…");
         const requestedAt = Date.now();
@@ -180,14 +198,14 @@ export function OrderDashboard() {
         <p style={{ color: "#64748b", fontSize: 12 }}>仅生成和复制文本，不会自动发送，也不会改变订单回传状态。</p>
       </section>}
       {!iwayPreview && iwayNotice && <p role="alert">{iwayNotice}</p>}
-      <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-driver"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => { setIwayPreview(null); setIwayNotice(""); setSelected(allSelected ? [] : selectableOrders.map((order) => order.id)); }}/>全选</label></th><th>接客时间</th><th>订单号</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>司机 / 车辆</th></tr></thead><tbody>
-        {loading ? <tr><td colSpan={6} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={6} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" disabled={order.status === "CANCELLED"} checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>{order.status === "CANCELLED" ? "已取消" : "选择"}</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small></td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-driver-cell"><DriverVehicle order={order} /></td></tr>)}
+      <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-driver"/><col className="v3-col-actions"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => { setIwayPreview(null); setIwayNotice(""); setSelected(allSelected ? [] : selectableOrders.map((order) => order.id)); }}/>全选</label></th><th>接客时间</th><th>订单号 / 状态</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>司机 / 车辆</th><th>快捷操作</th></tr></thead><tbody>
+        {loading ? <tr><td colSpan={7} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={7} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" disabled={order.status === "CANCELLED"} checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>{order.status === "CANCELLED" ? "已取消" : "选择"}</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); openOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link>{order.latestExceptionNote && <small className="v3-note-info" title={order.latestExceptionNote}>最新异常备注：{order.latestExceptionNote}</small>}{order.status === "CANCELLED" && <small className="v3-cancel-info">取消原因：{order.cancelReason || "未记录"}{order.restoreBlockedReason ? <><br/>{order.restoreBlockedReason}</> : <button type="button" className="v3-restore-button" onClick={() => void restoreOrder(order)}>恢复订单</button>}</small>}</td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small></td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-driver-cell"><DriverVehicle order={order} /></td><td className="v3-row-actions">{order.status === "CANCELLED" ? <button type="button" className="v3-restore-button" onClick={() => void restoreOrder(order)}>恢复订单</button> : <><button type="button" onClick={() => openOrder(order, "note")} aria-label={`添加备注 ${order.orderNo}`}>添加备注</button><button type="button" className="v3-cancel-button" onClick={() => openOrder(order, "cancel")} aria-label={`取消订单 ${order.orderNo}`}>取消订单</button></>}</td></tr>)}
       </tbody></table></div>
       <div className="v3-mobile-orders" aria-live="polite">
         {loading ? <p className="v3-mobile-empty">正在加载订单…</p> : !orders.length ? <p className="v3-mobile-empty">当前范围没有已核实的订单</p> : orders.map((order) => <article className="v3-mobile-order" key={order.id}>
           <header><label className="v3-mobile-select"><input aria-label={`选择 ${order.orderNo}`} type="checkbox" disabled={order.status === "CANCELLED"} checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>{order.status === "CANCELLED" ? "已取消" : "选择"}</label></header>
-          <div className="v3-mobile-order-main"><div><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city} · {order.fleetName}</small></div><Link onClick={(event) => { event.preventDefault(); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></div>
-          <p className="v3-mobile-passenger">{order.passengerName}</p><p className="v3-mobile-route">{order.route}</p>
+          <div className="v3-mobile-order-main"><div><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city} · {order.fleetName}</small></div><Link onClick={(event) => { event.preventDefault(); openOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link></div>
+          <p className="v3-mobile-passenger">{order.passengerName}</p><p className="v3-mobile-route">{order.route}</p>{order.latestExceptionNote && <p className="v3-note-info">最新异常备注：{order.latestExceptionNote}</p>}{order.status === "CANCELLED" && <p className="v3-cancel-info">取消原因：{order.cancelReason || "未记录"}{order.restoreBlockedReason ? <><br/>{order.restoreBlockedReason}</> : <button type="button" className="v3-restore-button" onClick={() => void restoreOrder(order)}>恢复订单</button>}</p>}{order.status !== "CANCELLED" && <p className="v3-row-actions"><button type="button" onClick={() => openOrder(order, "note")} aria-label={`添加备注 ${order.orderNo}`}>添加备注</button><button type="button" className="v3-cancel-button" onClick={() => openOrder(order, "cancel")} aria-label={`取消订单 ${order.orderNo}`}>取消订单</button></p>}
           <footer><span>{order.vehicleType}</span><DriverVehicle order={order} /></footer>
         </article>)}
       </div>
@@ -195,7 +213,7 @@ export function OrderDashboard() {
     {modal === "dispatch" && <DispatchPreviewDialog orderIds={selected} onClose={() => setModal(null)}/>}
     {modal === "customer-contact" && <CustomerContactPreviewDialog orderIds={selected} onClose={() => setModal(null)} />}
     {previewOrder && <DispatchPreviewDialog orderIds={[previewOrder.id]} mode="single" onClose={() => setPreviewOrder(null)} editHref={`/orders/${previewOrder.id}`} />}
-    <OrderDetailDrawer order={detailOrder} onClose={() => setDetailOrder(null)} onDispatch={(order) => { setDetailOrder(null); setPreviewOrder(order); }} />
+    <OrderDetailDrawer order={detailOrder} initialAction={detailAction} onClose={() => setDetailOrder(null)} onRestore={restoreOrder} onChanged={() => { setIwayPreview(null); setSelected((current) => current.filter((id) => id !== detailOrder?.id)); setRefreshVersion((version) => version + 1); }} onDispatch={(order) => { setDetailOrder(null); setPreviewOrder(order); }} />
   </main>;
 }
 function Metric({ value, label }: { value?: number; label: string }) { return <article><b>{value ?? "–"}</b><span>{label}</span></article>; }

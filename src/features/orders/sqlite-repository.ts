@@ -5,7 +5,26 @@ import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 export async function findPersistedOrder(id: string) {
-  return db.order.findUnique({ where: { id }, include: { driverDetail: true, activityLogs: { orderBy: { createdAt: "asc" } } } });
+  // Keep the critical order screen compatible while an additive, optional
+  // DriverDetail migration is being rolled out.  Reading every column from
+  // that table made the whole order detail API fail on a lagging test DB.
+  return db.order.findUnique({
+    where: { id },
+    include: {
+      driverDetail: {
+        select: {
+          confirmedDriverName: true,
+          rawDriverPhone: true,
+          normalizedDriverPhone: true,
+          confirmedVehicleModel: true,
+          licensePlate: true,
+          rawReply: true,
+          confirmedAt: true,
+        },
+      },
+      activityLogs: { orderBy: { createdAt: "asc" } },
+    },
+  });
 }
 
 export async function recordOrderActivity(orderId: string, action: string, metadata?: string) {
@@ -23,10 +42,15 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
   const order = await db.$transaction(async (tx) => {
     const fleet = await canonicalFleetForCity(tx, input.city);
     const { fleetId: _ignoredFleetId, ...editableFields } = input;
-    const result = await tx.order.update({ where: { id }, data: { ...editableFields, fleetId: fleet.id, serviceDate: input.pickupDateTime.slice(0, 10), pickupDateTime } });
+    // Do the state check as part of the write.  A cancellation that happens
+    // after the initial read must never be followed by an edit write.
+    const changed = await tx.order.updateMany({ where: { id, status: { not: "CANCELLED" } }, data: { ...editableFields, fleetId: fleet.id, serviceDate: input.pickupDateTime.slice(0, 10), pickupDateTime } });
+    if (!changed.count) return null;
+    const result = await tx.order.findUniqueOrThrow({ where: { id } });
     if (updatedFields.length) await tx.activityLog.create({ data: { orderId: id, action: "订单信息已编辑", actor: "运营人员", metadata: JSON.stringify({ changes: Object.fromEntries(updatedFields.map((field) => [field, { from: existing[field as keyof typeof existing] instanceof Date ? (existing[field as keyof typeof existing] as Date).toISOString() : existing[field as keyof typeof existing], to: values[field as keyof typeof values] }])) }) } });
     return result;
   });
+  if (!order) return { kind: "cancelled" as const };
   return { kind: "updated" as const, order, updatedFields };
 }
 
@@ -87,7 +111,19 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
   // Deliberately select only the long-established driver columns used by the
   // dashboard. A newly deployed optional DriverDetail column must not make
   // every legacy order invisible before its additive migration is applied.
-  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: { select: { confirmedDriverName: true, normalizedDriverPhone: true, confirmedVehicleModel: true, licensePlate: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } } }, orderBy: { pickupDateTime: "asc" } });
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: { select: { confirmedDriverName: true, normalizedDriverPhone: true, confirmedVehicleModel: true, licensePlate: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } }, activityLogs: { where: { action: { in: ["订单已取消", "飞书邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { action: true, metadata: true, createdAt: true } } }, orderBy: { pickupDateTime: "asc" } });
+  const notes = rows.length ? await db.activityLog.findMany({ where: { orderId: { in: rows.map((row) => row.id) }, action: "新增异常备注" }, orderBy: { createdAt: "desc" }, select: { orderId: true, metadata: true, createdAt: true } }) : [];
+  const latestNotes = new Map<string, { note: string; at: Date }>();
+  for (const item of notes) {
+    if (!item.orderId || latestNotes.has(item.orderId)) continue;
+    try { const data = JSON.parse(item.metadata ?? "{}"); if (typeof data.note === "string") latestNotes.set(item.orderId, { note: data.note, at: item.createdAt }); } catch { /* ignore legacy malformed audit metadata */ }
+  }
   return rows
-    .map((row) => ({ id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null }));
+    .map((row) => {
+      const cancellation = row.activityLogs[0];
+      let cancelReason: string | null = null;
+      if (cancellation?.metadata) try { const data = JSON.parse(cancellation.metadata); cancelReason = typeof data.reason === "string" ? data.reason : null; } catch { /* legacy plain text metadata */ }
+      const latestNote = latestNotes.get(row.id);
+      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate } : null };
+    });
 }

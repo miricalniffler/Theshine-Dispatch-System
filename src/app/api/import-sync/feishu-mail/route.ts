@@ -3,15 +3,26 @@ import { executeManualFeishuSync } from "@/features/import/manual-feishu-sync";
 import { listConnectorStatus } from "@/features/import/connectors";
 import { failure, success } from "@/lib/api-response";
 import { db } from "@/lib/db";
+import { isIsolatedPreview } from "@/lib/isolated-preview";
 
 export async function GET() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
-  const scheduleEnabled = process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1";
+  const scheduleEnabled = !isIsolatedPreview && (process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1");
   return success({ connector, scheduleEnabled, cronSecretConfigured: Boolean(process.env.CRON_SECRET), syncMode: connector?.configured ? "server" : "local-scheduled", latestRun: await getFeishuSyncStatus() });
 }
 
 export async function POST() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
+  if (isIsolatedPreview) {
+    // A preview acceptance environment must never wait for, or attempt to
+    // trigger, the production Mac helper.  Returning an explicit state keeps
+    // the UI responsive and makes the safety boundary visible to testers.
+    return success({
+      completed: false,
+      isolatedPreview: true,
+      message: "隔离测试环境已禁用飞书同步；测试订单仍可正常读取。",
+    });
+  }
   if (!connector?.configured) {
     // The production server has no authorised Feishu bridge. The Mac
     // LaunchAgent reads Feishu on its own schedule, irrespective of this UI

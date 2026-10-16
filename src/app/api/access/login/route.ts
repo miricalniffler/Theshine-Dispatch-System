@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
+import { isolatedPreviewValue } from "@/lib/isolated-preview";
 
 function passwordsMatch(received: string, expected: string) {
   const receivedBuffer = Buffer.from(received);
@@ -9,8 +10,8 @@ function passwordsMatch(received: string, expected: string) {
 
 export async function POST(request: Request) {
   const { password } = await request.json().catch(() => ({ password: "" }));
-  const expectedPassword = process.env.TEAM_ACCESS_PASSWORD;
-  const accessToken = process.env.TEAM_ACCESS_TOKEN;
+  const expectedPassword = isolatedPreviewValue("TEAM_ACCESS_PASSWORD");
+  const accessToken = isolatedPreviewValue("TEAM_ACCESS_TOKEN");
   if (!expectedPassword || !accessToken) {
     return NextResponse.json({ error: "网站访问设置尚未完成，请联系管理员。" }, { status: 503 });
   }

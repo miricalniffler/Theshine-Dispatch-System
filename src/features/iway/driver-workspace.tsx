@@ -12,6 +12,13 @@ type Notice = { tone: "success" | "error"; message: string } | null;
 type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY"; message: string; value?: string; confidence?: number };
 type ScreenshotResult = { driverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleModel: string | null; note: string; provider: string; model: string | null; fallbackReason: string | null };
 
+async function readApiResponse(response: Response) {
+  const text = await response.text();
+  if (!text) return { error: { message: `服务暂时无响应（${response.status}），请刷新后重试。` } };
+  try { return JSON.parse(text); }
+  catch { return { error: { message: `服务返回异常内容（${response.status}），请刷新后重试。` } }; }
+}
+
 const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成", CANCELLED: "已取消" };
 
 function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, driverNameSource: null, driverNameSourceDetail: null, confirmedAt: null }; }
@@ -92,7 +99,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
     if (pendingName && !nameConfirmed) { setNotice({ tone: "error", message: "这是 AI 建议的姓名。请先核对真实司机姓名并勾选确认，系统才允许用于回传。" }); return; }
     setSaving(true); setNotice(null);
     const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, confirmDriverName: nameConfirmed, ...(nameConfirmed ? { driverNameSourceDetail: "运营人员已核对 AI 建议姓名" } : {}) }) });
-    const payload = await response.json();
+    const payload = await readApiResponse(response);
     setSaving(false);
     if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "保存失败" }); return; }
     setForm(payload.data.driver);
@@ -126,7 +133,7 @@ export function DriverWorkspace() {
   const [items, setItems] = useState<WorkItem[]>([]); const [loading, setLoading] = useState(true);
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId");
-  const refresh = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setItems(payload.data)).finally(() => setLoading(false));
+  const refresh = () => fetch("/api/driver-details").then(async (response) => { const payload = await readApiResponse(response); if (!response.ok) throw new Error(payload.error?.message ?? "司机资料读取失败"); return payload; }).then((payload) => setItems(payload.data ?? [])).catch(() => setItems([])).finally(() => setLoading(false));
   useEffect(() => { refresh(); }, []);
   const orderedItems = orderId ? [...items].sort((left, right) => Number(right.order.id === orderId) - Number(left.order.id === orderId)) : items;
   return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>把车队回复变成可回传的信息</h1><p>{orderId ? "已打开你选择的订单。粘贴车队回复和车辆图片后，先查看建议，再确认保存。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{orderedItems.length ? orderedItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">没有需要确认司机资料的订单。</p>}</section>}</main>;
@@ -136,7 +143,7 @@ export function IwayReturnWorkspace() {
   const [items, setItems] = useState<WorkItem[]>([]); const [selected, setSelected] = useState<string[]>([]); const [preview, setPreview] = useState<{ valid: boolean; errors: string[]; text?: string; orderCount: number; ruleVersion: string } | null>(null); const [batchId, setBatchId] = useState<string | null>(null); const [notice, setNotice] = useState<Notice>(null);
   const searchParams = useSearchParams();
   const initialOrderIds = useMemo(() => (searchParams.get("orderIds") || "").split(",").filter(Boolean), [searchParams]);
-  const refresh = () => fetch("/api/driver-details").then((r) => r.json()).then((payload) => setItems(payload.data));
+  const refresh = () => fetch("/api/driver-details").then(async (response) => { const payload = await readApiResponse(response); if (!response.ok) throw new Error(payload.error?.message ?? "司机资料读取失败"); return payload; }).then((payload) => setItems(payload.data ?? [])).catch((error) => setNotice({ tone: "error", message: error instanceof Error ? error.message : "司机资料读取失败" }));
   useEffect(() => { refresh(); }, []);
   useEffect(() => { if (initialOrderIds.length && items.length) setSelected(initialOrderIds.filter((id) => items.some((item) => item.order.id === id))); }, [initialOrderIds, items]);
   const selectable = useMemo(() => items.filter((item) => ["DRIVER_CONFIRMED", "RETURNED", "COMPLETED"].includes(item.order.status)), [items]);
@@ -149,8 +156,8 @@ export function IwayReturnWorkspace() {
   const tomorrowItems = useMemo(() => items.filter((item) => item.order.serviceDate === tomorrowDate && item.order.status !== "COMPLETED"), [items, tomorrowDate]);
   const incompleteTomorrow = tomorrowItems.filter((item) => item.order.status !== "DRIVER_CONFIRMED" && item.order.status !== "RETURNED");
   const toggle = (id: string) => { setBatchId(null); setPreview(null); setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); };
-  async function createPreview() { setNotice(null); setBatchId(null); const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await response.json(); setPreview(payload.data); }
-  async function copy(orderIds = selected) { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await response.json(); setPreview(payload.data); if (!payload.data?.valid) return; const copied = await copyTextWithFallback(payload.data.text); if (!copied) { setNotice({ tone: "error", message: "无法自动复制。请长按右侧回传内容，选择“全选”后复制。" }); return; } setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); }
+  async function createPreview() { setNotice(null); setBatchId(null); try { const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await readApiResponse(response); if (!response.ok) throw new Error(payload.error?.message ?? "预览生成失败"); setPreview(payload.data); } catch (error) { setNotice({ tone: "error", message: error instanceof Error ? error.message : "预览生成失败" }); } }
+  async function copy(orderIds = selected) { try { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await readApiResponse(response); if (!response.ok) throw new Error(payload.error?.message ?? "回传内容生成失败"); setPreview(payload.data); if (!payload.data?.valid) return; const copied = await copyTextWithFallback(payload.data.text); if (!copied) { setNotice({ tone: "error", message: "无法自动复制。请长按右侧回传内容，选择“全选”后复制。" }); return; } setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); } catch (error) { setNotice({ tone: "error", message: error instanceof Error ? error.message : "回传内容生成失败" }); } }
   async function copyWholeDay(date: string, dayItems: WorkItem[]) { const orderIds = dayItems.map((item) => item.order.id); setSelected(orderIds); setNotice(null); await copy(orderIds); }
   async function copyTomorrow() {
     const orderIds = tomorrowItems.map((item) => item.order.id);
@@ -158,7 +165,7 @@ export function IwayReturnWorkspace() {
     setNotice(null);
     await copy(orderIds);
   }
-  async function confirm() { if (!batchId) return; const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) }); const payload = await response.json(); if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "确认失败" }); return; } window.location.assign("/orders"); }
+  async function confirm() { if (!batchId) return; try { const response = await fetch("/api/iway-return-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId }) }); const payload = await readApiResponse(response); if (!response.ok) throw new Error(payload.error?.message ?? "确认失败"); window.location.assign("/orders"); } catch (error) { setNotice({ tone: "error", message: error instanceof Error ? error.message : "确认失败" }); } }
   function openWhatsAppShare() { if (!preview?.text) return; window.open(`https://wa.me/?text=${encodeURIComponent(preview.text)}`, "_blank", "noopener,noreferrer"); }
   return (
     <main className="workflow-page">

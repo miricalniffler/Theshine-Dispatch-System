@@ -1,3 +1,5 @@
+import { isIsolatedPreview } from "@/lib/isolated-preview";
+
 type TextPart = { type: "text"; text: string };
 type ImagePart = { type: "image_url"; image_url: { url: string } };
 export type QwenContent = string | Array<TextPart | ImagePart>;
@@ -7,11 +9,11 @@ type QwenMessage = { role: "system" | "user"; content: QwenContent };
 const endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
 
 export function isQwenConfigured() {
-  return Boolean(process.env.DASHSCOPE_API_KEY);
+  return !isIsolatedPreview && Boolean(process.env.DASHSCOPE_API_KEY);
 }
 
 export async function qwenJson<T>(messages: QwenMessage[], model: "qwen-flash" | "qwen3-vl-plus" | "qwen3-vl-flash" | "qwen3.7-plus"): Promise<T> {
-  const apiKey = process.env.DASHSCOPE_API_KEY;
+  const apiKey = isIsolatedPreview ? undefined : process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error("QWEN_NOT_CONFIGURED");
   let response: Response;
   try {
