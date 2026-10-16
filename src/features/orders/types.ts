@@ -16,6 +16,8 @@ export type Order = {
   cancelReason?: string | null;
   cancelledAt?: string | null;
   restoreBlockedReason?: string | null;
+  latestExceptionNote?: string | null;
+  latestExceptionAt?: string | null;
   exceptions: OrderException[];
   createdAt: string;
   driverDetail?: {
