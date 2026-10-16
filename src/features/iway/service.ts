@@ -221,8 +221,13 @@ export async function confirmIwayReturn(batchId: string) {
     if (batch.confirmedAt) throw new Error("BATCH_ALREADY_CONFIRMED");
     const orderIds = batch.orders.map((link) => link.orderId);
     const confirmedAt = new Date();
-    const claimed = await tx.iwayReturnBatch.updateMany({ where: { id: batchId, confirmedAt: null }, data: { confirmedAt } });
-    if (!claimed.count) throw new Error("BATCH_ALREADY_CONFIRMED");
+    if (batch.invalidatedAt) throw new Error("IWAY_BATCH_INVALIDATED");
+    const claimed = await tx.iwayReturnBatch.updateMany({ where: { id: batchId, confirmedAt: null, invalidatedAt: null }, data: { confirmedAt } });
+    if (!claimed.count) {
+      const current = await tx.iwayReturnBatch.findUnique({ where: { id: batchId }, select: { invalidatedAt: true } });
+      if (current?.invalidatedAt) throw new Error("IWAY_BATCH_INVALIDATED");
+      throw new Error("BATCH_ALREADY_CONFIRMED");
+    }
     if (orderIds.length) {
       // Only the two return-ready states are allowed to become completed.
       // A cancellation or a concurrent state transition makes the whole

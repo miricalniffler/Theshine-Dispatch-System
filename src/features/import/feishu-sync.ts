@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { pullConnectorMessages, type ImportedMessage } from "./connectors";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
+import { invalidatePendingIwayBatches } from "@/features/iway/invalidate-pending-batches";
 import { detectDispatchCity } from "@/lib/city/detect-city";
 
 export type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
@@ -62,7 +63,8 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
       // has already been confirmed as returned/completed by an operator.
       const cancelled = await tx.order.updateMany({ where: { id: existing.id, status: { notIn: ["CANCELLED", "COMPLETED"] } }, data: { status: "CANCELLED", rawSource: message.text } });
       if (!cancelled.count) return false;
-      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
+      await invalidatePendingIwayBatches(tx, existing.id, "飞书同步：订单已取消");
+      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: JSON.stringify({ source: "feishu", messageId: message.id, reason: "飞书同步取消", previousStatus: existing.status }) } });
       return true;
     });
     await recordMessage(message, existing.id);
@@ -84,8 +86,29 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   if (existing) {
     await db.$transaction(async (tx) => {
       const fleet = city ? await canonicalFleetForCity(tx, city) : null;
-      await tx.order.update({ where: { id: existing.id }, data: city ? { ...data, city, fleetId: fleet!.id } : data });
-      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
+      const current = await tx.order.findUnique({ where: { id: existing.id }, select: { status: true } });
+      if (!current || current.status === "COMPLETED") {
+        if (current) await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单更新未覆盖", actor: "系统定时任务", metadata: `邮件：${message.id}；订单已完成` } });
+        return;
+      }
+      if (current.status === "CANCELLED") {
+        const latestCancel = await tx.activityLog.findFirst({ where: { orderId: existing.id, action: { in: ["订单已取消", "飞书邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" } });
+        if (latestCancel?.action !== "飞书邮件同步：订单已取消") {
+          await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单更新未覆盖", actor: "系统定时任务", metadata: `邮件：${message.id}；订单由运营人员取消，需人工核实` } });
+          return;
+        }
+        // A new non-cancellation message from the same external source is the
+        // required external verification that the previously cancelled order
+        // is active again. It is the only automatic recovery path.
+        const previous = (() => { try { const value = JSON.parse(latestCancel.metadata ?? "{}"); return typeof value.previousStatus === "string" ? value.previousStatus : "READY_TO_DISPATCH"; } catch { return "READY_TO_DISPATCH"; } })();
+        const restored = await tx.order.updateMany({ where: { id: existing.id, status: "CANCELLED" }, data: { ...(city ? { ...data, city, fleetId: fleet!.id } : data), status: previous } });
+        if (!restored.count) return;
+        await invalidatePendingIwayBatches(tx, existing.id, "飞书同步：订单已恢复，旧回传预览失效");
+        await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已恢复", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
+        return;
+      }
+      const updated = await tx.order.updateMany({ where: { id: existing.id, status: { notIn: ["CANCELLED", "COMPLETED"] } }, data: city ? { ...data, city, fleetId: fleet!.id } : data });
+      if (updated.count) await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
     });
     await recordMessage(message, existing.id);
     return "updated";

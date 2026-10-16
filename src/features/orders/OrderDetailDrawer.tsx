@@ -8,7 +8,7 @@ import "./order-detail-drawer.css";
 type DetailedOrder = Record<string, unknown>;
 type DriverDetail = { confirmedDriverName?: string | null; normalizedDriverPhone?: string | null; confirmedVehicleModel?: string | null; licensePlate?: string | null };
 
-export function OrderDetailDrawer({ order, onClose, onDispatch }: { order: Order | null; onClose: () => void; onDispatch?: (order: Order) => void }) {
+export function OrderDetailDrawer({ order, onClose, onDispatch, onRestore }: { order: Order | null; onClose: () => void; onDispatch?: (order: Order) => void; onRestore?: (order: Order) => void }) {
   const [detail, setDetail] = useState<DetailedOrder | null>(null);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
@@ -31,7 +31,7 @@ export function OrderDetailDrawer({ order, onClose, onDispatch }: { order: Order
         <section><h3>车队</h3><Row label="派送车队" value={order.fleetName} /></section>
         {driver && <section><h3>司机和车辆信息</h3><Row label="司机姓名" value={driver.confirmedDriverName || "待核对"} /><Row label="司机电话" value={driver.normalizedDriverPhone || "待核对"} href={driver.normalizedDriverPhone ? `tel:${driver.normalizedDriverPhone.replace(/[^+\d]/g, "")}` : undefined} linkLabel="拨打" /><Row label="具体车型" value={driver.confirmedVehicleModel || "待核对"} /><Row label="车牌号" value={driver.licensePlate || "待核对"} /></section>}
       </div>}
-      <footer>{onDispatch && <button type="button" className="order-drawer-dispatch" onClick={() => onDispatch(order)}>生成单笔派单</button>}<Link href={`/orders/${order.id}`}>打开完整订单并编辑</Link></footer>
+      <footer>{order.status === "CANCELLED" ? <>{order.cancelReason && <small>取消原因：{order.cancelReason}</small>}{order.restoreBlockedReason ? <small>{order.restoreBlockedReason}</small> : onRestore && <button type="button" className="order-drawer-dispatch" onClick={() => onRestore(order)}>恢复订单</button>}</> : onDispatch && <button type="button" className="order-drawer-dispatch" onClick={() => onDispatch(order)}>生成单笔派单</button>}<Link href={`/orders/${order.id}`}>{order.status === "CANCELLED" ? "打开完整订单并恢复" : "打开完整订单并编辑"}</Link></footer>
     </aside>
   </div>;
 }

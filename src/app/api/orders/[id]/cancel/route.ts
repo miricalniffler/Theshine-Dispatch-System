@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { failure, success } from "@/lib/api-response";
+import { invalidatePendingIwayBatches } from "@/features/iway/invalidate-pending-batches";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,6 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (existing.status === "COMPLETED") return { kind: "completed" as const };
     const changed = await tx.order.updateMany({ where: { id, status: existing.status }, data: { status: "CANCELLED" } });
     if (!changed.count) return { kind: "conflict" as const };
+    await invalidatePendingIwayBatches(tx, id, "订单已取消");
     await tx.activityLog.create({ data: { orderId: id, action: "订单已取消", actor: "运营人员", metadata: JSON.stringify({ reason, previousStatus: existing.status }) } });
     return { kind: "cancelled" as const };
   });

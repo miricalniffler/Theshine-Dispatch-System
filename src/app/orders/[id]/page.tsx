@@ -47,17 +47,18 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
     // made a successful edit look like a no-op to operators.
     setMessage(data.data?.updatedFields?.length ? "已保存订单信息，并记录本次修改。" : "没有需要保存的修改。"); await refresh(id);
   };
-  async function submitLifecycle(action: "cancel" | "notes") {
+  async function submitLifecycle(action: "cancel" | "notes" | "restore") {
     if (!id) return;
     const value = action === "cancel" ? cancelReason.trim() : exceptionNote.trim();
-    if (!value) { setError(action === "cancel" ? "请先填写取消原因。" : "请先填写异常备注。"); return; }
-    if (action === "cancel" && !window.confirm("确认取消此订单？订单和历史记录会保留，无法通过此页面恢复。")) return;
+    if (action !== "restore" && !value) { setError(action === "cancel" ? "请先填写取消原因。" : "请先填写异常备注。"); return; }
+    if (action === "cancel" && !window.confirm("确认取消此订单？订单和历史记录会保留。")) return;
+    if (action === "restore" && !window.confirm("确认恢复此订单？它会恢复到取消前状态；不会自动派单、联系乘客或回传 i’way。旧回传预览会失效。")) return;
     setLifecycleBusy(true); setError(""); setMessage("");
     try {
-      const response = await fetch(`/api/orders/${id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "cancel" ? { reason: value } : { note: value }) });
+      const response = await fetch(`/api/orders/${id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, ...(action === "restore" ? {} : { body: JSON.stringify(action === "cancel" ? { reason: value } : { note: value }) }) });
       const data = await readResponse(response);
       if (!response.ok) throw new Error(data.error?.message || "操作失败");
-      setMessage(action === "cancel" ? "订单已取消，历史记录已保留。" : "异常备注已保存到操作记录。");
+      setMessage(action === "cancel" ? "订单已取消，历史记录已保留。" : action === "restore" ? "订单已恢复到取消前状态；旧 i’way 回传预览已失效。" : "异常备注已保存到操作记录。");
       if (action === "cancel") setCancelReason(""); else setExceptionNote("");
       await refresh(id); setActivityOpen(true);
     } catch (err) { setError(err instanceof Error ? err.message : "操作失败"); }
@@ -85,6 +86,6 @@ export default function OrderDetail({ params }: { params: Promise<{ id: string }
     <div className="order-edit-actions full-width">{message && <span className="order-save-message">{message}</span>}<a className="order-cancel-link" href="/orders">取消</a><button disabled={saving} type="submit">{saving ? "正在保存…" : "保存订单"}</button></div></fieldset>
   </form></section><aside className="order-detail-card order-activity-card"><button type="button" className="order-activity-toggle" onClick={() => setActivityOpen((open) => !open)} aria-expanded={activityOpen}>{activityOpen ? "收起操作记录" : "查看操作记录"}</button>{activityOpen && <ol className="activity-list">{activity.length ? activity.map((item, index) => <li key={`${item.at}-${index}`}>{item.action}<time>{new Date(item.at).toLocaleString("zh-CN")}</time>{item.metadata && <small style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{activityDetail(item)}</small>}</li>) : <li>暂无记录</li>}</ol>}
       <section style={{ marginTop: 24 }}><h3>异常备注</h3><textarea aria-label="异常备注" value={exceptionNote} maxLength={2000} rows={4} onChange={(e) => setExceptionNote(e.target.value)} placeholder="记录司机、客人、车队或平台异常情况" style={{ width: "100%" }} /><button type="button" disabled={lifecycleBusy || !exceptionNote.trim()} onClick={() => void submitLifecycle("notes")}>保存异常备注</button></section>
-      <section style={{ marginTop: 24 }}><h3>取消订单</h3>{order.status === "CANCELLED" ? <p>此订单已取消，数据及操作记录仍然保留。</p> : <><textarea aria-label="取消原因" value={cancelReason} maxLength={500} rows={3} onChange={(e) => setCancelReason(e.target.value)} placeholder="填写取消原因（必填）" style={{ width: "100%" }} /><button type="button" disabled={lifecycleBusy || !cancelReason.trim()} onClick={() => void submitLifecycle("cancel")}>确认取消订单</button></>}</section>
+      <section style={{ marginTop: 24 }}><h3>取消订单</h3>{order.status === "CANCELLED" ? <div><p>此订单已取消，数据及操作记录仍然保留。</p>{activity.find((item) => item.action === "飞书邮件同步：订单已取消") ? <p className="order-error">此订单由飞书同步取消。请先在外部平台核实订单已恢复，再通过新的同步记录更新，不能只在本站恢复。</p> : <button type="button" disabled={lifecycleBusy} onClick={() => void submitLifecycle("restore")}>恢复订单</button>}</div> : <><textarea aria-label="取消原因" value={cancelReason} maxLength={500} rows={3} onChange={(e) => setCancelReason(e.target.value)} placeholder="填写取消原因（必填）" style={{ width: "100%" }} /><button type="button" disabled={lifecycleBusy || !cancelReason.trim()} onClick={() => void submitLifecycle("cancel")}>确认取消订单</button></>}</section>
       </aside></div><CustomerCommunicationPanel orderId={id} /></>}</main>;
 }
