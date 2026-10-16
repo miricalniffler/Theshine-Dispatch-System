@@ -13,6 +13,16 @@ export async function GET() {
 
 export async function POST() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
+  if (isIsolatedPreview) {
+    // A preview acceptance environment must never wait for, or attempt to
+    // trigger, the production Mac helper.  Returning an explicit state keeps
+    // the UI responsive and makes the safety boundary visible to testers.
+    return success({
+      completed: false,
+      isolatedPreview: true,
+      message: "隔离测试环境已禁用飞书同步；测试订单仍可正常读取。",
+    });
+  }
   if (!connector?.configured) {
     // The production server has no authorised Feishu bridge. The Mac
     // LaunchAgent reads Feishu on its own schedule, irrespective of this UI

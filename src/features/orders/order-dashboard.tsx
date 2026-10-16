@@ -115,6 +115,10 @@ export function OrderDashboard() {
       const response = await fetch("/api/import-sync/feishu-mail", { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "同步请求发送失败");
+      if (payload.data?.isolatedPreview) {
+        setSyncMessage(payload.data.message || "隔离测试环境已禁用飞书同步；测试订单仍可正常读取。");
+        return;
+      }
       if (payload.data?.localScheduled) {
         setSyncMessage("本机飞书助手正在按周期自动同步；正在等待下一轮结果…");
         const requestedAt = Date.now();
