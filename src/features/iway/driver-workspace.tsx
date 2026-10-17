@@ -57,6 +57,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   const [notice, setNotice] = useState<Notice>(null);
   const [assistantNotes, setAssistantNotes] = useState<string[]>([]);
   const [vehicleImage, setVehicleImage] = useState("");
+  const [fleetScreenshot, setFleetScreenshot] = useState("");
   const [vehicleBrand, setVehicleBrand] = useState("");
   const [vehicleClass, setVehicleClass] = useState("");
   const [archiveNotice, setArchiveNotice] = useState<Notice>(null);
@@ -64,10 +65,14 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   const [nameConfirmed, setNameConfirmed] = useState(false);
   useEffect(() => { setForm({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id }); setVehicleBrand(""); setVehicleClass(""); setArchiveNotice(null); setNameConfirmed(false); }, [item]);
   const set = (key: keyof DriverDetails, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  function attachVehicleImage(file: File | undefined) {
-    if (!file || !file.type.startsWith("image/")) { setAssistantNotes(["请选择或粘贴车辆图片文件。"]); return; }
+  function attachImage(file: File | undefined, target: "vehicle" | "screenshot") {
+    if (!file || !file.type.startsWith("image/")) { setAssistantNotes(["请选择 PNG、JPG 或 WebP 图片文件。"]); return; }
     const reader = new FileReader();
-    reader.onload = () => setVehicleImage(typeof reader.result === "string" ? reader.result : "");
+    reader.onload = () => {
+      const image = typeof reader.result === "string" ? reader.result : "";
+      if (target === "vehicle") setVehicleImage(image);
+      else setFleetScreenshot(image);
+    };
     reader.readAsDataURL(file);
   }
   async function analyseReply() {
@@ -79,23 +84,31 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
         const result = (await response.json()).data as AssistResult | undefined;
         if (result) notes.push(result.value ? `${result.message} 建议：${result.value}` : result.message);
       }
-      if (vehicleImage) {
-        const response = await fetch("/api/assist/driver-screenshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: vehicleImage }) });
-        const result = (await response.json()).data as ScreenshotResult | undefined;
+      async function applyVision(path: string, imageUrl: string, includeDriver: boolean) {
+        const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl }) });
+        const payload = await readApiResponse(response);
+        if (!response.ok) throw new Error(payload.error?.message ?? "图片识别暂时无法完成");
+        const result = payload.data as ScreenshotResult | undefined;
         if (result) {
           setForm((current) => ({ ...current,
-            confirmedDriverName: current.confirmedDriverName || result.driverName,
-            rawDriverPhone: current.rawDriverPhone || result.driverPhone,
-            licensePlate: current.licensePlate || result.licensePlate,
+            ...(includeDriver ? {
+              confirmedDriverName: current.confirmedDriverName || result.driverName,
+              rawDriverPhone: current.rawDriverPhone || result.driverPhone,
+              licensePlate: current.licensePlate || result.licensePlate,
+              driverNameSource: result.driverNameSource === "NOT_FOUND" ? current.driverNameSource : result.driverNameSource,
+              rawThaiDriverName: current.rawThaiDriverName || result.rawThaiDriverName || null,
+              driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图中可见泰文姓名的英文音译；原文已保留",
+            } : {}),
             confirmedVehicleModel: current.confirmedVehicleModel || result.vehicleModel,
-            driverNameSource: result.driverNameSource === "NOT_FOUND" ? current.driverNameSource : result.driverNameSource,
-            rawThaiDriverName: current.rawThaiDriverName || result.rawThaiDriverName || null,
-            driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图中可见泰文姓名的英文音译；原文已保留",
           }));
           setVehicleBrand((current) => current || result.vehicleBrand || ""); setVehicleClass((current) => current || result.vehicleClass || "");
           notes.push(`${result.note} 识别来源：${result.provider}${result.model ? ` / ${result.model}` : ""}；不确定性：${result.confidence}${result.evidence.length ? `；可见依据：${result.evidence.join("；")}` : ""}${result.fallbackReason ? `（${result.fallbackReason}）` : ""}`);
         }
       }
+      // These are intentionally separate: a chat screenshot needs OCR-like
+      // extraction, while a vehicle photo uses the vehicle-only prompt.
+      if (fleetScreenshot) await applyVision("/api/assist/driver-screenshot", fleetScreenshot, true);
+      if (vehicleImage) await applyVision("/api/assist/vehicle-image", vehicleImage, false);
       setAssistantNotes(notes);
     } catch { setAssistantNotes(["分析暂时无法完成。原始回复仍已保留，请人工填写并保存。"]); }
     finally { setAnalysing(false); }
@@ -125,12 +138,14 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   }
   return <article className={`driver-card${focused ? " focused-driver-card" : ""}`}>
     <header><div><span className="order-mark">{focused ? "正在录入 · " : ""}{item.order.city} · {item.order.serviceDate} {item.order.pickupTime}</span><h2>{item.order.orderNo}</h2><p>{item.order.passengerName} · {item.order.route}</p></div><span className={`work-status ${item.order.status.toLowerCase()}`}>{statusText[item.order.status]}</span></header>
-    <label className="wide-field">车队原始回复（保留原文）<textarea value={form.rawReply ?? ""} autoCapitalize="none" placeholder="粘贴车队回复；系统不会替你发送任何消息" onChange={(event) => set("rawReply", event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) attachVehicleImage(image); }} /></label>
-    <section className="driver-assist" aria-label="车辆图片和翻译协助" onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) { event.preventDefault(); attachVehicleImage(image); } }} tabIndex={0}>
-      <div><strong>粘贴车队回复和车辆图片</strong><p>可直接从微信粘贴文字；点击此区域后也可粘贴车辆截图。系统只给出翻译和车型建议，最终以你确认保存的信息为准。</p></div>
-      <label className="vehicle-upload">选择车辆图片<input aria-label="选择车辆图片" type="file" accept="image/*" onChange={(event) => attachVehicleImage(event.currentTarget.files?.[0])}/></label>
+    <label className="wide-field">车队原始回复（保留原文）<textarea value={form.rawReply ?? ""} autoCapitalize="none" placeholder="粘贴车队回复；系统不会替你发送任何消息" onChange={(event) => set("rawReply", event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) { event.preventDefault(); attachImage(image, "screenshot"); } }} /></label>
+    <section className="driver-assist" aria-label="车辆图片和翻译协助" onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) { event.preventDefault(); attachImage(image, "screenshot"); } }} tabIndex={0}>
+      <div><strong>上传车队截图或车辆照片</strong><p>车队聊天截图会提取司机和车牌；车辆照片只识别品牌、车型和等级。两者可分别上传，系统只提供建议，最终以你保存的信息为准。</p></div>
+      <label className="vehicle-upload">选择车队聊天截图<input aria-label="选择车队聊天截图" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => attachImage(event.currentTarget.files?.[0], "screenshot")}/></label>
+      {fleetScreenshot && <div className="vehicle-preview-wrap"><img className="vehicle-preview" src={fleetScreenshot} alt="待分析的车队聊天截图"/><button type="button" className="remove-vehicle-image" onClick={() => setFleetScreenshot("")}>删除截图</button></div>}
+      <label className="vehicle-upload">选择车辆照片<input aria-label="选择车辆照片" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => attachImage(event.currentTarget.files?.[0], "vehicle")}/></label>
       {vehicleImage && <div className="vehicle-preview-wrap"><img className="vehicle-preview" src={vehicleImage} alt="待分析的车辆图片"/><button type="button" className="remove-vehicle-image" onClick={() => setVehicleImage("")}>删除图片</button></div>}
-      <button type="button" className="assist-action" onClick={analyseReply} disabled={analysing || (!form.rawReply?.trim() && !vehicleImage)}>{analysing ? "正在分析…" : "分析并翻译"}</button>
+      <button type="button" className="assist-action" onClick={analyseReply} disabled={analysing || (!form.rawReply?.trim() && !vehicleImage && !fleetScreenshot)}>{analysing ? "正在分析…" : "分析并翻译"}</button>
       {assistantNotes.length > 0 && <div className="assist-notes">{assistantNotes.map((message) => <p key={message}>{message}</p>)}</div>}
     </section>
     <div className="driver-form">
