@@ -81,6 +81,9 @@ model DriverDetail {
   // 姓名是人工确认、截图转写还是系统临时生成，不能混为一谈。
   driverNameSource      String?
   driverNameSourceDetail String?
+  // 截图中原样出现的泰文姓名。用于内部核对与历史追溯；i'way
+  // 仍使用 confirmedDriverName（英文原名或音译名）。
+  rawThaiDriverName     String?
   rawReply              String?
   confirmedAt           DateTime?
   createdAt             DateTime  @default(now())

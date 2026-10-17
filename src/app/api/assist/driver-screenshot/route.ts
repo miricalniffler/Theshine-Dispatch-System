@@ -4,7 +4,9 @@ import { z } from "zod";
 import { NextRequest } from "next/server";
 import { hasTeamAccess } from "@/lib/team-access";
 
-const requestSchema = z.object({ imageUrl: z.string().startsWith("data:image/").max(8_000_000) });
+// Only accept an uploaded raster image data URL; do not forward arbitrary
+// remote locations or active SVG content to an external provider.
+const requestSchema = z.object({ imageUrl: z.string().regex(/^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i).max(8_000_000) });
 
 export async function POST(request: NextRequest) {
   if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);

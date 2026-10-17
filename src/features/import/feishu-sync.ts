@@ -3,6 +3,7 @@ import { pullConnectorMessages, type ImportedMessage } from "./connectors";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { invalidatePendingIwayBatches } from "@/features/iway/invalidate-pending-batches";
 import { detectDispatchCity } from "@/lib/city/detect-city";
+import { decideFeishuUpdate } from "./feishu-sync-policy";
 
 export type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
 
@@ -46,18 +47,51 @@ function meetGreetFor(text: string) {
   return signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : null);
 }
 
-async function recordMessage(message: ImportedMessage, orderId?: string) {
-  await db.importedSourceMessage.create({ data: { connector: "feishu-mail", externalId: message.id, action: message.action, sourceText: message.text, orderId, receivedAt: receivedAt(message.receivedAt) } });
+function isUniqueViolation(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
+}
+
+/**
+ * Claims a source message before changing an order.  The external message id
+ * is unique in the database, so this is also the cross-instance idempotency
+ * guard when two cron/manual requests arrive together.
+ */
+async function claimMessage(message: ImportedMessage) {
+  try {
+    await db.importedSourceMessage.create({
+      data: { connector: "feishu-mail", externalId: message.id, action: message.action, sourceText: message.text, receivedAt: receivedAt(message.receivedAt) },
+    });
+    return true;
+  } catch (error) {
+    if (isUniqueViolation(error)) return false;
+    throw error;
+  }
+}
+
+async function linkClaimedMessage(message: ImportedMessage, orderId?: string) {
+  await db.importedSourceMessage.update({
+    where: { connector_externalId: { connector: "feishu-mail", externalId: message.id } },
+    data: { orderId },
+  });
+}
+
+async function releaseClaim(message: ImportedMessage) {
+  await db.importedSourceMessage.deleteMany({ where: { connector: "feishu-mail", externalId: message.id } });
 }
 
 async function applyMessage(message: ImportedMessage): Promise<"created" | "updated" | "cancelled" | "skipped"> {
   const externalId = message.id.trim();
-  if (!externalId || await db.importedSourceMessage.findUnique({ where: { connector_externalId: { connector: "feishu-mail", externalId } } })) return "skipped";
+  if (!externalId) return "skipped";
+  message = { ...message, id: externalId };
+  // Do this before any order mutation.  A duplicate delivery must never
+  // cancel or update an order twice, including across server instances.
+  if (!await claimMessage(message)) return "skipped";
+  try {
   const platformOrderNumber = orderNumber(message);
-  if (!platformOrderNumber) { await recordMessage(message); return "skipped"; }
+  if (!platformOrderNumber) return "skipped";
   const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (message.action === "cancel") {
-    if (!existing) { await recordMessage(message); return "skipped"; }
+    if (!existing) return "skipped";
     const cancelled = await db.$transaction(async (tx) => {
       // Never let an asynchronous cancellation mail overwrite an order that
       // has already been confirmed as returned/completed by an operator.
@@ -67,7 +101,7 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
       await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: JSON.stringify({ source: "feishu", messageId: message.id, reason: "飞书同步取消", previousStatus: existing.status }) } });
       return true;
     });
-    await recordMessage(message, existing.id);
+    await linkClaimedMessage(message, existing.id);
     return cancelled ? "cancelled" : "skipped";
   }
   const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
@@ -76,7 +110,10 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const pickupAddress = pick(message.text, "Pickup address");
   const dropoffAddress = pick(message.text, "Dropoff address");
   const platformVehicleType = pick(message.text, "Vehicle Type");
-  if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
+  if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) {
+    await linkClaimedMessage(message, existing?.id);
+    return "skipped";
+  }
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   const city = cityDetection.city;
   const adults = numberFrom(pick(message.text, "(?:Adults|Number of passengers)"));
@@ -84,40 +121,51 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const statedLuggage = pick(message.text, "(?:Luggage|Number of luggage|Baggage)");
   const data = { serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, adults, children, luggage: statedLuggage ? numberFrom(statedLuggage) : adults + children, meetGreetLine: meetGreetFor(message.text), rawSource: message.text };
   if (existing) {
-    await db.$transaction(async (tx) => {
+    const updated = await db.$transaction(async (tx) => {
       const fleet = city ? await canonicalFleetForCity(tx, city) : null;
       const current = await tx.order.findUnique({ where: { id: existing.id }, select: { status: true } });
-      if (!current || current.status === "COMPLETED") {
+      if (!current || decideFeishuUpdate(current.status, false) === "skip-completed") {
         if (current) await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单更新未覆盖", actor: "系统定时任务", metadata: `邮件：${message.id}；订单已完成` } });
-        return;
+        return false;
       }
       if (current.status === "CANCELLED") {
         const latestCancel = await tx.activityLog.findFirst({ where: { orderId: existing.id, action: { in: ["订单已取消", "飞书邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" } });
-        if (latestCancel?.action !== "飞书邮件同步：订单已取消") {
+        const decision = decideFeishuUpdate(current.status, latestCancel?.action === "飞书邮件同步：订单已取消");
+        if (decision === "skip-local-cancel") {
           await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单更新未覆盖", actor: "系统定时任务", metadata: `邮件：${message.id}；订单由运营人员取消，需人工核实` } });
-          return;
+          return false;
         }
         // A new non-cancellation message from the same external source is the
         // required external verification that the previously cancelled order
         // is active again. It is the only automatic recovery path.
-        const previous = (() => { try { const value = JSON.parse(latestCancel.metadata ?? "{}"); return typeof value.previousStatus === "string" ? value.previousStatus : "READY_TO_DISPATCH"; } catch { return "READY_TO_DISPATCH"; } })();
+        const previous = (() => { try { const value = JSON.parse(latestCancel?.metadata ?? "{}"); return typeof value.previousStatus === "string" ? value.previousStatus : "READY_TO_DISPATCH"; } catch { return "READY_TO_DISPATCH"; } })();
         const restored = await tx.order.updateMany({ where: { id: existing.id, status: "CANCELLED" }, data: { ...(city ? { ...data, city, fleetId: fleet!.id } : data), status: previous } });
-        if (!restored.count) return;
+        if (!restored.count) return false;
         await invalidatePendingIwayBatches(tx, existing.id, "飞书同步：订单已恢复，旧回传预览失效");
         await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已恢复", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
-        return;
+        return true;
       }
       const updated = await tx.order.updateMany({ where: { id: existing.id, status: { notIn: ["CANCELLED", "COMPLETED"] } }, data: city ? { ...data, city, fleetId: fleet!.id } : data });
-      if (updated.count) await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
+      if (updated.count) {
+        await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
+        return true;
+      }
+      return false;
     });
-    await recordMessage(message, existing.id);
-    return "updated";
+    await linkClaimedMessage(message, existing.id);
+    return updated ? "updated" : "skipped";
   }
   const fleet = city ? await canonicalFleetForCity(db, city) : null;
   const created = await db.order.create({ data: { platformOrderNumber, ...data, city: city ?? "待确认", fleetId: fleet?.id ?? null, status: city ? "READY_TO_DISPATCH" : "PENDING_REVIEW" } });
   await db.activityLog.create({ data: { orderId: created.id, action: "飞书邮件同步：新增订单", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
-  await recordMessage(message, created.id);
+  await linkClaimedMessage(message, created.id);
   return "created";
+  } catch (error) {
+    // A transport/database failure should be retryable.  Release only our
+    // reservation; successfully handled messages keep their claim forever.
+    await releaseClaim(message).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function startFeishuMailSync(): Promise<SyncSummary> {
