@@ -70,7 +70,10 @@ function parseModelJson(content: unknown, provider: "GLM" | "QWEN"): Record<stri
 
 async function glmJson(imageUrl: string, kind: VisionRecognitionKind) {
   if (process.env.AI_VISION_REAL_CALLS_ENABLED !== "true") throw new Error("REAL_VISION_CALLS_DISABLED");
-  const apiKey = isIsolatedPreview ? undefined : process.env.ZHIPU_API_KEY;
+  // Some existing deployments use the older GLM_API_KEY name. Reuse it
+  // safely instead of requiring a duplicate secret, while preferring the
+  // documented ZHIPU_API_KEY name for new configuration.
+  const apiKey = isIsolatedPreview ? undefined : process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   if (!apiKey) throw new Error("GLM_NOT_CONFIGURED");
   const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
