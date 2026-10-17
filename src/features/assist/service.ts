@@ -1,5 +1,5 @@
 import { isQwenConfigured, qwenJson } from "./qwen";
-import { recognizeVehicleImage } from "./vision";
+import { isAiVisionRealCallsEnabled, recognizeVehicleImage } from "./vision";
 
 export type ReviewAssistance = {
   status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY";
@@ -13,6 +13,7 @@ const thaiCharacters = /[\u0E00-\u0E7F]/;
 
 export async function translateThaiForReview(text: string): Promise<ReviewAssistance> {
   if (!text.trim() || !thaiCharacters.test(text)) return { status: "NOT_NEEDED", provider: "本地检测", message: "原文中未发现泰文，无需翻译。" };
+  if (!isAiVisionRealCallsEnabled()) return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "AI 实际调用尚未启用；请人工核对泰文原文。" };
   if (!isQwenConfigured()) return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "检测到泰文，但尚未配置 Qwen API。请人工核对原文；不会自动改写订单字段。" };
   try {
     const result = await qwenJson<{ translatedText?: unknown }>([

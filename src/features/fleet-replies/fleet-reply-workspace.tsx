@@ -256,12 +256,12 @@ export function FleetReplyWorkspace() {
 
   return <main className="workflow-page fleet-reply-page">
     <nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav>
-    <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>识别、核对和 i’way 文本生成在同一页完成。订单号、电话、车牌和回传格式由网站规则处理；AI 只用于泰语姓名转写和逐张车辆图片识别。</p></header>
+    <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>识别、核对和 i’way 文本生成在同一页完成。订单号、电话、车牌和回传格式由网站规则处理；AI 可在启用后辅助识别泰文聊天截图、姓名转写和车辆图片，所有结果都可修改后再保存。</p></header>
     <section className="fleet-reply-source">
       <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
       <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option></select></label>
-      <label className="vehicle-upload">添加车辆图片<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
+      <label className="vehicle-upload">添加车辆照片或车队聊天截图<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
       {images.length > 0 && <div className="reply-image-list" aria-label="已添加车辆图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
     </section>

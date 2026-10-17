@@ -10,7 +10,9 @@ export function isQwenConfigured() {
   return Boolean(process.env.DASHSCOPE_API_KEY);
 }
 
-export async function qwenJson<T>(messages: QwenMessage[], model: "qwen-flash" | "qwen3-vl-plus" | "qwen3-vl-flash", options: { timeoutMs?: number } = {}): Promise<T> {
+export type QwenModel = "qwen-flash" | "qwen3-vl-plus" | "qwen3-vl-flash" | "qwen3.7-plus" | "qwen3.7-flash";
+
+export async function qwenJson<T>(messages: QwenMessage[], model: QwenModel, options: { timeoutMs?: number } = {}): Promise<T> {
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error("QWEN_NOT_CONFIGURED");
   let response: Response;

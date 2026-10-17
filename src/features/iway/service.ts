@@ -177,6 +177,10 @@ export async function confirmIwayReturn(batchId: string) {
   const batch = await db.iwayReturnBatch.findUnique({ where: { id: batchId }, include: { orders: true } });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
   const orderIds = batch.orders.map((link) => link.orderId);
+  // A saved preview is only a draft. Revalidate it at confirmation time so a
+  // cancellation, edit, or missing driver detail cannot be returned later.
+  const current = await createIwayPreview(orderIds);
+  if (!current.valid) throw new Error(`IWAY_PREVIEW_STALE:${current.errors.join("；")}`);
   const completed = await db.$transaction(async (tx) => {
     const confirmedAt = new Date();
     const updated = await tx.iwayReturnBatch.update({ where: { id: batchId }, data: { confirmedAt }, include: { orders: true } });
