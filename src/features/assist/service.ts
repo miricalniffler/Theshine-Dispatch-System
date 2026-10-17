@@ -1,4 +1,5 @@
 import { isQwenConfigured, qwenJson } from "./qwen";
+import { recognizeVehicleImage } from "./vision";
 
 export type ReviewAssistance = {
   status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY";
@@ -29,16 +30,7 @@ export async function translateThaiForReview(text: string): Promise<ReviewAssist
 export async function identifyVehicleFromImage(imageUrl: string): Promise<ReviewAssistance> {
   if (!imageUrl.trim()) return { status: "NOT_NEEDED", provider: "人工复核", message: "未提供车辆图片。" };
   try { new URL(imageUrl); } catch { return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "车辆图片地址无效，请检查后重试。" }; }
-  if (!isQwenConfigured()) return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "已提供车辆图片，但尚未配置 Qwen API。请人工确认车型，不会自动替换订单车型。" };
-  try {
-    const result = await qwenJson<{ vehicleModel?: unknown; confidence?: unknown }>([
-      { role: "system", content: "你是泰国接送机车辆识别助手。根据图片判断可见车辆的具体车型；若无法可靠判断，vehicleModel 必须为 null。不得只输出 Van、Minivan、Sedan 等大类。必须输出 JSON：{\"vehicleModel\":string|null,\"confidence\":0到1之间数字}。" },
-      { role: "user", content: [{ type: "text", text: "请识别这辆车的具体车型。" }, { type: "image_url", image_url: { url: imageUrl } }] },
-    ], "qwen3-vl-plus");
-    const value = typeof result.vehicleModel === "string" ? result.vehicleModel : "";
-    if (!value) throw new Error("服务未返回 vehicleModel");
-    return { status: "SUGGESTION_READY", provider: "Qwen", message: "已生成车型建议，请人工复核后再确认。", value, confidence: typeof result.confidence === "number" ? result.confidence : undefined };
-  } catch (error) {
-    return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: `车型识别服务暂不可用（${error instanceof Error ? error.message : "未知原因"}）。请人工确认车型。` };
-  }
+  const result = await recognizeVehicleImage(imageUrl);
+  if (!result.vehicle_model) return { status: "MANUAL_REVIEW_REQUIRED", provider: result.provider === "NONE" ? "人工复核" : result.provider, message: result.note };
+  return { status: "SUGGESTION_READY", provider: result.provider, message: result.note, value: result.vehicle_model, confidence: result.confidence === "HIGH" ? 0.9 : result.confidence === "MEDIUM" ? 0.6 : result.confidence === "LOW" ? 0.3 : undefined };
 }
