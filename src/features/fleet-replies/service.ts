@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
 import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
-import { isQwenConfigured, qwenJson, type QwenContent } from "@/features/assist/qwen";
+import { isQwenConfigured, qwenJson } from "@/features/assist/qwen";
+import { recognizeVehicleImage } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
 type Field = { value: string | null; evidence: string };
@@ -240,12 +241,8 @@ async function translateThaiNames(records: ReplyRecord[]) {
 }
 
 async function readVehicleImage(image: { storagePath: string }): Promise<VisualResult | null> {
-  if (!isQwenConfigured()) return null;
-  const content: QwenContent = [
-    { type: "text", text: "识别这张车辆照片中可明确看出的具体车型和车牌。车型必须是具体名称，例如 Toyota HiAce、Toyota HiAce VIP Van、Toyota Commut、Mitsubishi Pajero；不能只写 Van 或 Minibus。无法确认填 null。车牌只输出数字部分。只输出 JSON：{\"vehicle_model\":string|null,\"license_plate\":string|null}" },
-    { type: "image_url", image_url: { url: image.storagePath } },
-  ];
-  try { return await qwenJson<VisualResult>([{ role: "user", content }], "qwen3-vl-flash"); } catch { return null; }
+  const result = await recognizeVehicleImage(image.storagePath);
+  return result.provider === "NONE" ? null : result;
 }
 
 async function applyVehicleImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
