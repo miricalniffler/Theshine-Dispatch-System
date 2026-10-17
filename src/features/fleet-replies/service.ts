@@ -308,6 +308,9 @@ export async function analyzeFleetReply(replyId: string, transientImages: Transi
   const result = profile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
   await translateThaiNames(result.records);
   const images = transientImages.slice(0, 4).map((image) => ({ storagePath: image.dataUrl, originalFilename: `${image.kind === "screenshot" ? "[screenshot] " : "[vehicle] "}${image.filename || "uploaded-image"}` }));
+  if (images.length && process.env.AI_VISION_REAL_CALLS_ENABLED !== "true") {
+    result.unmatched_items.push({ source_type: "image", source_id: "vision-configuration", reason: "AI 图片识别尚未启用：隔离测试环境未配置或未授权真实模型调用。图片不会保存；请先人工填写资料。" });
+  }
   await applyFleetImages(result.records, images, orders);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
