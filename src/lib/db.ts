@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { isIsolatedPreview } from "@/lib/isolated-preview";
+import { isIsolatedPreview, isUnisolatedPreview } from "@/lib/isolated-preview";
 
 // The cloud acceptance Preview receives a separately prefixed Neon
 // connection. Keep this opt-in: ordinary Preview and Production deployments
@@ -8,6 +8,10 @@ import { isIsolatedPreview } from "@/lib/isolated-preview";
 if (isIsolatedPreview) {
   process.env.DATABASE_URL = process.env.PR12_TEST_DATABASE_URL;
   if (process.env.PR12_TEST_DATABASE_URL_UNPOOLED) process.env.DIRECT_URL = process.env.PR12_TEST_DATABASE_URL_UNPOOLED;
+} else if (isUnisolatedPreview) {
+  // Never let a branch preview fall back to a production connection. API
+  // requests fail safely until a dedicated test database is configured.
+  process.env.DATABASE_URL = "postgresql://preview-misconfigured@127.0.0.1:1/preview";
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };

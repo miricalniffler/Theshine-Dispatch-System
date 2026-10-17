@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "postinstall": "prisma generate",
-    "build": "prisma generate && (if [ \"$VERCEL_ENV\" = \"preview\" ] && [ \"$VERCEL_GIT_COMMIT_REF\" = \"codex/core-workflow-recovery\" ] && [ -n \"$PR12_TEST_DATABASE_URL\" ]; then DATABASE_URL=\"$PR12_TEST_DATABASE_URL\" DIRECT_URL=\"$PR12_TEST_DATABASE_URL_UNPOOLED\" prisma migrate deploy; fi) && next build",
+    "build": "prisma generate && (if [ \"$VERCEL_ENV\" = \"preview\" ] && { [ \"$VERCEL_GIT_COMMIT_REF\" = \"codex/core-workflow-recovery\" ] || [ \"$VERCEL_GIT_COMMIT_REF\" = \"codex/ai-assist-phase1\" ]; } && [ -n \"$PR12_TEST_DATABASE_URL\" ]; then DATABASE_URL=\"$PR12_TEST_DATABASE_URL\" DIRECT_URL=\"$PR12_TEST_DATABASE_URL_UNPOOLED\" prisma migrate deploy; fi) && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:mobile": "playwright test --config=playwright.config.ts"

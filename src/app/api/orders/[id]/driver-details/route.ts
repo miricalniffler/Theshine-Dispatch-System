@@ -1,15 +1,18 @@
 import { failure, success } from "@/lib/api-response";
 import { getDriverDetails, saveDriverDetails } from "@/features/iway/service";
 import { NextRequest } from "next/server";
+import { hasTeamAccess } from "@/lib/team-access";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_request: NextRequest, { params }: Params) {
+export async function GET(request: NextRequest, { params }: Params) {
+  if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);
   const { id } = await params;
   return success(await getDriverDetails(id));
 }
 
 export async function POST(request: NextRequest, { params }: Params) {
+  if (!hasTeamAccess(request)) return failure("UNAUTHORIZED", "请先登录工作台。", undefined, 401);
   const { id } = await params;
   try { return success(await saveDriverDetails(id, await request.json())); }
   catch (error) {

@@ -10,7 +10,7 @@ import "./iway.css";
 type WorkItem = { order: Order; driver: DriverDetails | null };
 type Notice = { tone: "success" | "error"; message: string } | null;
 type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY"; message: string; value?: string; confidence?: number };
-type ScreenshotResult = { driverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleModel: string | null; note: string; provider: string; model: string | null; fallbackReason: string | null };
+type ScreenshotResult = { driverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleBrand: string | null; vehicleModel: string | null; vehicleClass: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; evidence: string[]; note: string; provider: string; model: string | null; fallbackReason: string | null };
 
 async function readApiResponse(response: Response) {
   const text = await response.text();
@@ -57,8 +57,12 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   const [notice, setNotice] = useState<Notice>(null);
   const [assistantNotes, setAssistantNotes] = useState<string[]>([]);
   const [vehicleImage, setVehicleImage] = useState("");
+  const [vehicleBrand, setVehicleBrand] = useState("");
+  const [vehicleClass, setVehicleClass] = useState("");
+  const [archiveNotice, setArchiveNotice] = useState<Notice>(null);
+  const [savingArchive, setSavingArchive] = useState(false);
   const [nameConfirmed, setNameConfirmed] = useState(false);
-  useEffect(() => { setForm({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id }); setNameConfirmed(false); }, [item]);
+  useEffect(() => { setForm({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id }); setVehicleBrand(""); setVehicleClass(""); setArchiveNotice(null); setNameConfirmed(false); }, [item]);
   const set = (key: keyof DriverDetails, value: string) => setForm((current) => ({ ...current, [key]: value }));
   function attachVehicleImage(file: File | undefined) {
     if (!file || !file.type.startsWith("image/")) { setAssistantNotes(["请选择或粘贴车辆图片文件。"]); return; }
@@ -87,12 +91,24 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
             driverNameSource: result.driverNameSource === "NOT_FOUND" ? current.driverNameSource : result.driverNameSource,
             driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图识别/泰语转写，待人工确认",
           }));
-          notes.push(`${result.note}${result.fallbackReason ? `（${result.fallbackReason}）` : ""}`);
+          setVehicleBrand((current) => current || result.vehicleBrand || ""); setVehicleClass((current) => current || result.vehicleClass || "");
+          notes.push(`${result.note} 识别来源：${result.provider}${result.model ? ` / ${result.model}` : ""}；不确定性：${result.confidence}${result.evidence.length ? `；可见依据：${result.evidence.join("；")}` : ""}${result.fallbackReason ? `（${result.fallbackReason}）` : ""}`);
         }
       }
       setAssistantNotes(notes);
     } catch { setAssistantNotes(["分析暂时无法完成。原始回复仍已保留，请人工填写并保存。"]); }
     finally { setAnalysing(false); }
+  }
+  async function saveArchive() {
+    if (!form.licensePlate?.trim()) { setArchiveNotice({ tone: "error", message: "请先人工核对并填写车牌号，才可关联车辆档案。" }); return; }
+    setSavingArchive(true); setArchiveNotice(null);
+    try {
+      const response = await fetch("/api/vehicle-archive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rawPlate: form.licensePlate, brand: vehicleBrand || null, model: form.confirmedVehicleModel || null, vehicleClass: vehicleClass || null, driverName: form.confirmedDriverName || null, normalizedPhone: form.normalizedDriverPhone || null }) });
+      const payload = await readApiResponse(response);
+      if (!response.ok) throw new Error(payload.error?.message ?? "车辆档案保存失败");
+      setArchiveNotice({ tone: "success", message: payload.data?.conflictPreserved ? "已记录本次资料，但已确认的车辆档案未被覆盖。" : "已人工确认并关联车辆档案。" });
+    } catch (error) { setArchiveNotice({ tone: "error", message: error instanceof Error ? error.message : "车辆档案保存失败" }); }
+    finally { setSavingArchive(false); }
   }
   async function save() {
     const pendingName = form.driverNameSource === "SYSTEM_GENERATED" || form.driverNameSource === "IMAGE_TRANSLITERATED";
@@ -122,6 +138,12 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
       <label>确认车型<input value={form.confirmedVehicleModel ?? ""} onChange={(event) => set("confirmedVehicleModel", event.target.value)} placeholder="例如 Toyota Commut" /></label>
       <label>车牌号<input value={form.licensePlate ?? ""} onChange={(event) => set("licensePlate", event.target.value)} placeholder="例如 1กข 2345" /></label>
     </div>
+    <section className="vehicle-archive-confirmation" aria-label="车辆档案人工确认">
+      <p><strong>车辆识别仅为建议</strong>：请核对后再关联档案；不会自动覆盖已确认车辆或司机历史。</p>
+      <div className="driver-form"><label>车辆品牌<input value={vehicleBrand} onChange={(event) => setVehicleBrand(event.target.value)} placeholder="例如 Toyota" /></label><label>车辆等级<input value={vehicleClass} onChange={(event) => setVehicleClass(event.target.value)} placeholder="例如 Minivan" /></label></div>
+      <button type="button" className="assist-action" onClick={saveArchive} disabled={savingArchive}>{savingArchive ? "正在关联…" : "确认并关联车辆档案"}</button>
+      {archiveNotice && <p className={`inline-notice ${archiveNotice.tone}`}>{archiveNotice.message}</p>}
+    </section>
     {form.driverNameSource && form.driverNameSource !== "MANUAL" && <><p className="normalized">姓名来源：<strong>{form.driverNameSource === "SYSTEM_GENERATED" ? "系统临时生成，尚未核实" : "截图泰语转写，尚待人工确认"}</strong></p><label className="normalized"><input type="checkbox" checked={nameConfirmed} onChange={(event) => setNameConfirmed(event.target.checked)} /> 我已核对这是真实司机姓名，允许用于 i’way 回传</label></>}
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
