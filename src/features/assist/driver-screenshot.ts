@@ -49,6 +49,7 @@ export function normalizeDriverScreenshot(raw: Record<string, unknown>, provider
 const prompt = "从这张泰语、英文或混合的车队截图/车辆照片提取结构化资料。只能依据画面中明确可见的内容，不得猜测或补全。JSON 字段：order_number,pickup_time,route,passenger_name,passenger_count,luggage,driver_name,driver_name_source,driver_phone,license_plate,vehicle_brand,vehicle_model,vehicle_class,confidence,evidence。未见或证据不足的字段填 null；confidence 只可为 HIGH、MEDIUM、LOW、UNKNOWN；evidence 是最多5条简短可见依据。driver_name_source 只有在画面确有泰语司机姓名且能转写时才为 IMAGE_TRANSLITERATED，否则为 NOT_FOUND。";
 
 async function glmJson(imageUrl: string) {
+  if (process.env.AI_VISION_REAL_CALLS_ENABLED !== "true") throw new Error("REAL_VISION_CALLS_DISABLED");
   const apiKey = isIsolatedPreview ? undefined : process.env.ZHIPU_API_KEY;
   if (!apiKey) throw new Error("GLM_NOT_CONFIGURED");
   const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
@@ -68,11 +69,12 @@ export async function recognizeDriverScreenshot(imageUrl: string): Promise<Drive
   let glmFailure: string | null = null;
   try { return normalizeDriverScreenshot(await glmJson(imageUrl), "GLM", "glm-5.3-flash", null); }
   catch (error) { glmFailure = error instanceof Error ? error.message : "GLM_FAILED"; }
-  if (isQwenConfigured()) {
+  if (process.env.AI_VISION_REAL_CALLS_ENABLED === "true" && isQwenConfigured()) {
     try {
       const content: QwenContent = [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }];
       return normalizeDriverScreenshot(await qwenJson<Record<string, unknown>>([{ role: "user", content }], "qwen3.7-plus"), "QWEN", "qwen3.7-plus", `GLM 主模型不可用：${glmFailure}`);
     } catch (error) { return { ...empty("QWEN", "qwen3.7-plus", `GLM 不可用：${glmFailure}；Qwen 备用失败：${error instanceof Error ? error.message : "UNKNOWN"}`), note: "模型暂时无法识别截图。图片不会保存到数据库，请人工填写。" }; }
   }
-  return { ...empty("NONE", null, `GLM 主模型不可用：${glmFailure}`), note: "未配置可用的备用模型。图片不会保存到数据库，请人工填写。" };
+  const disabled = glmFailure === "REAL_VISION_CALLS_DISABLED";
+  return { ...empty("NONE", null, `GLM 主模型不可用：${glmFailure}`), note: disabled ? "AI 实际调用尚未被管理员启用；请人工填写。图片不会保存到数据库。" : "未配置可用的备用模型。图片不会保存到数据库，请人工填写。" };
 }
