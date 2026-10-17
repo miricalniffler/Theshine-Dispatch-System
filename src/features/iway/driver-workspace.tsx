@@ -10,7 +10,7 @@ import "./iway.css";
 type WorkItem = { order: Order; driver: DriverDetails | null };
 type Notice = { tone: "success" | "error"; message: string } | null;
 type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY"; message: string; value?: string; confidence?: number };
-type ScreenshotResult = { driverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleBrand: string | null; vehicleModel: string | null; vehicleClass: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; evidence: string[]; note: string; provider: string; model: string | null; fallbackReason: string | null };
+type ScreenshotResult = { driverName: string | null; rawThaiDriverName: string | null; driverNameSource: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND"; driverPhone: string | null; licensePlate: string | null; vehicleBrand: string | null; vehicleModel: string | null; vehicleClass: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; evidence: string[]; note: string; provider: string; model: string | null; fallbackReason: string | null };
 
 async function readApiResponse(response: Response) {
   const text = await response.text();
@@ -21,7 +21,7 @@ async function readApiResponse(response: Response) {
 
 const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成", CANCELLED: "已取消" };
 
-function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, driverNameSource: null, driverNameSourceDetail: null, confirmedAt: null }; }
+function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, driverNameSource: null, driverNameSourceDetail: null, rawThaiDriverName: null, confirmedAt: null }; }
 
 function bangkokTomorrowDate() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -89,7 +89,8 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
             licensePlate: current.licensePlate || result.licensePlate,
             confirmedVehicleModel: current.confirmedVehicleModel || result.vehicleModel,
             driverNameSource: result.driverNameSource === "NOT_FOUND" ? current.driverNameSource : result.driverNameSource,
-            driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图识别/泰语转写，待人工确认",
+            rawThaiDriverName: current.rawThaiDriverName || result.rawThaiDriverName || null,
+            driverNameSourceDetail: result.driverNameSource === "SYSTEM_GENERATED" ? "截图未识别姓名，系统仅生成界面占位名" : "截图中可见泰文姓名的英文音译；原文已保留",
           }));
           setVehicleBrand((current) => current || result.vehicleBrand || ""); setVehicleClass((current) => current || result.vehicleClass || "");
           notes.push(`${result.note} 识别来源：${result.provider}${result.model ? ` / ${result.model}` : ""}；不确定性：${result.confidence}${result.evidence.length ? `；可见依据：${result.evidence.join("；")}` : ""}${result.fallbackReason ? `（${result.fallbackReason}）` : ""}`);
@@ -111,7 +112,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
     finally { setSavingArchive(false); }
   }
   async function save() {
-    const pendingName = form.driverNameSource === "SYSTEM_GENERATED" || form.driverNameSource === "IMAGE_TRANSLITERATED";
+    const pendingName = form.driverNameSource === "SYSTEM_GENERATED";
     if (pendingName && !nameConfirmed) { setNotice({ tone: "error", message: "这是 AI 建议的姓名。请先核对真实司机姓名并勾选确认，系统才允许用于回传。" }); return; }
     setSaving(true); setNotice(null);
     const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, confirmDriverName: nameConfirmed, ...(nameConfirmed ? { driverNameSourceDetail: "运营人员已核对 AI 建议姓名" } : {}) }) });
@@ -144,7 +145,8 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
       <button type="button" className="assist-action" onClick={saveArchive} disabled={savingArchive}>{savingArchive ? "正在关联…" : "确认并关联车辆档案"}</button>
       {archiveNotice && <p className={`inline-notice ${archiveNotice.tone}`}>{archiveNotice.message}</p>}
     </section>
-    {form.driverNameSource && form.driverNameSource !== "MANUAL" && <><p className="normalized">姓名来源：<strong>{form.driverNameSource === "SYSTEM_GENERATED" ? "系统临时生成，尚未核实" : "截图泰语转写，尚待人工确认"}</strong></p><label className="normalized"><input type="checkbox" checked={nameConfirmed} onChange={(event) => setNameConfirmed(event.target.checked)} /> 我已核对这是真实司机姓名，允许用于 i’way 回传</label></>}
+    {form.driverNameSource === "SYSTEM_GENERATED" && <><p className="normalized">姓名来源：<strong>系统临时生成，尚未核实</strong></p><label className="normalized"><input type="checkbox" checked={nameConfirmed} onChange={(event) => setNameConfirmed(event.target.checked)} /> 我已核对这是真实司机姓名，允许用于 i’way 回传</label></>}
+    {form.driverNameSource === "IMAGE_TRANSLITERATED" && <p className="normalized">姓名来源：<strong>截图泰文姓名音译，可直接用于 i’way 回传</strong>{form.rawThaiDriverName ? `（泰文原名：${form.rawThaiDriverName}）` : ""}</p>}
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
     <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
