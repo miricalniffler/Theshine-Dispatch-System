@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
 import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
-import { isQwenConfigured, qwenJson, type QwenContent } from "@/features/assist/qwen";
+import { isQwenConfigured, qwenJson } from "@/features/assist/qwen";
+import { isAiVisionRealCallsEnabled, recognizeFleetScreenshot, recognizeVehicleImage } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
 type Field = { value: string | null; evidence: string };
@@ -20,7 +21,7 @@ type ReplyRecord = {
   review_reasons: string[];
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[] };
-type VisualResult = { vehicle_model: string | null; license_plate: string | null };
+type VisualResult = { vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
@@ -228,7 +229,7 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
 
 async function translateThaiNames(records: ReplyRecord[]) {
   const names = [...new Set(records.map((record) => record.driver_name.value).filter(hasThai))] as string[];
-  if (!names.length || !isQwenConfigured()) return;
+  if (!names.length || !isQwenConfigured() || !isAiVisionRealCallsEnabled()) return;
   try {
     const translated = await qwenJson<{ names: { thai: string; english: string }[] }>([{ role: "user", content: `将以下泰语司机姓名转写为常用英文拼写。只输出 JSON：{"names":[{"thai":"原文","english":"英文"}]}。姓名：${JSON.stringify(names)}` }], "qwen-flash");
     const map = new Map(translated.names.map((item) => [item.thai.trim(), item.english.trim()]));
@@ -239,13 +240,38 @@ async function translateThaiNames(records: ReplyRecord[]) {
   } catch { /* 翻译服务临时不可用时保留原始泰语姓名。 */ }
 }
 
+async function applyVehicleHistory(records: ReplyRecord[]) {
+  const plates = [...new Set(records.map((record) => normalizePlate(record.license_plate.value)).filter(Boolean))];
+  if (!plates.length) return;
+  const candidates = await db.driverDetail.findMany({ where: { licensePlate: { not: null } }, orderBy: { updatedAt: "desc" }, take: 300, select: { licensePlate: true, confirmedVehicleModel: true } });
+  for (const record of records) {
+    if (record.vehicle_model.value) continue;
+    const plate = normalizePlate(record.license_plate.value);
+    const historic = candidates.find((item) => normalizePlate(item.licensePlate) === plate && item.confirmedVehicleModel);
+    if (historic?.confirmedVehicleModel) record.vehicle_model = field(historic.confirmedVehicleModel, "按相同车牌复用已确认的历史车型");
+  }
+}
+
+async function applyScreenshotImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
+  if (!images.length) return;
+  const scans = await Promise.all(images.slice(0, 4).map((image) => recognizeFleetScreenshot(image.storagePath)));
+  scans.forEach((scan, index) => {
+    if (scan.provider === "NONE") return;
+    const exact = scan.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(scan.order_number!)) : undefined;
+    const target = exact ? records.find((record) => record.order_match.platform_order_number === exact.orderNo) ?? records.find((record) => !record.order_match.platform_order_number) : records.length === 1 ? records[0] : undefined;
+    if (!target) return;
+    if (exact) { target.order_match = { platform_order_number: exact.orderNo, confidence: scan.confidence === "HIGH" ? "high" : "medium", evidence: `截图 ${index + 1} 识别到订单号` }; target.needs_review = false; target.review_reasons = []; }
+    if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
+    if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
+    if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
+    if (!target.vehicle_model.value && scan.vehicle_model) target.vehicle_model = field(scan.vehicle_model, `来自截图 ${index + 1}`);
+    target.image_source_index = index + 1;
+  });
+}
+
 async function readVehicleImage(image: { storagePath: string }): Promise<VisualResult | null> {
-  if (!isQwenConfigured()) return null;
-  const content: QwenContent = [
-    { type: "text", text: "识别这张车辆照片中可明确看出的具体车型和车牌。车型必须是具体名称，例如 Toyota HiAce、Toyota HiAce VIP Van、Toyota Commut、Mitsubishi Pajero；不能只写 Van 或 Minibus。无法确认填 null。车牌只输出数字部分。只输出 JSON：{\"vehicle_model\":string|null,\"license_plate\":string|null}" },
-    { type: "image_url", image_url: { url: image.storagePath } },
-  ];
-  try { return await qwenJson<VisualResult>([{ role: "user", content }], "qwen3-vl-flash"); } catch { return null; }
+  const result = await recognizeVehicleImage(image.storagePath);
+  return result.provider === "NONE" ? null : result;
 }
 
 async function applyVehicleImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
@@ -265,6 +291,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
     if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }
 
@@ -276,11 +303,15 @@ export async function analyzeFleetReply(replyId: string) {
   const profile = resolveProfile(reply, orders);
   if (profile === "AUTO") return { status: "PROFILE_REQUIRED", message: "无法判断这条回复来自曼谷还是苏梅车队，请选择车队后重试。", replyId, orders };
   const result = profile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
+  // Image-only replies are chat screenshots. Do not run OCR on normal
+  // text-and-vehicle-photo replies, which keeps paid calls bounded.
+  if (!reply.rawText.trim()) await applyScreenshotImages(result.records, reply.images, orders);
   await translateThaiNames(result.records);
-  await applyVehicleImages(result.records, reply.images, orders);
+  if (reply.rawText.trim()) await applyVehicleImages(result.records, reply.images, orders);
+  await applyVehicleHistory(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
-  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: isQwenConfigured() ? "规则解析 + Qwen 翻译/看图" : "规则解析", modelName: reply.images.length ? "qwen3-vl-flash（逐图）" : "qwen-flash（泰语姓名）", promptVersion: `fleet-reply-v3-${profile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
+  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: isAiVisionRealCallsEnabled() ? "规则解析 + GLM / Qwen" : "规则解析（AI 实际调用未启用）", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "qwen-flash（泰语姓名）", promptVersion: `fleet-reply-v4-${profile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
   return { status: extraction.status, replyId, extractionId: extraction.id, result, orders, autoWritten, profile };
 }
 
@@ -302,6 +333,8 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   const errors: { orderId: string; message: string }[] = [];
   for (const record of input.records) {
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
+    const current = await db.order.findUnique({ where: { id: record.orderId }, select: { status: true } });
+    if (current?.status === "CANCELLED") { errors.push({ orderId: record.orderId, message: "订单已取消，不能写入司机资料。" }); continue; }
     const phone = normalizeThailandPhone(record.driverPhone, rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [

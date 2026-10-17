@@ -17,6 +17,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     const result = await updatePersistedOrder((await params).id, parsed.data);
     if (result.kind === "not-found") return failure("ORDER_NOT_FOUND", "找不到该订单。", undefined, 404);
+    if (result.kind === "cancelled") return failure("ORDER_CANCELLED", "订单已取消，不能继续编辑。请先按业务规则恢复订单。", undefined, 409);
     return success({ order: result.order, updatedFields: result.updatedFields });
   } catch (error) {
     if (typeof error === "object" && error && "code" in error && error.code === "P2002") return failure("DUPLICATE_ORDER_NUMBER", "该平台订单号已存在。", ["platformOrderNumber"], 409);

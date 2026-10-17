@@ -11,7 +11,7 @@ type WorkItem = { order: Order; driver: DriverDetails | null };
 type Notice = { tone: "success" | "error"; message: string } | null;
 type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGESTION_READY"; message: string; value?: string; confidence?: number };
 
-const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成" };
+const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成", CANCELLED: "已取消" };
 
 function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, licensePlate: null, confirmedAt: null }; }
 

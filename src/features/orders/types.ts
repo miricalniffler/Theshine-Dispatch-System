@@ -1,4 +1,4 @@
-export type OrderStatus = "PENDING_REVIEW" | "READY_TO_DISPATCH" | "DISPATCHED" | "DRIVER_CONFIRMED" | "RETURNED" | "COMPLETED";
+export type OrderStatus = "PENDING_REVIEW" | "READY_TO_DISPATCH" | "DISPATCHED" | "DRIVER_CONFIRMED" | "RETURNED" | "COMPLETED" | "CANCELLED";
 export type OrderException = string;
 
 export type Order = {
@@ -13,6 +13,11 @@ export type Order = {
   route: string;
   vehicleType: string;
   status: OrderStatus;
+  cancelReason?: string | null;
+  cancelledAt?: string | null;
+  restoreBlockedReason?: string | null;
+  latestExceptionNote?: string | null;
+  latestExceptionAt?: string | null;
   exceptions: OrderException[];
   createdAt: string;
   driverDetail?: {
