@@ -5,6 +5,16 @@ type Usage = { inputTokens: number | null; outputTokens: number | null };
 export type ProviderResult = { provider: BenchmarkProvider; model: string; region?: string; status: "ok" | "error" | "unconfigured"; text?: string; error?: string; errorCode?: string; elapsedMs: number; usage?: Usage; diagnostic?: string };
 
 const endpoints = { qwen: { "cn-beijing": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "ap-southeast-1": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions" }, deepseek: "https://api.deepseek.com/chat/completions", glm: "https://open.bigmodel.cn/api/paas/v4/chat/completions" } as const;
+
+/**
+ * The benchmark page can incur provider charges independently of the assisted
+ * order-entry workflow. Keep it fail-closed: a configured API key alone must
+ * never enable paid benchmark requests in Preview or Production.
+ */
+export function isVisionBenchmarkRealCallsEnabled() {
+  return !isIsolatedPreview && process.env.AI_BENCHMARK_REAL_CALLS_ENABLED === "true";
+}
+
 function apiKey(provider: BenchmarkProvider) { if (isIsolatedPreview) return undefined; return provider === "qwen" ? process.env.DASHSCOPE_API_KEY : provider === "deepseek" ? process.env.DEEPSEEK_API_KEY : process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY; }
 function endpoint(selection: ResolvedSelection) { return selection.provider === "qwen" ? endpoints.qwen[selection.region as keyof typeof endpoints.qwen] : endpoints[selection.provider]; }
 function friendlyHttpError(status: number) {
@@ -19,6 +29,7 @@ function friendlyHttpError(status: number) {
 export async function runVisionBenchmark(selection: ResolvedSelection, image: string, prompt: string, timeoutMs = 48_000): Promise<ProviderResult> {
   const key = apiKey(selection.provider);
   const base = { provider: selection.provider, model: selection.modelId, ...(selection.region ? { region: selection.region } : {}) };
+  if (!isVisionBenchmarkRealCallsEnabled()) return { ...base, status: "unconfigured", error: "AI 对比测试的真实调用尚未启用。请由管理员确认预算与密钥后开启。", errorCode: "REAL_CALLS_DISABLED", elapsedMs: 0 };
   if (!key) return { ...base, status: "unconfigured", error: "未配置 API Key", errorCode: "API_KEY_MISSING", elapsedMs: 0 };
   const started = Date.now();
   try {

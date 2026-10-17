@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { type BenchmarkProvider, publicCatalog, resolveSelections } from "@/features/ai-benchmark/catalog";
-import { runVisionBenchmark } from "@/features/ai-benchmark/providers";
+import { isVisionBenchmarkRealCallsEnabled, runVisionBenchmark } from "@/features/ai-benchmark/providers";
 
 export const maxDuration = 60;
 export const runtime = "nodejs";
@@ -22,6 +22,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const denied = requireAccess(request);
   if (denied) return denied;
+  if (!isVisionBenchmarkRealCallsEnabled()) {
+    return reply({ error: "AI 对比测试的真实调用目前已关闭。请由管理员确认预算与密钥后，在服务端开启独立开关。", code: "REAL_CALLS_DISABLED" }, 503);
+  }
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > maxRequestBytes) return reply({ error: "图片不可超过 3 MB，请压缩后重试。" }, 413);
   const body = await request.json().catch(() => ({}));
