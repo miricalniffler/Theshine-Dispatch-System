@@ -21,7 +21,7 @@ type ReplyRecord = {
   review_reasons: string[];
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[] };
-type VisualResult = { vehicle_model: string | null; license_plate: string | null };
+type VisualResult = { vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
@@ -291,6 +291,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
     if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }
 
@@ -332,6 +333,8 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   const errors: { orderId: string; message: string }[] = [];
   for (const record of input.records) {
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
+    const current = await db.order.findUnique({ where: { id: record.orderId }, select: { status: true } });
+    if (current?.status === "CANCELLED") { errors.push({ orderId: record.orderId, message: "订单已取消，不能写入司机资料。" }); continue; }
     const phone = normalizeThailandPhone(record.driverPhone, rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [

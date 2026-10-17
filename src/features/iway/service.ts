@@ -105,6 +105,7 @@ export async function getDriverDetails(orderId: string) {
 export async function saveDriverDetails(orderId: string, input: DriverDetailsInput) {
   const persisted = await findOrderWithDriver(orderId);
   if (!persisted) throw new Error("ORDER_NOT_FOUND");
+  if (persisted.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
   const order = toOrder(persisted);
   const rules = loadRules();
   const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
