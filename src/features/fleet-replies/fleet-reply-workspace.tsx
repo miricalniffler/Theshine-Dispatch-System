@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import "@/features/iway/iway.css";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
-type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
+type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; raw_thai_driver_name: string | null; driver_name_source: "IMAGE_TRANSLITERATED" | "SYSTEM_GENERATED" | "NOT_FOUND" | "MANUAL"; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
 type Result = { records: ReplyRecord[]; unmatched_items: { source_type: string; source_id: string; reason: string }[] };
-type Editable = { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleModel: string };
+type Editable = { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleModel: string; rawThaiDriverName: string; driverNameSource: "IMAGE_TRANSLITERATED" | "MANUAL" };
 type ReturnWorkItem = { order: CandidateOrder & { serviceDate: string; pickupTime: string; status: string }; driver: { confirmedDriverName: string | null; normalizedDriverPhone: string | null; confirmedVehicleModel: string | null; licensePlate: string | null } | null };
 
 function bangkokTomorrow() {
@@ -60,7 +60,7 @@ async function copyTextWithFallback(text: string) {
 
 export function FleetReplyWorkspace() {
   const [rawText, setRawText] = useState("");
-  const [images, setImages] = useState<{ dataUrl: string; filename: string; mimeType: string }[]>([]);
+  const [images, setImages] = useState<{ dataUrl: string; filename: string; mimeType: string; kind: "screenshot" | "vehicle" }[]>([]);
   const [fleetProfile, setFleetProfile] = useState<"AUTO" | "BANGKOK" | "SAMUI">("AUTO");
   const [serviceDate, setServiceDate] = useState(bangkokTomorrow);
   const [availableDates, setAvailableDates] = useState<string[]>([bangkokTomorrow()]);
@@ -90,11 +90,11 @@ export function FleetReplyWorkspace() {
   const loadReturnItems = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setReturnItems(payload.data || []));
   useEffect(() => { void loadReturnItems(); }, []);
 
-  async function selectImages(files: Iterable<File> | null | undefined) {
+  async function selectImages(files: Iterable<File> | null | undefined, kind: "screenshot" | "vehicle") {
     if (!files) return;
     const next = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map(async (file) => {
       const optimized = await fileToDataUrl(file);
-      return { ...optimized, filename: file.name || "粘贴的车辆图片" };
+      return { ...optimized, filename: file.name || (kind === "screenshot" ? "粘贴的车队截图" : "车辆照片"), kind };
     }));
     setImages((current) => [...current, ...next]);
   }
@@ -103,10 +103,10 @@ export function FleetReplyWorkspace() {
     setImages((current) => current.filter((_, position) => position !== index));
   }
 
-  function formsFromResult(value: Result, candidateOrders: CandidateOrder[]) {
+  function formsFromResult(value: Result, candidateOrders: CandidateOrder[]): Editable[] {
     return value.records.map((record) => {
       const matched = candidateOrders.find((order) => order.orderNo.replace(/\D/g, "") === (record.order_match.platform_order_number ?? "").replace(/\D/g, ""));
-      return { orderId: matched?.id ?? "", driverName: record.driver_name.value ?? "", driverPhone: record.driver_phone.value ?? "", licensePlate: record.license_plate.value ?? "", vehicleModel: record.vehicle_model.value ?? "" };
+      return { orderId: matched?.id ?? "", driverName: record.driver_name.value ?? "", driverPhone: record.driver_phone.value ?? "", licensePlate: record.license_plate.value ?? "", vehicleModel: record.vehicle_model.value ?? "", rawThaiDriverName: record.raw_thai_driver_name ?? "", driverNameSource: record.driver_name_source === "IMAGE_TRANSLITERATED" ? "IMAGE_TRANSLITERATED" : "MANUAL" } as Editable;
     });
   }
 
@@ -201,11 +201,13 @@ export function FleetReplyWorkspace() {
   async function saveAndAnalyze() {
     setWorking(true); setNotice(null); setResult(null); setForms([]); setIwayText(""); setUnresolved([]); setShowEditor(false);
     try {
-      const create = await fetch("/api/fleet-replies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rawText, images, fleetProfile, serviceDate }) });
+      // Do not send image data to the create endpoint. It records only the
+      // text/audit shell; the transient bytes are sent once to analysis.
+      const create = await fetch("/api/fleet-replies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rawText, imageCount: images.length, fleetProfile, serviceDate }) });
       const created = await create.json();
       if (!create.ok) throw new Error(created.error?.message || "无法保存原始回复。");
       setReplyId(created.data.id);
-      const response = await fetch(`/api/fleet-replies/${created.data.id}/analyze`, { method: "POST" });
+      const response = await fetch(`/api/fleet-replies/${created.data.id}/analyze`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images }) });
       const analysed = await response.json();
       if (analysed.data?.status !== "SUCCEEDED") throw new Error(analysed.data?.message || "AI 识别未完成；原始资料已保存。");
       const candidateOrders = analysed.data.orders as CandidateOrder[];
@@ -265,11 +267,12 @@ export function FleetReplyWorkspace() {
     <nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav>
     <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>识别、核对和 i’way 文本生成在同一页完成。订单号、电话、车牌和回传格式由网站规则处理；AI 只用于泰语姓名转写和逐张车辆图片识别。</p></header>
     <section className="fleet-reply-source">
-      <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
+      <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) { event.preventDefault(); void selectImages(pastedImages, "screenshot"); } }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；聊天截图也可直接粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
       <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option></select></label>
-      <label className="vehicle-upload">添加车辆图片<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
-      {images.length > 0 && <div className="reply-image-list" aria-label="已添加车辆图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
+      <label className="vehicle-upload">添加车队聊天截图<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void selectImages(event.currentTarget.files, "screenshot")} /></label>
+      <label className="vehicle-upload">添加车辆照片<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void selectImages(event.currentTarget.files, "vehicle")} /></label>
+      {images.length > 0 && <div className="reply-image-list" aria-label="已添加图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><small>{image.kind === "screenshot" ? "车队聊天截图" : "车辆照片"}</small><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除图片 ${index + 1}`}>删除</button></div>)}</div>}
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
     </section>
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.text}</p>}
@@ -288,7 +291,7 @@ export function FleetReplyWorkspace() {
           <label>车牌号<input value={forms[index]?.licensePlate ?? ""} onChange={(event) => setForm(index, "licensePlate", event.target.value)} /></label>
           <label>具体车型<input value={forms[index]?.vehicleModel ?? ""} onChange={(event) => setForm(index, "vehicleModel", event.target.value)} /></label>
         </div>
-        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.image_source_index ? `；关联车辆图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
+        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{forms[index]?.rawThaiDriverName ? `；泰文原名：${forms[index].rawThaiDriverName}` : ""}{record.image_source_index ? `；关联图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
       </article>)}
       {result.unmatched_items.length > 0 && <div className="unmatched-block"><h3>待补充信息</h3>{result.unmatched_items.map((item) => <p key={`${item.source_type}-${item.source_id}`}>{item.reason || "AI 无法判断归属，请补充订单号。"}</p>)}</div>}
       <div className="preview-actions"><button type="button" className="confirm-action" onClick={saveAssigned} disabled={working}>{working ? "正在生成…" : "保存修改并重新生成回传"}</button><button type="button" className="secondary-action" onClick={cancelEditing} disabled={working}>取消修改</button></div></>}
