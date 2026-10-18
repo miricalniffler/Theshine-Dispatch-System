@@ -66,7 +66,16 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
       const results = await Promise.all(requests);
       const vehicleSuggestion = results.find((result) => result?.value && result.confidence !== undefined)?.value;
       if (vehicleSuggestion && !form.confirmedVehicleModel) set("confirmedVehicleModel", vehicleSuggestion);
-      setAssistantNotes(results.filter(Boolean).map((result) => result.value ? `${result.message} 建议：${result.value}` : result.message));
+      const thaiCandidates = (form.rawReply ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /[\u0E00-\u0E7F]/.test(line) && !/\d{4,}|(?:tel|phone|ทะเบียน|plate)/i.test(line) && line.length <= 80);
+      let nameNote = "";
+      if (thaiCandidates.length) {
+        const nameResponse = await fetch("/api/assist/thai-name-transliteration", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names: thaiCandidates }) });
+        const namePayload = await nameResponse.json();
+        const suggestion = namePayload.data?.names?.[0]?.english;
+        if (suggestion && !form.confirmedDriverName) set("confirmedDriverName", suggestion);
+        nameNote = suggestion ? `泰文姓名音译建议：${suggestion}` : (namePayload.data?.message || "未能识别可转写的泰文姓名。");
+      }
+      setAssistantNotes([...results.filter(Boolean).map((result) => result.value ? `${result.message} 建议：${result.value}` : result.message), ...(nameNote ? [nameNote] : [])]);
     } catch { setAssistantNotes(["分析暂时无法完成。原始回复仍已保留，请人工填写并保存。"]); }
     finally { setAnalysing(false); }
   }
@@ -126,14 +135,16 @@ export function IwayReturnWorkspace() {
     return [...dates.entries()].sort(([left], [right]) => left.localeCompare(right));
   }, [items]);
   const tomorrowDate = bangkokTomorrowDate();
-  const tomorrowItems = useMemo(() => items.filter((item) => item.order.serviceDate === tomorrowDate && item.order.status !== "COMPLETED"), [items, tomorrowDate]);
-  const incompleteTomorrow = tomorrowItems.filter((item) => item.order.status !== "DRIVER_CONFIRMED" && item.order.status !== "RETURNED");
+  const tomorrowAll = useMemo(() => items.filter((item) => item.order.serviceDate === tomorrowDate && item.order.status !== "CANCELLED"), [items, tomorrowDate]);
+  const tomorrowItems = useMemo(() => tomorrowAll.filter((item) => item.order.status === "DRIVER_CONFIRMED" || item.order.status === "RETURNED"), [tomorrowAll]);
+  const incompleteTomorrow = tomorrowAll.filter((item) => item.order.status !== "DRIVER_CONFIRMED" && item.order.status !== "RETURNED");
   const toggle = (id: string) => { setBatchId(null); setPreview(null); setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); };
   async function createPreview() { setNotice(null); setBatchId(null); const response = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: selected }) }); const payload = await response.json(); setPreview(payload.data); }
   async function copy(orderIds = selected) { const response = await fetch("/api/iway-return-batches/copy-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) }); const payload = await response.json(); setPreview(payload.data); if (!payload.data?.valid) return; const copied = await copyTextWithFallback(payload.data.text); if (!copied) { setNotice({ tone: "error", message: "无法自动复制。请长按右侧回传内容，选择“全选”后复制。" }); return; } setBatchId(payload.data.batchId); setNotice({ tone: "success", message: "已按正确格式生成并复制。请粘贴到 i’way 发送；发送后点击下方“确认回传”。" }); }
   async function copyWholeDay(date: string, dayItems: WorkItem[]) { const orderIds = dayItems.map((item) => item.order.id); setSelected(orderIds); setNotice(null); await copy(orderIds); }
   async function copyTomorrow() {
     const orderIds = tomorrowItems.map((item) => item.order.id);
+    if (!orderIds.length) return;
     setSelected(orderIds);
     setNotice(null);
     await copy(orderIds);
@@ -149,7 +160,7 @@ export function IwayReturnWorkspace() {
           <h2>一键回传明日订单</h2>
           <p>服务日期：{tomorrowDate} · 会合并明日全部待回传订单。</p>
           <button type="button" className="one-click-return" onClick={() => void copyTomorrow()} disabled={!tomorrowItems.length}>一键生成并复制明日 i’way 回传</button>
-          {!tomorrowItems.length && <p className="empty-work">明日暂时没有等待回传的订单。</p>}
+          {!tomorrowItems.length && <p className="empty-work">{tomorrowAll.length ? `明日有 ${tomorrowAll.length} 笔订单，但尚未确认完整司机资料；请先在“车队回传信息”补齐司机姓名、电话、车型和车牌。` : "明日没有订单；可在下方勾选其他日期的订单生成单笔回传。"}</p>}
           {incompleteTomorrow.length > 0 && <p className="incomplete-hint">明日还有 {incompleteTomorrow.length} 笔订单缺少司机资料；点击按钮后会列出需要补充的订单。</p>}
           <h2>单笔发送或更正</h2>
           <p>已完成订单也可勾选，用于车辆、司机或时间调整后的补发。</p>

@@ -10,6 +10,20 @@ export type ReviewAssistance = {
 };
 
 const thaiCharacters = /[\u0E00-\u0E7F]/;
+export function isAiNameTransliterationEnabled() { return process.env.AI_NAME_TRANSLITERATION_ENABLED === "true"; }
+
+export async function transliterateThaiDriverNames(names: string[]) {
+  const unique = [...new Set(names.map((name) => name.trim()).filter((name) => thaiCharacters.test(name)))];
+  if (!unique.length) return { names: new Map<string, string>(), status: "NOT_NEEDED" as const, message: "未发现需要转写的泰文司机姓名。" };
+  if (!isAiNameTransliterationEnabled()) return { names: new Map<string, string>(), status: "MANUAL_REVIEW_REQUIRED" as const, message: "姓名 AI 转写尚未开启；已保留泰文原名，请人工填写英文拼写。" };
+  if (!isQwenConfigured()) return { names: new Map<string, string>(), status: "MANUAL_REVIEW_REQUIRED" as const, message: "姓名 AI 转写未配置 Qwen 服务；已保留泰文原名。" };
+  try {
+    const result = await qwenJson<{ names?: { thai?: unknown; english?: unknown }[] }>([{ role: "system", content: "你是泰国人名音译助手。将泰文司机姓名音译为常用英文拼写，不要翻译字面含义，不要编造。仅输出 JSON：{\"names\":[{\"thai\":\"原文\",\"english\":\"英文拼写\"}]}。" }, { role: "user", content: JSON.stringify(unique) }], "qwen-flash", { timeoutMs: 30_000 });
+    const translated = new Map<string, string>();
+    for (const item of result.names ?? []) if (typeof item.thai === "string" && typeof item.english === "string" && item.english.trim()) translated.set(item.thai.trim(), item.english.trim());
+    return { names: translated, status: "SUGGESTION_READY" as const, message: translated.size ? "已生成泰文姓名英文音译建议，请人工核对后保存。" : "AI 未能确定英文拼写；已保留泰文原名。" };
+  } catch (error) { return { names: new Map<string, string>(), status: "MANUAL_REVIEW_REQUIRED" as const, message: `姓名音译暂不可用：${error instanceof Error ? error.message : "未知原因"}` }; }
+}
 
 export async function translateThaiForReview(text: string): Promise<ReviewAssistance> {
   if (!text.trim() || !thaiCharacters.test(text)) return { status: "NOT_NEEDED", provider: "本地检测", message: "原文中未发现泰文，无需翻译。" };

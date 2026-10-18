@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
 import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
-import { isQwenConfigured, qwenJson } from "@/features/assist/qwen";
+import { isQwenConfigured } from "@/features/assist/qwen";
+import { isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
 import { isAiVisionRealCallsEnabled, recognizeFleetScreenshot, recognizeVehicleImage } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
@@ -229,15 +230,22 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
 
 async function translateThaiNames(records: ReplyRecord[]) {
   const names = [...new Set(records.map((record) => record.driver_name.value).filter(hasThai))] as string[];
-  if (!names.length || !isQwenConfigured() || !isAiVisionRealCallsEnabled()) return;
-  try {
-    const translated = await qwenJson<{ names: { thai: string; english: string }[] }>([{ role: "user", content: `将以下泰语司机姓名转写为常用英文拼写。只输出 JSON：{"names":[{"thai":"原文","english":"英文"}]}。姓名：${JSON.stringify(names)}` }], "qwen-flash");
-    const map = new Map(translated.names.map((item) => [item.thai.trim(), item.english.trim()]));
-    records.forEach((record) => {
-      const english = record.driver_name.value && map.get(record.driver_name.value.trim());
-      if (english) record.driver_name = field(english, `泰语姓名“${record.driver_name.value}”已转写为英文`);
-    });
-  } catch { /* 翻译服务临时不可用时保留原始泰语姓名。 */ }
+  if (!names.length) return;
+  const history = await db.driverDetail.findMany({ where: { confirmedDriverName: { not: null }, rawReply: { not: null } }, orderBy: { confirmedAt: "desc" }, take: 500, select: { rawReply: true, confirmedDriverName: true } });
+  const historic = new Map<string, string>();
+  for (const name of names) {
+    const matched = history.find((item) => item.rawReply?.includes(name) && item.confirmedDriverName)?.confirmedDriverName;
+    if (matched) historic.set(name, matched);
+  }
+  const remaining = names.filter((name) => !historic.has(name));
+  const ai = remaining.length && isAiNameTransliterationEnabled() && isQwenConfigured() ? await transliterateThaiDriverNames(remaining) : null;
+  records.forEach((record) => {
+    const thai = record.driver_name.value?.trim();
+    if (!thai) return;
+    const english = historic.get(thai) ?? ai?.names.get(thai);
+    if (english) record.driver_name = field(english, historic.has(thai) ? `复用已确认英文姓名；泰文原名“${thai}”` : `AI 音译泰文原名“${thai}”，请人工核对`);
+    else record.driver_name = field(thai, ai?.message ?? "未找到历史英文姓名，且姓名 AI 转写未开启；已保留泰文原名");
+  });
 }
 
 async function applyVehicleHistory(records: ReplyRecord[]) {
@@ -305,9 +313,15 @@ export async function analyzeFleetReply(replyId: string) {
   const result = profile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
   // Image-only replies are chat screenshots. Do not run OCR on normal
   // text-and-vehicle-photo replies, which keeps paid calls bounded.
-  if (!reply.rawText.trim()) await applyScreenshotImages(result.records, reply.images, orders);
+  if (!reply.rawText.trim()) {
+    if (!isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "图片识别尚未开启：请联系管理员仅在测试环境设置 AI_VISION_REAL_CALLS_ENABLED=true，或人工录入。" });
+    else await applyScreenshotImages(result.records, reply.images, orders);
+  }
   await translateThaiNames(result.records);
-  if (reply.rawText.trim()) await applyVehicleImages(result.records, reply.images, orders);
+  if (reply.rawText.trim()) {
+    if (reply.images.length && !isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "车辆图片识别尚未开启；原始图片已保留，可人工填写车型和车牌。" });
+    else await applyVehicleImages(result.records, reply.images, orders);
+  }
   await applyVehicleHistory(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;

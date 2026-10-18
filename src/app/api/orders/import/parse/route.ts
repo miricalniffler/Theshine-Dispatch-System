@@ -112,7 +112,9 @@ function parseStandardOrder(text: string) {
 type ParsedFields = ReturnType<typeof parseStandardOrder>;
 
 function compactOrderStarts(text: string) {
-  return [...text.matchAll(/^\s*\d{1,2}(?:[\s\u00a0]+\d{3}){2}\s*$/gm)].map((match) => match.index ?? 0);
+  // iWay commonly uses `949 810`; esforty also emits 7-digit values such as
+  // `1 015 534`. Keep both shapes as separate order blocks.
+  return [...text.matchAll(/^\s*(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})\s*$/gm)].map((match) => match.index ?? 0);
 }
 
 function compactDateTime(value: string) {
@@ -125,7 +127,7 @@ function compactDateTime(value: string) {
 // 后面依次是电话、乘客、日期时间、平台车型、接人点、航班、送人点。
 function parseCompactEsfortyOrder(block: string): ParsedFields | null {
   const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const orderIndex = lines.findIndex((line) => /^\d{1,2}(?:[\s\u00a0]+\d{3}){2}$/.test(line));
+  const orderIndex = lines.findIndex((line) => /^(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})$/.test(line));
   if (orderIndex < 0) return null;
   const orderNo = normaliseOrderNumber(lines[orderIndex]);
   const timeIndex = lines.findIndex((line) => /\d{1,2}[./-]\d{1,2}[./-]20\d{2}\s+\d{1,2}:\d{2}/.test(line));
@@ -138,7 +140,7 @@ function parseCompactEsfortyOrder(block: string): ParsedFields | null {
   const adults = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
 
   const afterTime = lines.slice(timeIndex + 1);
-  const vehicleIndex = afterTime.findIndex((line) => /^(?:economy|standard|comfort|business|premium|suv|minivan|minibus)$/i.test(line));
+  const vehicleIndex = afterTime.findIndex((line) => /^(?:economy|standard|comfort|business|premium|suv|minivan|minibus|van|sedan)$/i.test(line));
   const vehicleType = vehicleIndex >= 0 ? afterTime[vehicleIndex] : "";
   const afterVehicle = vehicleIndex >= 0 ? afterTime.slice(vehicleIndex + 1) : afterTime;
   const flightIndex = afterVehicle.findIndex((line) => /^flight\s*(?:number)?\s*:/i.test(line));
@@ -184,7 +186,7 @@ export async function POST(request: NextRequest) {
   const compactOrders = parseCompactEsfortyList(text);
   const isCompactEsforty = compactOrders.length > 0;
   const sourceType = body.sourceType;
-  if (sourceType === "iway_feishu" && !isIwayRide) return failure("SOURCE_MISMATCH", "这段内容不符合 i’way New ride 邮件格式，已阻止导入。", undefined, 422);
+  if (sourceType === "iway_feishu" && !isIwayRide && !isCompactEsforty) return failure("SOURCE_MISMATCH", "这段内容不符合 i’way 订单格式，已阻止导入。", undefined, 422);
   if (sourceType === "esforty" && !isStandardOrder && !isCompactEsforty) return failure("SOURCE_MISMATCH", "这段内容不符合 esforty/标准订单格式，已阻止导入。", undefined, 422);
   if (sourceType === "manual" && body.confirmedSource !== true) return failure("SOURCE_UNCONFIRMED", "手工录入前必须确认订单来源。", undefined, 422);
   if (!["iway_feishu", "esforty", "manual"].includes(sourceType)) return failure("SOURCE_REQUIRED", "请选择订单来源后再识别。", undefined, 422);
@@ -201,5 +203,5 @@ export async function POST(request: NextRequest) {
   }));
   const first = orders[0];
   const [thaiTranslation, vehicleImage] = await Promise.all([translateThaiForReview(text), identifyVehicleFromImage(typeof body.vehicleImageUrl === "string" ? body.vehicleImageUrl : "")]);
-  return success({ ...first, orders, fields: first.fields, rawText: text, source: { type: sourceType, format: isCompactEsforty ? "esforty_compact_list" : isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: first.missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: first.duplicates, assistance: { thaiTranslation, vehicleImage } });
+  return success({ ...first, orders, fields: first.fields, rawText: text, source: { type: sourceType, format: isCompactEsforty ? "compact_iway_or_esforty" : isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: first.missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: first.duplicates, assistance: { thaiTranslation, vehicleImage } });
 }

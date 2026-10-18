@@ -149,7 +149,10 @@ export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview
   selected.forEach((row) => {
     const order = toOrder(row);
     const driver = row.driverDetail ? toDriverDetails(row.driverDetail) : null;
-    if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
+    // COMPLETED orders may need a corrected, manually sent i'way reply after
+    // a legitimate driver or vehicle correction. Cancellation remains blocked
+    // by the same guard because it is not an allowed status here.
+    if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED" && order.status !== "COMPLETED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
     const check = validateRequiredFields(iwayContext(order, driver), "before_iway_return", rules);
     if (!check.valid) errors.push(`${order.orderNo} 缺少：${fieldLabels(check.missingFields).join("、")}`);
   });
