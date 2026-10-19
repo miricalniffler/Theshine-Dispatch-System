@@ -352,7 +352,6 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     const phone = normalizeThailandPhone(record.driverPhone, rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [
-      !record.driverName.trim() ? "司机姓名" : "",
       !phone ? (record.driverPhone.trim() ? "司机电话格式不正确" : "司机电话") : "",
       !record.licensePlate.trim() ? "车牌" : "",
       !vehicle ? "具体车型" : "",
