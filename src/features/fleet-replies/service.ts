@@ -3,7 +3,9 @@ import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
 import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
-import { isQwenConfigured, qwenJson, type QwenContent } from "@/features/assist/qwen";
+import { isQwenConfigured } from "@/features/assist/qwen";
+import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
+import { isAiVisionRealCallsEnabled, recognizeFleetScreenshot, recognizeVehicleImage } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
 type Field = { value: string | null; evidence: string };
@@ -20,7 +22,7 @@ type ReplyRecord = {
   review_reasons: string[];
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[] };
-type VisualResult = { vehicle_model: string | null; license_plate: string | null };
+type VisualResult = { vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
@@ -40,7 +42,9 @@ async function candidateOrdersFor(reply: { dispatchBatchId: string | null; candi
   const orderIds = ids.length ? ids : reply.dispatchBatchId
     ? (await db.dispatchBatch.findUnique({ where: { id: reply.dispatchBatchId }, include: { orders: true } }))?.orders.map((link) => link.orderId) ?? []
     : [];
-  const where = orderIds.length ? { id: { in: orderIds } } : { serviceDate: bangkokToday(), status: { notIn: ["COMPLETED"] } };
+  // Completed orders can receive a legitimate driver/vehicle correction.
+  // They remain visible to the reply workflow, but cancelled orders never do.
+  const where = orderIds.length ? { id: { in: orderIds } } : { serviceDate: bangkokToday(), status: { notIn: ["CANCELLED"] } };
   const orders = await db.order.findMany({ where, include: { fleet: true }, orderBy: { pickupDateTime: "asc" } });
   return orders.map((order): CandidateOrder => ({
     id: order.id, orderNo: order.platformOrderNumber, passengerName: order.passengerName,
@@ -56,7 +60,7 @@ export async function listReplyContexts() {
 
 export async function listFleetReplyDates() {
   const today = bangkokToday();
-  const rows = await db.order.findMany({ where: { serviceDate: { gte: today }, status: { notIn: ["COMPLETED"] } }, select: { serviceDate: true }, distinct: ["serviceDate"], orderBy: { serviceDate: "asc" } });
+  const rows = await db.order.findMany({ where: { serviceDate: { gte: today }, status: { notIn: ["CANCELLED"] } }, select: { serviceDate: true }, distinct: ["serviceDate"], orderBy: { serviceDate: "asc" } });
   const dates = [...new Set([bangkokTomorrow(), ...rows.map((row) => row.serviceDate)])].sort();
   return { defaultDate: bangkokTomorrow(), dates };
 }
@@ -65,7 +69,7 @@ export async function createFleetReply(input: { dispatchBatchId?: string; orderI
   const rawText = input.rawText?.trim() ?? "";
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate ?? "") ? input.serviceDate! : bangkokTomorrow();
   const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : undefined;
-  const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["COMPLETED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
+  const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["CANCELLED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
   const orderIds = [...new Set([...(input.orderIds ?? []), ...dateOrderIds])];
   if (!rawText && !(input.images?.length)) throw new Error("SOURCE_REQUIRED");
   const profile = input.fleetProfile ?? "AUTO";
@@ -228,24 +232,54 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
 
 async function translateThaiNames(records: ReplyRecord[]) {
   const names = [...new Set(records.map((record) => record.driver_name.value).filter(hasThai))] as string[];
-  if (!names.length || !isQwenConfigured()) return;
-  try {
-    const translated = await qwenJson<{ names: { thai: string; english: string }[] }>([{ role: "user", content: `将以下泰语司机姓名转写为常用英文拼写。只输出 JSON：{"names":[{"thai":"原文","english":"英文"}]}。姓名：${JSON.stringify(names)}` }], "qwen-flash");
-    const map = new Map(translated.names.map((item) => [item.thai.trim(), item.english.trim()]));
-    records.forEach((record) => {
-      const english = record.driver_name.value && map.get(record.driver_name.value.trim());
-      if (english) record.driver_name = field(english, `泰语姓名“${record.driver_name.value}”已转写为英文`);
-    });
-  } catch { /* 翻译服务临时不可用时保留原始泰语姓名。 */ }
+  if (!names.length) return;
+  const historic = await findConfirmedEnglishDriverNames(names);
+  const remaining = names.filter((name) => !historic.has(name));
+  const ai = remaining.length && isAiNameTransliterationEnabled() && isQwenConfigured() ? await transliterateThaiDriverNames(remaining) : null;
+  records.forEach((record) => {
+    const thai = record.driver_name.value?.trim();
+    if (!thai) return;
+    const english = historic.get(thai) ?? ai?.names.get(thai);
+    if (english) record.driver_name = field(english, historic.has(thai) ? `复用已确认英文姓名；泰文原名“${thai}”` : `AI 音译泰文原名“${thai}”，请人工核对`);
+    else record.driver_name = field(thai, ai?.message ?? "未找到历史英文姓名，且姓名 AI 转写未开启；已保留泰文原名");
+  });
+}
+
+async function applyVehicleHistory(records: ReplyRecord[]) {
+  const plates = [...new Set(records.map((record) => normalizePlate(record.license_plate.value)).filter(Boolean))];
+  if (!plates.length) return;
+  // There is no normalized-plate column in the production schema.  Fetch a
+  // bounded history and compare conservatively in memory, so spacing/hyphen
+  // variants of Thai plates can reuse confirmed data without a migration.
+  const candidates = await db.driverDetail.findMany({ where: { licensePlate: { not: null }, confirmedVehicleModel: { not: null } }, orderBy: { updatedAt: "desc" }, take: 1_000, select: { licensePlate: true, confirmedVehicleModel: true } });
+  for (const record of records) {
+    if (record.vehicle_model.value) continue;
+    const plate = normalizePlate(record.license_plate.value);
+    const historic = candidates.find((item) => normalizePlate(item.licensePlate) === plate && item.confirmedVehicleModel);
+    if (historic?.confirmedVehicleModel) record.vehicle_model = field(historic.confirmedVehicleModel, "按相同车牌复用已确认的历史车型");
+  }
+}
+
+async function applyScreenshotImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
+  if (!images.length) return;
+  const scans = await Promise.all(images.slice(0, 4).map((image) => recognizeFleetScreenshot(image.storagePath)));
+  scans.forEach((scan, index) => {
+    if (scan.provider === "NONE") return;
+    const exact = scan.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(scan.order_number!)) : undefined;
+    const target = exact ? records.find((record) => record.order_match.platform_order_number === exact.orderNo) ?? records.find((record) => !record.order_match.platform_order_number) : records.length === 1 ? records[0] : undefined;
+    if (!target) return;
+    if (exact) { target.order_match = { platform_order_number: exact.orderNo, confidence: scan.confidence === "HIGH" ? "high" : "medium", evidence: `截图 ${index + 1} 识别到订单号` }; target.needs_review = false; target.review_reasons = []; }
+    if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
+    if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
+    if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
+    if (!target.vehicle_model.value && scan.vehicle_model) target.vehicle_model = field(scan.vehicle_model, `来自截图 ${index + 1}`);
+    target.image_source_index = index + 1;
+  });
 }
 
 async function readVehicleImage(image: { storagePath: string }): Promise<VisualResult | null> {
-  if (!isQwenConfigured()) return null;
-  const content: QwenContent = [
-    { type: "text", text: "识别这张车辆照片中可明确看出的具体车型和车牌。车型必须是具体名称，例如 Toyota HiAce、Toyota HiAce VIP Van、Toyota Commut、Mitsubishi Pajero；不能只写 Van 或 Minibus。无法确认填 null。车牌只输出数字部分。只输出 JSON：{\"vehicle_model\":string|null,\"license_plate\":string|null}" },
-    { type: "image_url", image_url: { url: image.storagePath } },
-  ];
-  try { return await qwenJson<VisualResult>([{ role: "user", content }], "qwen3-vl-flash"); } catch { return null; }
+  const result = await recognizeVehicleImage(image.storagePath);
+  return result.provider === "NONE" ? null : result;
 }
 
 async function applyVehicleImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
@@ -265,6 +299,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
     if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }
 
@@ -276,11 +311,21 @@ export async function analyzeFleetReply(replyId: string) {
   const profile = resolveProfile(reply, orders);
   if (profile === "AUTO") return { status: "PROFILE_REQUIRED", message: "无法判断这条回复来自曼谷还是苏梅车队，请选择车队后重试。", replyId, orders };
   const result = profile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
+  // Image-only replies are chat screenshots. Do not run OCR on normal
+  // text-and-vehicle-photo replies, which keeps paid calls bounded.
+  if (!reply.rawText.trim()) {
+    if (!isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "图片识别尚未开启：请联系管理员仅在测试环境设置 AI_VISION_REAL_CALLS_ENABLED=true，或人工录入。" });
+    else await applyScreenshotImages(result.records, reply.images, orders);
+  }
   await translateThaiNames(result.records);
-  await applyVehicleImages(result.records, reply.images, orders);
+  if (reply.rawText.trim()) {
+    if (reply.images.length && !isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "车辆图片识别尚未开启；原始图片已保留，可人工填写车型和车牌。" });
+    else await applyVehicleImages(result.records, reply.images, orders);
+  }
+  await applyVehicleHistory(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
-  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: isQwenConfigured() ? "规则解析 + Qwen 翻译/看图" : "规则解析", modelName: reply.images.length ? "qwen3-vl-flash（逐图）" : "qwen-flash（泰语姓名）", promptVersion: `fleet-reply-v3-${profile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
+  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: isAiVisionRealCallsEnabled() ? "规则解析 + GLM / Qwen" : "规则解析（AI 实际调用未启用）", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "qwen-flash（泰语姓名）", promptVersion: `fleet-reply-v4-${profile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
   return { status: extraction.status, replyId, extractionId: extraction.id, result, orders, autoWritten, profile };
 }
 
@@ -302,6 +347,8 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   const errors: { orderId: string; message: string }[] = [];
   for (const record of input.records) {
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
+    const current = await db.order.findUnique({ where: { id: record.orderId }, select: { status: true } });
+    if (current?.status === "CANCELLED") { errors.push({ orderId: record.orderId, message: "订单已取消，不能写入司机资料。" }); continue; }
     const phone = normalizeThailandPhone(record.driverPhone, rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [

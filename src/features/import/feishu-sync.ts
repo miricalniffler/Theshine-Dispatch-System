@@ -57,12 +57,17 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (message.action === "cancel") {
     if (!existing) { await recordMessage(message); return "skipped"; }
-    await db.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: existing.id }, data: { status: "CANCELLED", rawSource: message.text } });
-      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
+    const cancelled = await db.$transaction(async (tx) => {
+      // Never let a delayed external cancellation overwrite a terminal
+      // business state, or duplicate a local cancellation audit record.
+      if (existing.status === "COMPLETED" || existing.status === "CANCELLED") return false;
+      const changed = await tx.order.updateMany({ where: { id: existing.id, status: existing.status }, data: { status: "CANCELLED", rawSource: message.text } });
+      if (!changed.count) return false;
+      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: JSON.stringify({ messageId: message.id, previousStatus: existing.status }) } });
+      return true;
     });
     await recordMessage(message, existing.id);
-    return "cancelled";
+    return cancelled ? "cancelled" : "skipped";
   }
   const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
   const passengerName = pick(message.text, "Passenger Name");
@@ -78,13 +83,20 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const statedLuggage = pick(message.text, "(?:Luggage|Number of luggage|Baggage)");
   const data = { serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, adults, children, luggage: statedLuggage ? numberFrom(statedLuggage) : adults + children, meetGreetLine: meetGreetFor(message.text), rawSource: message.text };
   if (existing) {
-    await db.$transaction(async (tx) => {
+    const updated = await db.$transaction(async (tx) => {
+      // An externally cancelled order requires an explicit external restore
+      // signal; a regular update must not silently reopen or overwrite it.
+      if (existing.status === "CANCELLED") {
+        await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：已忽略取消订单更新", actor: "系统定时任务", metadata: `邮件：${message.id}` } });
+        return false;
+      }
       const fleet = city ? await canonicalFleetForCity(tx, city) : null;
       await tx.order.update({ where: { id: existing.id }, data: city ? { ...data, city, fleetId: fleet!.id } : data });
       await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已更新", actor: "系统定时任务", metadata: `邮件：${message.id}；城市判断：${cityDetection.reason}` } });
+      return true;
     });
     await recordMessage(message, existing.id);
-    return "updated";
+    return updated ? "updated" : "skipped";
   }
   const fleet = city ? await canonicalFleetForCity(db, city) : null;
   const created = await db.order.create({ data: { platformOrderNumber, ...data, city: city ?? "待确认", fleetId: fleet?.id ?? null, status: city ? "READY_TO_DISPATCH" : "PENDING_REVIEW" } });

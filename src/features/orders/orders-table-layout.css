@@ -1,9 +1,9 @@
 /* Desktop column contract: six operational columns without exposed status steps. */
 .v3-table-wrap { margin-top: 14px; overflow-x: hidden; }
 .v3-page .v3-orders-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; margin-top: 0; }
-.v3-col-select { width: 8%; }
+.v3-col-select { width: 7%; }
 .v3-col-time { width: 12%; }
-.v3-col-order { width: 13%; }
+.v3-col-order { width: 14%; }
 .v3-col-passenger { width: 27%; }
 .v3-col-fleet { width: 17%; }
 .v3-col-driver { width: 23%; }
@@ -13,6 +13,9 @@
 .v3-primary-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .v3-passenger-cell small, .v3-fleet-cell small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; overflow-wrap: anywhere; }
 .v3-next { max-width: 100%; white-space: nowrap; }
+.v3-orders-table .v3-select label { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.v3-orders-table .v3-select input { flex:0 0 auto; }
+.v3-cancel-reason { display:block; margin-top:4px; color:#a54e35; font-size:12px; line-height:1.3; overflow-wrap:anywhere; }
 
 @media (max-width: 1080px) and (min-width: 901px) {
   .v3-page { padding: 24px 20px; }

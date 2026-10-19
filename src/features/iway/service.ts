@@ -105,6 +105,7 @@ export async function getDriverDetails(orderId: string) {
 export async function saveDriverDetails(orderId: string, input: DriverDetailsInput) {
   const persisted = await findOrderWithDriver(orderId);
   if (!persisted) throw new Error("ORDER_NOT_FOUND");
+  if (persisted.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
   const order = toOrder(persisted);
   const rules = loadRules();
   const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
@@ -121,12 +122,22 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const check = validateRequiredFields(iwayContext(order, record), "before_iway_return", rules);
   const confirmedAt = check.valid ? new Date() : null;
   const driver = await db.$transaction(async (tx) => {
+    // The status may have changed after the initial read (for example an
+    // operator cancelled the order in another tab).  Check again in the same
+    // transaction before writing driver data.
+    const currentOrder = await tx.order.findUnique({ where: { id: orderId }, select: { status: true } });
+    if (!currentOrder) throw new Error("ORDER_NOT_FOUND");
+    if (currentOrder.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
     const saved = await tx.driverDetail.upsert({
       where: { orderId },
       update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
       create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
     });
-    if (check.valid && persisted.status !== "DRIVER_CONFIRMED") {
+    // Editing driver/vehicle details after a return is a correction, not a
+    // rewind of the order lifecycle.  In particular, moving a COMPLETED
+    // order back to DRIVER_CONFIRMED made the original completion disappear
+    // and could accidentally put it back into the normal bulk-return queue.
+    if (check.valid && (currentOrder.status === "DISPATCHED" || currentOrder.status === "READY_TO_DISPATCH")) {
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     }
@@ -137,9 +148,12 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
 
 export type IwayPreview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string };
 
-export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview> {
-  const rules = loadRules();
-  const selected = await findOrdersWithDrivers(orderIds);
+/** A copied return batch is a draft. Any change to the rendered text makes it stale. */
+export function isIwayPreviewCurrent(snapshot: string, current: Pick<IwayPreview, "valid" | "text">) {
+  return current.valid && Boolean(current.text) && current.text === snapshot;
+}
+
+function buildIwayPreview(orderIds: string[], selected: OrderWithDriver[], rules = loadRules()): IwayPreview {
   const errors: string[] = [];
   if (!selected.length) errors.push("请至少选择一张订单。");
   if (selected.length !== orderIds.length) errors.push("有订单不存在。");
@@ -148,7 +162,10 @@ export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview
   selected.forEach((row) => {
     const order = toOrder(row);
     const driver = row.driverDetail ? toDriverDetails(row.driverDetail) : null;
-    if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
+    // COMPLETED orders may need a corrected, manually sent i'way reply after
+    // a legitimate driver or vehicle correction. Cancellation remains blocked
+    // by the same guard because it is not an allowed status here.
+    if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED" && order.status !== "COMPLETED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
     const check = validateRequiredFields(iwayContext(order, driver), "before_iway_return", rules);
     if (!check.valid) errors.push(`${order.orderNo} 缺少：${fieldLabels(check.missingFields).join("、")}`);
   });
@@ -157,6 +174,10 @@ export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview
   const bodies = selected.map((row) => renderTemplate(rules.templates.iway_return.body, iwayContext(toOrder(row), row.driverDetail ? toDriverDetails(row.driverDetail) : null)));
   const text = [renderTemplate(rules.templates.iway_return.header, { service_date_label_en: formatServiceDateLabel(serviceDate, "en") }), ...bodies, rules.templates.iway_return.footer].join("\n\n");
   return { valid: true, errors: [], text, orderCount: selected.length, serviceDate, ruleVersion: rules.rules_version };
+}
+
+export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview> {
+  return buildIwayPreview(orderIds, await findOrdersWithDrivers(orderIds));
 }
 
 export async function saveIwayCopy(orderIds: string[]) {
@@ -177,7 +198,26 @@ export async function confirmIwayReturn(batchId: string) {
   const batch = await db.iwayReturnBatch.findUnique({ where: { id: batchId }, include: { orders: true } });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
   const orderIds = batch.orders.map((link) => link.orderId);
+  // A saved preview is only a draft. Revalidate it at confirmation time so a
+  // cancellation, edit, or missing driver detail cannot be returned later.
+  const current = await createIwayPreview(orderIds);
+  if (!current.valid) throw new Error(`IWAY_PREVIEW_STALE:${current.errors.join("；")}`);
+  if (!isIwayPreviewCurrent(batch.contentSnapshot, current)) {
+    throw new Error("IWAY_PREVIEW_STALE:订单或司机车辆资料已变更，请重新生成并复制回传内容。");
+  }
   const completed = await db.$transaction(async (tx) => {
+    // Re-read in the transaction.  A cancellation or a driver/vehicle edit
+    // between the first validation and this write must not be overwritten by
+    // the confirmation below.
+    const rows = await tx.order.findMany({
+      where: { id: { in: orderIds } },
+      include: { driverDetail: true, fleet: true },
+      orderBy: { pickupDateTime: "asc" },
+    });
+    const latest = buildIwayPreview(orderIds, rows);
+    if (!isIwayPreviewCurrent(batch.contentSnapshot, latest)) {
+      throw new Error("IWAY_PREVIEW_STALE:订单在确认期间已变化或已取消，请重新生成并复制回传内容。");
+    }
     const confirmedAt = new Date();
     const updated = await tx.iwayReturnBatch.update({ where: { id: batchId }, data: { confirmedAt }, include: { orders: true } });
     if (orderIds.length) {

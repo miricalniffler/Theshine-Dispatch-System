@@ -37,7 +37,7 @@ function connectorConfig(id: ImportConnectorId): ConnectorConfig {
       url: process.env.FEISHU_MAIL_IMPORT_URL?.trim(),
       token: process.env.FEISHU_MAIL_IMPORT_TOKEN?.trim(),
       enabled: truthy(process.env.FEISHU_MAIL_IMPORT_ENABLED),
-      setupHint: "在 .env 中填写 FEISHU_MAIL_IMPORT_ENABLED、FEISHU_MAIL_IMPORT_URL 和 FEISHU_MAIL_IMPORT_TOKEN。",
+      setupHint: "在服务器环境中填写 FEISHU_MAIL_IMPORT_ENABLED、FEISHU_MAIL_IMPORT_URL 和 FEISHU_MAIL_IMPORT_TOKEN。",
     };
   }
   return {
@@ -48,6 +48,34 @@ function connectorConfig(id: ImportConnectorId): ConnectorConfig {
     enabled: truthy(process.env.ESFORTY_IMPORT_ENABLED),
     setupHint: "在 .env 中填写 ESFORTY_IMPORT_ENABLED、ESFORTY_IMPORT_URL 和 ESFORTY_IMPORT_TOKEN。",
   };
+}
+
+const defaultFeishuSenders = ["control@iwayex.com", "noreply@iway.ru"];
+
+function senderAddress(value: string | undefined) {
+  const match = value?.match(/<([^>]+)>/);
+  return (match?.[1] || value || "").trim().toLowerCase();
+}
+
+function allowedFeishuSenders() {
+  const configured = process.env.FEISHU_MAIL_ALLOWED_SENDER?.split(/[;,]/).map(senderAddress).filter(Boolean);
+  return configured?.length ? configured : defaultFeishuSenders;
+}
+
+function isRecognizedFeishuSubject(subject: string | undefined) {
+  const value = subject?.trim() || "";
+  return /^(?:new\s+ride|transfer\s+service\s+order|amendment\s+to\s+(?:the\s+)?transfer)\b/i.test(value)
+    || /cancel|取消|void/i.test(value);
+}
+
+/**
+ * The Feishu mailbox receives iWay mail from two official senders. Keep this
+ * predicate alongside the connector so browser, cron, and manual sync follow
+ * the same safe allow-list rather than accepting arbitrary mailbox content.
+ */
+export function filterFeishuMailItems(items: ImportedMessage[], allowedSenders = allowedFeishuSenders()) {
+  return items.filter((item) => allowedSenders.includes(senderAddress(item.sender))
+    && (isRecognizedFeishuSubject(item.subject) || /cancel|取消|void/i.test(item.text)));
 }
 
 function isSafeRemoteUrl(value: string | undefined) {
@@ -109,9 +137,9 @@ export async function pullConnectorMessages(id: ImportConnectorId, options: { al
     if (!response.ok) throw new Error(`接入地址返回 HTTP ${response.status}`);
     let items = normalizeItems(await response.json());
     if (id === "feishu-mail") {
-      const allowedSender = (process.env.FEISHU_MAIL_ALLOWED_SENDER || "dingdan@theshine.com.cn").trim().toLowerCase();
-      items = items.filter((item) => item.sender?.trim().toLowerCase() === allowedSender && (/^New ride\s+#?\d+/i.test(item.subject?.trim() || item.text.trim()) || /cancel|取消|update|change/i.test(item.subject?.trim() || "")));
-      if (!items.length && !options.allowEmpty) throw new Error(`没有来自 ${allowedSender} 的新订单、变更或取消邮件，已阻止导入其他邮件。`);
+      const allowedSenders = allowedFeishuSenders();
+      items = filterFeishuMailItems(items);
+      if (!items.length && !options.allowEmpty) throw new Error(`没有来自 ${allowedSenders.join("、")} 的 iWay 新订单、变更或取消邮件，已阻止导入其他邮件。`);
     }
     if (!items.length && !options.allowEmpty) throw new Error("接入地址未返回可识别的订单原文。");
     return { connector, items };

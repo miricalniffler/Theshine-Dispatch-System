@@ -1,5 +1,6 @@
 import { failure, success } from "@/lib/api-response";
 import { isQwenConfigured, qwenJson } from "@/features/assist/qwen";
+import { isAiVisionRealCallsEnabled } from "@/features/assist/vision";
 import { NextRequest } from "next/server";
 
 const maxImageBytes = 7 * 1024 * 1024;
@@ -12,6 +13,7 @@ export async function POST(request: NextRequest) {
   if (!/^data:image\/(?:png|jpe?g|webp);base64,/i.test(imageDataUrl)) return failure("INVALID_IMAGE", "请选择或粘贴一张 PNG、JPG 或 WebP 格式的订单截图。", undefined, 422);
   const encoded = imageDataUrl.split(",", 2)[1] || "";
   if (encoded.length * 0.75 > maxImageBytes) return failure("IMAGE_TOO_LARGE", "截图过大，请裁剪到订单内容后重试。", undefined, 422);
+  if (!isAiVisionRealCallsEnabled()) return failure("AI_VISION_DISABLED", "订单截图识别尚未开启；请改为粘贴订单文字或人工填写。", undefined, 503);
   if (!isQwenConfigured()) return failure("QWEN_NOT_CONFIGURED", "订单截图识别尚未配置 AI 服务，请改为粘贴订单文字。", undefined, 503);
   try {
     const result = await qwenJson<{ text?: unknown }>([
