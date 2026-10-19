@@ -54,7 +54,7 @@ export default function FleetManager() {
   }
   return <main className={styles.page}>
     <header className={styles.header}><div><p className={styles.eyebrow}>FLEET DIRECTORY</p><h1>车队管理</h1><p>第一期固定使用曼谷车队和苏梅车队。订单会依城市自动分配，您只需维护联络和车型资料。</p></div><div className={styles.count}><strong>{enabledCount}</strong><span>当前可派单车队</span></div></header>
-    <section className={styles.toolbar} aria-label="车队筛选"><span>服务城市</span>{["全部城市", ...fleetCities].map((item) => <button className={city === item ? styles.activeFilter : ""} onClick={() => chooseCity(item)} type="button" key={item}>{item}</button>)}</section>
+    <section className={styles.toolbar} aria-label="车队筛选"><span>服务城市</span>{["全部城市", ...fleetCities].map((item) => <button className={city === item ? styles.activeFilter : ""} onClick={() => chooseCity(item)} type="button" key={item}>{item}</button>)}<a className={styles.archiveLink} href="/archives?tab=drivers">司机库</a><a className={styles.archiveLink} href="/archives?tab=vehicles">车辆库</a></section>
     {message && <p className={styles.message} role="status">{message}</p>}
     <section className={styles.layout}>
       <div className={styles.tableCard}>

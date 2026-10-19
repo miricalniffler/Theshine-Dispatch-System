@@ -78,6 +78,7 @@ model DriverDetail {
   rawDriverPhone        String?
   normalizedDriverPhone String?
   confirmedVehicleModel String?
+  confirmedVehicleCategory String?
   licensePlate          String?
   driverProfileId       String?
   vehicleProfileId      String?
@@ -169,6 +170,7 @@ model VehicleProfile {
   normalizedPlate String?  @unique
   brand           String?
   vehicleModel    String?
+  vehicleCategory String?
   photoPath       String?
   dataSource      String   @default("MANUAL")
   isVerified      Boolean  @default(false)

@@ -13,6 +13,7 @@ export type DriverDetails = {
   rawDriverPhone: string | null;
   normalizedDriverPhone: string | null;
   confirmedVehicleModel: string | null;
+  confirmedVehicleCategory: string | null;
   licensePlate: string | null;
   confirmedAt: string | null;
   driverProfileId: string | null;
@@ -21,7 +22,7 @@ export type DriverDetails = {
   iwayDriverName: string | null;
 };
 
-export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate">;
+export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null };
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -55,6 +56,7 @@ function toDriverDetails(row: DriverDetail): DriverDetails {
     rawDriverPhone: row.rawDriverPhone,
     normalizedDriverPhone: row.normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
+    confirmedVehicleCategory: row.confirmedVehicleCategory,
     licensePlate: normalizeLicensePlateForReturn(row.licensePlate),
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
     driverProfileId: row.driverProfileId,
@@ -125,6 +127,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     rawDriverPhone: input.rawDriverPhone?.trim() || null,
     normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(input.confirmedVehicleModel, rules),
+    confirmedVehicleCategory: input.confirmedVehicleCategory?.trim() || null,
     licensePlate: normalizeLicensePlateForReturn(input.licensePlate),
     confirmedAt: null,
     driverProfileId: persisted.driverDetail?.driverProfileId ?? null,
@@ -143,8 +146,8 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     if (currentOrder.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
     const saved = await tx.driverDetail.upsert({
       where: { orderId },
-      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
-      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
+      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt },
+      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt },
     });
     const archive = await archiveDriverVehicle(tx, {
       orderId,
@@ -155,6 +158,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       driverNameSource: input.confirmedDriverName?.trim() ? "MANUAL" : "TEMPORARY",
       rawPhone: input.rawDriverPhone,
       vehicleModel: record.confirmedVehicleModel,
+      vehicleCategory: record.confirmedVehicleCategory,
       rawPlate: input.licensePlate,
     });
     const archived = await tx.driverDetail.update({

@@ -3,6 +3,8 @@ import { AI_MODELS } from "./model-config";
 
 export type VehicleVision = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; provider: "GLM" | "QWEN" | "NONE"; note: string };
 export type ScreenshotVision = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"]; provider: VehicleVision["provider"]; note: string };
+export type FleetTextVisionRecord = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_category: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"] };
+export type FleetTextVision = { records: FleetTextVisionRecord[]; provider: VehicleVision["provider"]; note: string };
 
 /** A separate, deliberately opt-in switch for paid image and OCR requests. */
 export function isAiVisionRealCallsEnabled() { return process.env.AI_VISION_REAL_CALLS_ENABLED === "true"; }
@@ -57,6 +59,49 @@ function screenshot(value: unknown, provider: ScreenshotVision["provider"], note
 }
 
 const screenshotPrompt = "读取泰国车队聊天截图中明确可见的订单号、司机姓名、电话、车牌和具体车型。支持泰文、英文、数字混合。无法确定的字段必须为 null，不能猜测。driver_name 保留截图原文（泰文不要自行翻译）。只输出 JSON：{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}";
+
+const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。仅从原文提取明确出现的订单号、司机姓名、泰国电话、原始车牌（保留泰文）、车辆类别和具体车型。\n\n严格规则：\n- Driver/司机字段绝不能包含 Car Plate、Plate Number、Mobile、Phone、Tel、Vehicle、Model 等标签，也不能包含车牌或电话号码。\n- 车牌必须保留原文，例如“ฮพ 5348 กรุงเทพ”，不得只保留数字。\n- 车辆类别（例如 VAN）与具体车型（例如 Toyota Commuter）分别填写。\n- 无法确定就填 null，不能猜测或补全。\n- 一条原文可有多笔订单。\n\n只输出 JSON：{\"records\":[{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_category\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}]}`;
+
+function confidence(value: unknown): VehicleVision["confidence"] {
+  return value === "HIGH" || value === "MEDIUM" || value === "LOW" ? value : "UNKNOWN";
+}
+
+function fleetText(value: unknown, provider: FleetTextVision["provider"], note: string): FleetTextVision {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rows = Array.isArray(raw.records) ? raw.records : [];
+  const text = (row: Record<string, unknown>, key: string) => typeof row[key] === "string" && row[key].trim() ? row[key].trim().slice(0, 160) : null;
+  return { records: rows.slice(0, 20).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    return [{ order_number: text(row, "order_number"), driver_name: text(row, "driver_name"), driver_phone: text(row, "driver_phone"), license_plate: text(row, "license_plate"), vehicle_category: text(row, "vehicle_category"), vehicle_model: text(row, "vehicle_model"), confidence: confidence(row.confidence) }];
+  }), provider, note };
+}
+
+/**
+ * Text replies use the same provider order as image recognition.  This is
+ * intentionally separate from regular-expression parsing: rules may validate
+ * an answer or provide a safe fallback, but never claim that an AI call ran.
+ */
+export async function recognizeFleetReplyText(rawText: string, candidateOrderNumbers: string[]): Promise<FleetTextVision> {
+  if (!isAiVisionRealCallsEnabled()) return { records: [], provider: "NONE", note: "AI 实际调用尚未启用；已使用规则降级。" };
+  const message = `${fleetTextPrompt}\n\n可匹配订单号：${candidateOrderNumbers.join("、")}\n\n车队原文：\n${rawText.slice(0, 12_000)}`;
+  const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
+  try {
+    if (!key) throw new Error("GLM_NOT_CONFIGURED");
+    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: message }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`GLM_${response.status}`);
+    const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
+    if (typeof content !== "string") throw new Error("GLM_EMPTY_RESPONSE");
+    return fleetText(JSON.parse(content.replace(/^```json\s*|\s*```$/g, "")), "GLM", "AI：GLM");
+  } catch (reason) {
+    try {
+      return fleetText(await qwenJson<Record<string, unknown>>([{ role: "user", content: message }], AI_MODELS.vehicleVision.fallback.model, { timeoutMs: AI_MODELS.vehicleVision.fallback.timeoutMs }), "QWEN", `AI：Qwen（GLM 不可用：${failureReason(reason, "GLM")}）`);
+    } catch (fallbackError) {
+      return { records: [], provider: "NONE", note: `规则降级：${unavailableScreenshotNote(reason, fallbackError)}` };
+    }
+  }
+}
 
 export async function recognizeFleetScreenshot(imageUrl: string): Promise<ScreenshotVision> {
   if (!isAiVisionRealCallsEnabled()) return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: "AI 实际调用尚未启用；请人工录入。" };
