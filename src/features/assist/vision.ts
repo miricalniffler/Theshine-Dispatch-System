@@ -16,6 +16,27 @@ function parsed(value: unknown, provider: VehicleVision["provider"], note: strin
   return { vehicle_brand: text("vehicle_brand"), vehicle_model: text("vehicle_model"), vehicle_category: text("vehicle_category"), license_plate: text("license_plate"), confidence, provider, note };
 }
 
+function failureReason(error: unknown, provider: "GLM" | "QWEN") {
+  const code = error instanceof Error ? error.message : "UNKNOWN";
+  if (/REAL_CALLS_DISABLED/.test(code)) return "实际调用未开启";
+  if (/_NOT_CONFIGURED/.test(code)) return `${provider} 服务未配置`;
+  if (/(?:_401|_403)/.test(code)) return `${provider} 账户或权限不可用`;
+  if (/_404/.test(code)) return `${provider} 模型不可用或不支持当前参数`;
+  if (/_429/.test(code)) return `${provider} 请求过于频繁，请稍后重试`;
+  if (/(?:timeout|abort|_408)/i.test(code)) return `${provider} 在 30 秒内未完成`;
+  if (/EMPTY_RESPONSE/.test(code)) return `${provider} 未返回可读取结果`;
+  if (/JSON|格式/.test(code)) return `${provider} 返回格式无法识别`;
+  return `${provider} 调用失败`;
+}
+
+function unavailableVehicleNote(glmError: unknown, qwenError: unknown) {
+  return `车辆识别未完成：${failureReason(glmError, "GLM")}；${failureReason(qwenError, "QWEN")}。请人工填写，原始图片未被自动写入订单。`;
+}
+
+function unavailableScreenshotNote(glmError: unknown, qwenError: unknown) {
+  return `截图识别未完成：${failureReason(glmError, "GLM")}；${failureReason(qwenError, "QWEN")}。请人工核对截图内容。`;
+}
+
 async function glm(imageUrl: string): Promise<VehicleVision> {
   if (!isAiVisionRealCallsEnabled()) throw new Error("REAL_CALLS_DISABLED");
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
@@ -52,7 +73,7 @@ export async function recognizeFleetScreenshot(imageUrl: string): Promise<Screen
     try {
       const content: QwenContent = [{ type: "text", text: screenshotPrompt }, { type: "image_url", image_url: { url: imageUrl } }];
       return screenshot(await qwenJson<Record<string, unknown>>([{ role: "user", content }], AI_MODELS.vehicleVision.fallback.model, { timeoutMs: AI_MODELS.vehicleVision.fallback.timeoutMs }), "QWEN", `GLM 不可用，已使用 Qwen 备用：${reason instanceof Error ? reason.message : "UNKNOWN"}`);
-    } catch { return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: "截图识别暂不可用；请人工录入。" }; }
+    } catch (fallbackError) { return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: unavailableScreenshotNote(reason, fallbackError) }; }
   }
 }
 
@@ -63,6 +84,6 @@ export async function recognizeVehicleImage(imageUrl: string): Promise<VehicleVi
     try {
       const content: QwenContent = [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }];
       return parsed(await qwenJson<Record<string, unknown>>([{ role: "user", content }], AI_MODELS.vehicleVision.fallback.model, { timeoutMs: AI_MODELS.vehicleVision.fallback.timeoutMs }), "QWEN", `GLM 不可用，已使用 Qwen 备用：${reason instanceof Error ? reason.message : "UNKNOWN"}`);
-    } catch { return { vehicle_brand: null, vehicle_model: null, vehicle_category: null, license_plate: null, confidence: "UNKNOWN", provider: "NONE", note: "车辆识别暂不可用；请人工填写。" }; }
+    } catch (fallbackError) { return { vehicle_brand: null, vehicle_model: null, vehicle_category: null, license_plate: null, confidence: "UNKNOWN", provider: "NONE", note: unavailableVehicleNote(reason, fallbackError) }; }
   }
 }

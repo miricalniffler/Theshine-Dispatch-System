@@ -4,7 +4,7 @@ import { loadRules } from "@/lib/rules/load-rules";
 import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
-import { isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
+import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
 import { isAiVisionRealCallsEnabled, recognizeFleetScreenshot, recognizeVehicleImage } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
@@ -231,12 +231,7 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
 async function translateThaiNames(records: ReplyRecord[]) {
   const names = [...new Set(records.map((record) => record.driver_name.value).filter(hasThai))] as string[];
   if (!names.length) return;
-  const history = await db.driverDetail.findMany({ where: { confirmedDriverName: { not: null }, rawReply: { not: null } }, orderBy: { confirmedAt: "desc" }, take: 500, select: { rawReply: true, confirmedDriverName: true } });
-  const historic = new Map<string, string>();
-  for (const name of names) {
-    const matched = history.find((item) => item.rawReply?.includes(name) && item.confirmedDriverName)?.confirmedDriverName;
-    if (matched) historic.set(name, matched);
-  }
+  const historic = await findConfirmedEnglishDriverNames(names);
   const remaining = names.filter((name) => !historic.has(name));
   const ai = remaining.length && isAiNameTransliterationEnabled() && isQwenConfigured() ? await transliterateThaiDriverNames(remaining) : null;
   records.forEach((record) => {
@@ -251,7 +246,10 @@ async function translateThaiNames(records: ReplyRecord[]) {
 async function applyVehicleHistory(records: ReplyRecord[]) {
   const plates = [...new Set(records.map((record) => normalizePlate(record.license_plate.value)).filter(Boolean))];
   if (!plates.length) return;
-  const candidates = await db.driverDetail.findMany({ where: { licensePlate: { not: null } }, orderBy: { updatedAt: "desc" }, take: 300, select: { licensePlate: true, confirmedVehicleModel: true } });
+  // There is no normalized-plate column in the production schema.  Fetch a
+  // bounded history and compare conservatively in memory, so spacing/hyphen
+  // variants of Thai plates can reuse confirmed data without a migration.
+  const candidates = await db.driverDetail.findMany({ where: { licensePlate: { not: null }, confirmedVehicleModel: { not: null } }, orderBy: { updatedAt: "desc" }, take: 1_000, select: { licensePlate: true, confirmedVehicleModel: true } });
   for (const record of records) {
     if (record.vehicle_model.value) continue;
     const plate = normalizePlate(record.license_plate.value);
