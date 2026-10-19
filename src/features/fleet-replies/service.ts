@@ -5,7 +5,7 @@ import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicl
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
 import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
-import { isAiVisionRealCallsEnabled, recognizeFleetScreenshot, recognizeVehicleImage } from "@/features/assist/vision";
+import { isAiVisionRealCallsEnabled, recognizeFleetReplyText, recognizeFleetScreenshot, recognizeVehicleImage, type FleetTextVision } from "@/features/assist/vision";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
 type Field = { value: string | null; evidence: string };
@@ -21,7 +21,7 @@ type ReplyRecord = {
   needs_review: boolean;
   review_reasons: string[];
 };
-type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[] };
+type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
 type VisualResult = { vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
@@ -96,7 +96,7 @@ function bangkokDriverReplySection(block: string) {
 }
 
 function readName(block: string) {
-  const labelled = firstMatch(block, /(?:driver\s*name|driver|name)\s*[:：.]?\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:driver\s*name|driver|name)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled) return labelled.replace(/^(?:driver\s*name|driver|name)\s*[:：.]?/i, "").trim();
   const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
   const phoneAt = lines.findIndex((line) => /(?:tel|phone|📞|\+?66|0\d{8,})/i.test(line));
@@ -126,17 +126,58 @@ function readPhone(block: string) {
 }
 
 function readPlate(block: string) {
-  const labelled = firstMatch(block, /(?:car\s*(?:no|number)|plate|license\s*plate|ทะเบียน)\s*[:：.]?\s*([^\n]+)/i);
-  if (labelled) return labelled.match(/\d{3,5}/)?.[0] ?? null;
+  const labelled = firstMatch(block, /(?:car\s*(?:no|number|plate)|plate|license\s*plate|ทะเบียน)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  if (labelled) return labelled;
   const lines = block.split("\n").map((line) => line.trim());
   const value = lines.find((line) => /^(?:\d{3,5}|[ก-๙]{1,3}\s*\d{1,4}|\d{1,2}[ก-๙]{1,3}\s*\d{1,4})$/i.test(line));
   return value?.match(/\d{3,5}/)?.[0] ?? null;
 }
 
 function readVehicleModel(block: string, allowInlineModel = true) {
-  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model)\s*[:：.]?\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model|van|minibus|sedan|suv)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled && !/^(?:minibus|minivan|van|sedan|standard)$/i.test(labelled)) return labelled;
   return allowInlineModel ? firstMatch(block, /\b((?:toyota|hyundai|honda|isuzu|mitsubishi|mercedes)[^,\n]{0,45})/i) : null;
+}
+
+export function sanitizeAiDriverName(value: string | null) {
+  const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name)\s*(?::|：|\.)+\s*/i, "").trim() || null;
+  if (!cleaned || /\b(?:car\s*plate|plate\s*number|license\s*plate|mobile|phone|tel(?:ephone)?|vehicle|model)\b/i.test(cleaned)) return null;
+  if (/\d{5,}/.test(cleaned) || (/[฀-๿]/.test(cleaned) && /\d/.test(cleaned))) return null;
+  return cleaned.slice(0, 100);
+}
+
+export function sanitizeAiPlate(value: string | null) {
+  const cleaned = value?.replace(/^(?:car\s*plate|plate\s*number|license\s*plate|ทะเบียน)\s*(?::|：|\.)+\s*/i, "").trim() || null;
+  if (!cleaned || /\b(?:driver|mobile|phone|tel(?:ephone)?)\b/i.test(cleaned)) return null;
+  // Thai plates may be Thai letters + numbers + a province; retain the fleet's
+  // original text rather than collapsing it to the numeric part.
+  if (!/[\d฀-๿]/.test(cleaned)) return null;
+  return cleaned.slice(0, 120);
+}
+
+function mergeAiText(result: Analysis, vision: FleetTextVision, orders: CandidateOrder[]) {
+  if (vision.provider === "NONE") {
+    result.recognition = { provider: "RULES", label: "规则降级", note: vision.note };
+    return;
+  }
+  result.recognition = { provider: vision.provider, label: vision.provider === "GLM" ? "AI：GLM" : "AI：Qwen", note: vision.note };
+  for (const item of vision.records) {
+    const exact = item.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)) : undefined;
+    const target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : result.records.length === 1 ? result.records[0] : undefined;
+    if (!target) continue;
+    if (exact) {
+      target.order_match = { platform_order_number: exact.orderNo, confidence: item.confidence === "HIGH" ? "high" : "medium", evidence: `${result.recognition.label} 从原文识别订单号` };
+      target.needs_review = false;
+      target.review_reasons = [];
+    }
+    const name = sanitizeAiDriverName(item.driver_name);
+    const plate = sanitizeAiPlate(item.license_plate);
+    if (name) target.driver_name = field(name, `${result.recognition.label} 识别，需人工核对`);
+    if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
+    if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
+    if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
+    if (item.vehicle_model) target.vehicle_model = field(item.vehicle_model, `${result.recognition.label} 识别`);
+  }
 }
 
 function autoMatchSingleUnassigned(records: ReplyRecord[], orders: CandidateOrder[], sourceText: string) {
@@ -309,8 +350,16 @@ export async function analyzeFleetReply(replyId: string) {
   const orders = await candidateOrdersFor(reply);
   if (!orders.length) throw new Error("CONTEXT_REQUIRED");
   const profile = resolveProfile(reply, orders);
-  if (profile === "AUTO") return { status: "PROFILE_REQUIRED", message: "无法判断这条回复来自曼谷还是苏梅车队，请选择车队后重试。", replyId, orders };
-  const result = profile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
+  // AI can understand a non-standard reply even when the city profile cannot
+  // be inferred. The deterministic parser remains a validation/fallback only.
+  const parserProfile = profile === "AUTO" ? "BANGKOK" : profile;
+  const result = parserProfile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
+  if (reply.rawText.trim()) {
+    const vision = await recognizeFleetReplyText(reply.rawText, orders.map((order) => order.orderNo));
+    mergeAiText(result, vision, orders);
+  } else {
+    result.recognition = { provider: "RULES", label: "AI 未调用", note: "未提供车队文字；仅在有截图时调用图片识别。" };
+  }
   // Image-only replies are chat screenshots. Do not run OCR on normal
   // text-and-vehicle-photo replies, which keeps paid calls bounded.
   if (!reply.rawText.trim()) {
@@ -325,7 +374,7 @@ export async function analyzeFleetReply(replyId: string) {
   await applyVehicleHistory(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
-  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: isAiVisionRealCallsEnabled() ? "规则解析 + GLM / Qwen" : "规则解析（AI 实际调用未启用）", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "qwen-flash（泰语姓名）", promptVersion: `fleet-reply-v4-${profile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
+  const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: result.recognition?.label ?? "规则降级", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "glm-5.3-flash → qwen3.7-plus", promptVersion: `fleet-reply-v5-${parserProfile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
   return { status: extraction.status, replyId, extractionId: extraction.id, result, orders, autoWritten, profile };
 }
 
@@ -337,13 +386,13 @@ export async function getFleetReply(replyId: string) {
   return { id: reply.id, rawText: reply.rawText, images: reply.images.map(({ id, originalFilename, mimeType }) => ({ id, originalFilename, mimeType })), orders, extraction: extraction ? { id: extraction.id, status: extraction.status, message: extraction.errorMessage, result: extraction.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null } : null, confirmations: reply.confirmations };
 }
 
-export async function confirmFleetReply(replyId: string, input: { extractionId?: string; records: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleModel: string }[] }) {
+export async function confirmFleetReply(replyId: string, input: { extractionId?: string; records: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string }[] }) {
   const reply = await db.fleetReply.findUnique({ where: { id: replyId } });
   if (!reply) throw new Error("REPLY_NOT_FOUND");
   const candidates = await candidateOrdersFor(reply);
   const allowed = new Set(candidates.map((order) => order.id));
   const rules = loadRules();
-  const accepted: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleModel: string }[] = [];
+  const accepted: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string }[] = [];
   const errors: { orderId: string; message: string }[] = [];
   for (const record of input.records) {
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
@@ -363,10 +412,10 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     if (rules.transforms.generic_vehicle_labels_not_allowed_for_return.some((item) => item.toLowerCase() === vehicle.toLowerCase())) { errors.push({ orderId: record.orderId, message: "i’way 回传需要具体车型，不能只填 Van、Minibus、Sedan 等大类。" }); continue; }
     const licensePlate = normalizeLicensePlateForReturn(record.licensePlate);
     if (!licensePlate) { errors.push({ orderId: record.orderId, message: `${record.orderId}：请补充或修改车牌。` }); continue; }
-    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate, vehicleModel: vehicle });
+    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate, vehicleCategory: record.vehicleCategory?.trim() || undefined, vehicleModel: vehicle });
   }
   if (errors.length) return { valid: false, errors, confirmed: 0 };
-  for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate });
+  for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleCategory: record.vehicleCategory ?? null, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate });
   await db.$transaction(async (tx) => {
     await tx.driverDetailConfirmation.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, fleetReplyId: replyId, extractionId: input.extractionId || null, finalDriverName: record.driverName, finalPhone: record.driverPhone, finalPlate: record.licensePlate, finalVehicleModel: record.vehicleModel, confirmedBy: "运营人员", rulesVersion: rules.rules_version })) });
     await tx.activityLog.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, action: "确认车队回传资料", actor: "运营人员", metadata: `车队回复：${replyId}；规则版本：${rules.rules_version}` })) });
