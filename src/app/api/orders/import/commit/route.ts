@@ -9,9 +9,14 @@ export async function POST(request: NextRequest) {
   const source = body.source;
   if (!fields || typeof fields.platformOrderNumber !== "string") return failure("INVALID_REQUEST", "缺少确认后的订单字段。", undefined, 422);
   if (!source?.verified || !["iway_feishu", "esforty", "manual"].includes(source.type)) return failure("SOURCE_UNVERIFIED", "订单来源尚未核实，禁止保存。", undefined, 422);
+  // iWay messages often group a ride number as `949 810`. Store and compare
+  // one canonical form so a reviewer cannot accidentally create a duplicate by
+  // retaining the visual space from WhatsApp/Telegram.
+  const platformOrderNumber = fields.platformOrderNumber.replace(/^\s*#?\s*/, "").replace(/\s+/g, "");
+  if (!platformOrderNumber) return failure("ORDER_NUMBER_REQUIRED", "订单号不能为空，请返回核对。", ["platformOrderNumber"], 422);
   const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"];
   const missing = required.filter((key) => !fields[key]);
-  const existing = await db.order.findUnique({ where: { platformOrderNumber: fields.platformOrderNumber } });
+  const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (existing && body.duplicateAction !== "keep") return failure("DUPLICATE_ORDER", "该订单号已存在。请查看旧单，不要重复录入。", [existing.id], 409);
   if (existing) return success({ order: existing, skipped: true, message: "订单号已存在，已保留原订单。" });
   const pickupDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(fields.pickupDateTime)) ? new Date(`${fields.pickupDateTime}:00+07:00`) : null;
@@ -22,7 +27,7 @@ export async function POST(request: NextRequest) {
     const fleet = await canonicalFleetForCity(tx, city);
     const adults = Number(fields.adults) || 0;
     const children = Number(fields.children) || 0;
-    const created = await tx.order.create({ data: { platformOrderNumber: fields.platformOrderNumber, city, fleetId: fleet.id, serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults, children, luggage: Number(fields.luggage) || adults + children, meetGreetLine: fields.meetGreetLine || null, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
+    const created = await tx.order.create({ data: { platformOrderNumber, city, fleetId: fleet.id, serviceDate: fields.pickupDateTime.slice(0, 10), pickupDateTime, pickupAddress: fields.pickupAddress || "待核对", dropoffAddress: fields.dropoffAddress || "待核对", passengerName: fields.passengerName || "待核对", passengerPhone: fields.passengerPhone || "待核对", flightNumber: fields.flightNumber || null, platformVehicleType: fields.platformVehicleType || "待核对", adults, children, luggage: Number(fields.luggage) || adults + children, meetGreetLine: fields.meetGreetLine || null, otherNotes: fields.otherNotes || null, rawSource: body.rawText || null, status: missing.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH" } });
     await tx.activityLog.create({ data: { orderId: created.id, action: "订单已导入", actor: "运营人员", metadata: JSON.stringify({ sourceType: source.type, sourceFormat: source.format, sourceVerified: true }) } });
     return created;
   });

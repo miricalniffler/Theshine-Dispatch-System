@@ -9,7 +9,7 @@ function pick(text: string, label: string) {
 }
 
 function normaliseOrderNumber(value: string) {
-  return value.replace(/^#/, "").replace(/\s/g, "");
+  return value.replace(/^\s*(?:ride|order(?:\s*(?:number|no\.?|id))?)?\s*[:#№-]*\s*/i, "").replace(/\s/g, "");
 }
 
 function numberFrom(value: string) {
@@ -109,12 +109,55 @@ function parseStandardOrder(text: string) {
   };
 }
 
+/**
+ * A number of iWay messages are copied from WhatsApp or Telegram rather than
+ * from the email template.  They keep labels, but not the "Ride number" /
+ * "Itinerary" headings used by parseIwayRide.  This parser deliberately only
+ * reads values that are present in the message: absent fields remain empty and
+ * are sent to the review screen as pending rather than guessed.
+ */
+function parseIwayLabelledOrder(text: string) {
+  const { adults: labelledAdults, children } = passengerCounts(text);
+  const passengerLine = pick(text, "(?:Passenger|Client|Clients|Guest)(?:\\s+name)?");
+  const passengerPhone = pick(text, "(?:Passenger\\s+)?(?:Phone|Mobile|Tel(?:ephone)?)")
+    || passengerLine.match(/(?:\+?\d[\d\s()\-]{6,})/)?.[1]?.trim()
+    || "";
+  const passengerName = passengerLine
+    .replace(/(?:\+?\d[\d\s()\-]{6,})/g, "")
+    .replace(/\s*\(\s*\d+\s*pax\s*\)\s*/i, " ")
+    .trim();
+  const pickupAddress = pick(text, "(?:From|Pickup(?:\\s+(?:address|point|location))?|Pick\\s*up)");
+  const dropoffAddress = pick(text, "(?:To|Dropoff|Drop\\s*off|Destination)(?:\\s+(?:address|point|location))?");
+  const rawDateTime = pick(text, "(?:Pickup\\s*)?(?:Date(?:\\s*(?:/|and)\\s*Time)?|Date\\s*&\\s*Time|Pickup\\s+time|Time)");
+  const pickupDateTime = compactDateTime(rawDateTime) || rawDateTime;
+  const pax = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
+  const adults = labelledAdults || pax;
+  const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  return {
+    platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Ride\s*)?(?:Order\s*)?(?:number|no\\.?|id)")),
+    passengerName,
+    passengerPhone,
+    pickupDateTime,
+    pickupAddress,
+    dropoffAddress,
+    platformVehicleType: pick(text, "(?:Vehicle(?:\\s+(?:class|type))?|Car(?:\\s+type)?)"),
+    flightNumber: pick(text, "(?:Flight(?:\\s+number)?|Train(?:\\s+number)?)"),
+    adults,
+    children,
+    luggage: luggageFor(text, adults + children),
+    meetGreetLine: meetGreetFor(text),
+    city: cityDetection.city ?? "",
+    cityDetection,
+    otherNotes: pick(text, "(?:Remarks|Notes?|Special\s+requests?)"),
+  };
+}
+
 type ParsedFields = ReturnType<typeof parseStandardOrder>;
 
 function compactOrderStarts(text: string) {
   // iWay commonly uses `949 810`; esforty also emits 7-digit values such as
   // `1 015 534`. Keep both shapes as separate order blocks.
-  return [...text.matchAll(/^\s*(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})\s*$/gm)].map((match) => match.index ?? 0);
+  return [...text.matchAll(/^\s*(?:(?:ride|order(?:\s*(?:number|no\.?|id))?)\s*[:#№-]*\s*)?(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})\s*$/gim)].map((match) => match.index ?? 0);
 }
 
 function compactDateTime(value: string) {
@@ -125,9 +168,9 @@ function compactDateTime(value: string) {
 
 // esforty 的列表复制格式没有字段标签：一笔订单由“分组订单号”开头，
 // 后面依次是电话、乘客、日期时间、平台车型、接人点、航班、送人点。
-function parseCompactEsfortyOrder(block: string): ParsedFields | null {
+export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | null {
   const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const orderIndex = lines.findIndex((line) => /^(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})$/.test(line));
+  const orderIndex = lines.findIndex((line) => /^(?:(?:ride|order(?:\s*(?:number|no\.?|id))?)\s*[:#№-]*\s*)?(?:\d{3}[\s\u00a0]+\d{3,4}|\d{1,2}(?:[\s\u00a0]+\d{3}){2})$/i.test(line));
   if (orderIndex < 0) return null;
   const orderNo = normaliseOrderNumber(lines[orderIndex]);
   const timeIndex = lines.findIndex((line) => /\d{1,2}[./-]\d{1,2}[./-]20\d{2}\s+\d{1,2}:\d{2}/.test(line));
@@ -140,7 +183,7 @@ function parseCompactEsfortyOrder(block: string): ParsedFields | null {
   const adults = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
 
   const afterTime = lines.slice(timeIndex + 1);
-  const vehicleIndex = afterTime.findIndex((line) => /^(?:economy|standard|comfort|business|premium|suv|minivan|minibus|van|sedan)$/i.test(line));
+  const vehicleIndex = afterTime.findIndex((line) => /^(?:economy|standard|comfort|business(?:\s+class)?|premium|suv|minivan|minibus|van|sedan)(?:\s*\([^)]*\)|\s+\d+\s*(?:pax|seats?))?$/i.test(line));
   const vehicleType = vehicleIndex >= 0 ? afterTime[vehicleIndex] : "";
   const afterVehicle = vehicleIndex >= 0 ? afterTime.slice(vehicleIndex + 1) : afterTime;
   const flightIndex = afterVehicle.findIndex((line) => /^flight\s*(?:number)?\s*:/i.test(line));
@@ -174,7 +217,7 @@ function parseCompactEsfortyOrder(block: string): ParsedFields | null {
 function parseCompactEsfortyList(text: string) {
   const starts = compactOrderStarts(text);
   if (!starts.length) return [];
-  return starts.map((start, index) => parseCompactEsfortyOrder(text.slice(start, starts[index + 1]))).filter((item): item is ParsedFields => item !== null);
+  return starts.map((start, index) => parseCompactIwayOrEsfortyOrder(text.slice(start, starts[index + 1]))).filter((item): item is ParsedFields => item !== null);
 }
 
 export async function POST(request: NextRequest) {
@@ -183,16 +226,20 @@ export async function POST(request: NextRequest) {
   const text = body.text.trim();
   const isIwayRide = /Ride number\s*[:：]/i.test(text) && /Vehicle class\s*[:：]/i.test(text) && /Itinerary\s*[:：]/i.test(text) && /Clients\s*[:：]/i.test(text);
   const isStandardOrder = /(?:Order Number|Order ID)\s*[:：]/i.test(text) && /Passenger Name\s*[:：]/i.test(text);
+  const isIwayLabelled = /(?:ride\s*)?(?:order\s*)?(?:number|no\.?|id)\s*[:#№-]/i.test(text)
+    && /(?:pickup\s*)?(?:date|time)\s*[:：]/i.test(text)
+    && /(?:from|pickup(?:\s+(?:address|point|location))?)\s*[:：]/i.test(text)
+    && /(?:to|dropoff|destination)(?:\s+(?:address|point|location))?\s*[:：]/i.test(text);
   const compactOrders = parseCompactEsfortyList(text);
   const isCompactEsforty = compactOrders.length > 0;
   const sourceType = body.sourceType;
-  if (sourceType === "iway_feishu" && !isIwayRide && !isCompactEsforty) return failure("SOURCE_MISMATCH", "这段内容不符合 i’way 订单格式，已阻止导入。", undefined, 422);
+  if (sourceType === "iway_feishu" && !isIwayRide && !isIwayLabelled && !isCompactEsforty) return failure("SOURCE_MISMATCH", "这段内容不符合 i’way 订单格式，已阻止导入。", undefined, 422);
   if (sourceType === "esforty" && !isStandardOrder && !isCompactEsforty) return failure("SOURCE_MISMATCH", "这段内容不符合 esforty/标准订单格式，已阻止导入。", undefined, 422);
   if (sourceType === "manual" && body.confirmedSource !== true) return failure("SOURCE_UNCONFIRMED", "手工录入前必须确认订单来源。", undefined, 422);
   if (!["iway_feishu", "esforty", "manual"].includes(sourceType)) return failure("SOURCE_REQUIRED", "请选择订单来源后再识别。", undefined, 422);
-  if (!isIwayRide && !isStandardOrder && !isCompactEsforty) return failure("NOT_AN_ORDER", "未识别到订单格式。可粘贴 i’way 邮件、带字段标签的订单，或 esforty 紧凑列表。", undefined, 422);
+  if (!isIwayRide && !isIwayLabelled && !isStandardOrder && !isCompactEsforty) return failure("NOT_AN_ORDER", "未识别到订单格式。可粘贴 i’way 邮件、WhatsApp/Telegram 标签订单、带字段标签的订单，或 esforty 紧凑列表。", undefined, 422);
 
-  const parsedOrders = isCompactEsforty ? compactOrders : [isIwayRide ? parseIwayRide(text) : parseStandardOrder(text)];
+  const parsedOrders = isCompactEsforty ? compactOrders : [isIwayRide ? parseIwayRide(text) : isIwayLabelled ? parseIwayLabelledOrder(text) : parseStandardOrder(text)];
   const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"] as const;
   const orders = await Promise.all(parsedOrders.map(async (parsed) => {
     const { cityDetection, ...fields } = parsed;
@@ -203,5 +250,5 @@ export async function POST(request: NextRequest) {
   }));
   const first = orders[0];
   const [thaiTranslation, vehicleImage] = await Promise.all([translateThaiForReview(text), identifyVehicleFromImage(typeof body.vehicleImageUrl === "string" ? body.vehicleImageUrl : "")]);
-  return success({ ...first, orders, fields: first.fields, rawText: text, source: { type: sourceType, format: isCompactEsforty ? "compact_iway_or_esforty" : isIwayRide ? "iway_new_ride" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: first.missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: first.duplicates, assistance: { thaiTranslation, vehicleImage } });
+  return success({ ...first, orders, fields: first.fields, rawText: text, source: { type: sourceType, format: isCompactEsforty ? "compact_iway_or_esforty" : isIwayRide ? "iway_new_ride" : isIwayLabelled ? "iway_labelled_chat" : "standard_order", verified: sourceType !== "manual" || body.confirmedSource === true }, status: first.missingFields.length ? "PENDING_REVIEW" : "READY_TO_DISPATCH", duplicates: first.duplicates, assistance: { thaiTranslation, vehicleImage } });
 }
