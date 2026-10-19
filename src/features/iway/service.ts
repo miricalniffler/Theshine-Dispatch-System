@@ -4,6 +4,7 @@ import type { Order } from "@/features/orders/types";
 import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { loadRules } from "@/lib/rules/load-rules";
 import { prepareDriverNotificationForOrder } from "@/features/customer-notifications/service";
+import { archiveDriverVehicle, isTemporaryName } from "@/features/archives/service";
 
 export type DriverDetails = {
   orderId: string;
@@ -14,6 +15,10 @@ export type DriverDetails = {
   confirmedVehicleModel: string | null;
   licensePlate: string | null;
   confirmedAt: string | null;
+  driverProfileId: string | null;
+  vehicleProfileId: string | null;
+  driverNameSource: string;
+  iwayDriverName: string | null;
 };
 
 export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate">;
@@ -52,6 +57,10 @@ function toDriverDetails(row: DriverDetail): DriverDetails {
     confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
     licensePlate: normalizeLicensePlateForReturn(row.licensePlate),
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
+    driverProfileId: row.driverProfileId,
+    vehicleProfileId: row.vehicleProfileId,
+    driverNameSource: row.driverNameSource,
+    iwayDriverName: row.iwayDriverName,
   };
 }
 
@@ -69,7 +78,7 @@ function iwayContext(order: Order, driver: DriverDetails | null | undefined) {
     platform_order_number: order.orderNo,
     pickup_datetime: `${order.serviceDate} ${order.pickupTime}`,
     confirmed_vehicle_model: driver?.confirmedVehicleModel,
-    confirmed_driver_name: driver?.confirmedDriverName,
+    confirmed_driver_name: driver?.iwayDriverName || driver?.confirmedDriverName,
     normalized_driver_phone: driver?.normalizedDriverPhone,
     license_plate: driver?.licensePlate,
   };
@@ -112,12 +121,16 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   const record: DriverDetails = {
     orderId,
     rawReply: input.rawReply?.trim() ?? "",
-    confirmedDriverName: input.confirmedDriverName?.trim() || null,
+    confirmedDriverName: input.confirmedDriverName?.trim() || "无名氏",
     rawDriverPhone: input.rawDriverPhone?.trim() || null,
     normalizedDriverPhone,
     confirmedVehicleModel: normalizeVehicleModel(input.confirmedVehicleModel, rules),
     licensePlate: normalizeLicensePlateForReturn(input.licensePlate),
     confirmedAt: null,
+    driverProfileId: persisted.driverDetail?.driverProfileId ?? null,
+    vehicleProfileId: persisted.driverDetail?.vehicleProfileId ?? null,
+    driverNameSource: input.confirmedDriverName?.trim() ? "MANUAL" : "TEMPORARY",
+    iwayDriverName: input.confirmedDriverName?.trim() || null,
   };
   const check = validateRequiredFields(iwayContext(order, record), "before_iway_return", rules);
   const confirmedAt = check.valid ? new Date() : null;
@@ -133,6 +146,21 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
       create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, licensePlate: record.licensePlate, confirmedAt },
     });
+    const archive = await archiveDriverVehicle(tx, {
+      orderId,
+      orderStatus: currentOrder.status,
+      existingDriverProfileId: saved.driverProfileId,
+      existingVehicleProfileId: saved.vehicleProfileId,
+      driverName: input.confirmedDriverName,
+      driverNameSource: input.confirmedDriverName?.trim() ? "MANUAL" : "TEMPORARY",
+      rawPhone: input.rawDriverPhone,
+      vehicleModel: record.confirmedVehicleModel,
+      rawPlate: input.licensePlate,
+    });
+    const archived = await tx.driverDetail.update({
+      where: { id: saved.id },
+      data: { driverProfileId: archive.driverProfileId, vehicleProfileId: archive.vehicleProfileId, driverNameSource: archive.driverNameSource, iwayDriverName: archive.iwayDriverName },
+    });
     // Editing driver/vehicle details after a return is a correction, not a
     // rewind of the order lifecycle.  In particular, moving a COMPLETED
     // order back to DRIVER_CONFIRMED made the original completion disappear
@@ -141,12 +169,12 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     }
-    return saved;
+    return archived;
   });
   return { driver: toDriverDetails(driver), valid: check.valid, missingFields: fieldLabels(check.missingFields), ruleVersion: rules.rules_version };
 }
 
-export type IwayPreview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string };
+export type IwayPreview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string; temporaryDriverNames?: { orderId: string; orderNo: string; name: string }[] };
 
 /** A copied return batch is a draft. Any change to the rendered text makes it stale. */
 export function isIwayPreviewCurrent(snapshot: string, current: Pick<IwayPreview, "valid" | "text">) {
@@ -173,7 +201,8 @@ function buildIwayPreview(orderIds: string[], selected: OrderWithDriver[], rules
   const serviceDate = selected[0].serviceDate;
   const bodies = selected.map((row) => renderTemplate(rules.templates.iway_return.body, iwayContext(toOrder(row), row.driverDetail ? toDriverDetails(row.driverDetail) : null)));
   const text = [renderTemplate(rules.templates.iway_return.header, { service_date_label_en: formatServiceDateLabel(serviceDate, "en") }), ...bodies, rules.templates.iway_return.footer].join("\n\n");
-  return { valid: true, errors: [], text, orderCount: selected.length, serviceDate, ruleVersion: rules.rules_version };
+  const temporaryDriverNames = selected.flatMap((row) => row.driverDetail && isTemporaryName(row.driverDetail.driverNameSource) && row.driverDetail.iwayDriverName ? [{ orderId: row.id, orderNo: row.platformOrderNumber, name: row.driverDetail.iwayDriverName }] : []);
+  return { valid: true, errors: [], text, orderCount: selected.length, serviceDate, ruleVersion: rules.rules_version, temporaryDriverNames };
 }
 
 export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview> {
@@ -185,7 +214,7 @@ export async function saveIwayCopy(orderIds: string[]) {
   if (!preview.valid || !preview.text || !preview.serviceDate) return preview;
   const batch = await db.$transaction(async (tx) => {
     const created = await tx.iwayReturnBatch.create({
-      data: { serviceDate: preview.serviceDate!, ruleVersion: preview.ruleVersion, contentSnapshot: preview.text!, copiedAt: new Date(), orders: { create: orderIds.map((orderId) => ({ orderId })) } },
+      data: { serviceDate: preview.serviceDate!, ruleVersion: preview.ruleVersion, contentSnapshot: preview.text!, copiedAt: new Date(), orders: { create: orderIds.map((orderId) => { const temporary = preview.temporaryDriverNames?.find((item) => item.orderId === orderId); return { orderId, driverNameSnapshot: temporary?.name ?? null, driverNameSourceSnapshot: temporary ? "TEMPORARY" : null }; }) } },
       include: { orders: true },
     });
     await tx.activityLog.createMany({ data: orderIds.map((orderId) => ({ orderId, action: "复制 i’way 回传内容", actor: "运营人员", metadata: `回传批次：${created.id}` })) });

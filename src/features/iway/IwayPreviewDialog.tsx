@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import "@/features/dispatch/dispatch-preview.css";
 
-type Preview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string };
+type Preview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string; temporaryDriverNames?: { orderId: string; orderNo: string; name: string }[] };
 
 export function IwayPreviewDialog({ orderIds, onClose }: { orderIds: string[]; onClose: () => void }) {
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -30,6 +30,6 @@ export function IwayPreviewDialog({ orderIds, onClose }: { orderIds: string[]; o
     <header className="dispatch-modal-header"><div><p>i’way 回传</p><h2 id="iway-title">批量回传 i’way</h2></div><button className="dispatch-close" aria-label="关闭回传预览" onClick={onClose}>×</button></header>
     {!preview && <div className="dispatch-loading">正在校验司机资料并生成回传文本…</div>}
     {preview && !preview.valid && <div className="dispatch-validation-error" role="alert"><h3>暂时不能生成回传</h3><ul>{preview.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-    {preview?.valid && <><div className="dispatch-meta"><span><b>{preview.orderCount}</b> 个订单</span><span>{preview.serviceDate}</span></div><textarea className="dispatch-text" aria-label="iway 回传文本预览" readOnly value={preview.text || ""}/>{message && <p className="dispatch-confirmed">{message}</p>}<footer className="dispatch-modal-footer"><small>规则版本：{preview.ruleVersion}</small><div><button className="dispatch-secondary" onClick={onClose}>返回修改</button><button className="dispatch-primary" onClick={copy}>复制完整内容</button><button className="dispatch-confirm" disabled={!batchId} onClick={confirm}>确认已回传 i’way</button></div></footer></>}
+    {preview?.valid && <><div className="dispatch-meta"><span><b>{preview.orderCount}</b> 个订单</span><span>{preview.serviceDate}</span></div>{preview.temporaryDriverNames?.length ? <p className="dispatch-validation-error"><strong>临时姓名</strong>：{preview.temporaryDriverNames.map((item) => `${item.orderNo} · ${item.name}`).join("；")}。该姓名仅用于本次回传记录，后续可补充真实姓名。</p> : null}<textarea className="dispatch-text" aria-label="iway 回传文本预览" readOnly value={preview.text || ""}/>{message && <p className="dispatch-confirmed">{message}</p>}<footer className="dispatch-modal-footer"><small>规则版本：{preview.ruleVersion}</small><div><button className="dispatch-secondary" onClick={onClose}>返回修改</button><button className="dispatch-primary" onClick={copy}>复制完整内容</button><button className="dispatch-confirm" disabled={!batchId} onClick={confirm}>确认已回传 i’way</button></div></footer></>}
   </section></div>;
 }

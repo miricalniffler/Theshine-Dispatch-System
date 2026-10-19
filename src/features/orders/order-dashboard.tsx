@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DispatchPreviewDialog } from "@/features/dispatch/DispatchPreviewDialog";
 import { CustomerContactPreviewDialog } from "@/features/customer-notifications/CustomerContactPreviewDialog";
+import { IwayPreviewDialog } from "@/features/iway/IwayPreviewDialog";
 import { OrderDetailDrawer } from "./OrderDetailDrawer";
 import type { DashboardSummary, Order, OrderFilters } from "./types";
 import "./orders.css";
@@ -53,6 +54,7 @@ export function OrderDashboard() {
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
   const [detailAction, setDetailAction] = useState<"edit" | "note" | "cancel">("edit");
   const [previewOrder, setPreviewOrder] = useState<Order | null>(null);
+  const [iwayOrderIds, setIwayOrderIds] = useState<string[] | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [syncingMail, setSyncingMail] = useState(false);
@@ -113,7 +115,7 @@ export function OrderDashboard() {
         <input aria-label="关键词" placeholder="订单号 / 乘客 / 电话" value={filters.keyword || ""} onChange={(event) => update("keyword", event.target.value)}/>
         <button className="v3-secondary v3-filter-desktop-button" type="button" onClick={() => setMobileFiltersOpen((open) => !open)}>筛选</button>
       </div>
-      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>可批量生成车队派单、i’way 回传或客人首联内容。客人联系目前只生成内部待发送记录，不会真实发送 WhatsApp。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量生成车队派单</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setModal("customer-contact")}>批量联系客人</button><button className="v3-secondary" disabled={!selected.length} onClick={() => window.location.assign(`/iway-return?orderIds=${selected.join(",")}`)}>批量回传 i’way</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
+      <div className="v3-batch"><div><div className="v3-batch-title"><b>{selected.length ? `已选择 ${selected.length} 笔订单` : "先勾选订单"}</b></div><p>可批量生成车队派单、i’way 回传或客人首联内容。客人联系目前只生成内部待发送记录，不会真实发送 WhatsApp。</p></div><div className="v3-batch-actions"><button className="v3-primary" disabled={!selected.length} onClick={() => setModal("dispatch")}>批量生成车队派单</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setModal("customer-contact")}>批量联系客人</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setIwayOrderIds(selected)}>回传 i’way</button><button className="v3-secondary" disabled={!selected.length} onClick={() => setSelected([])}>清除选择</button></div></div>
       <div className="v3-table-wrap"><table className="v3-orders-table"><colgroup><col className="v3-col-select"/><col className="v3-col-time"/><col className="v3-col-order"/><col className="v3-col-passenger"/><col className="v3-col-fleet"/><col className="v3-col-driver"/></colgroup><thead><tr><th className="v3-select"><label><input aria-label="全选订单" type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : orders.map((order) => order.id))}/>全选</label></th><th>接客时间</th><th>订单号</th><th>乘客 / 路线</th><th>车型 / 车队</th><th>司机 / 车辆</th></tr></thead><tbody>
         {loading ? <tr><td colSpan={6} className="v3-empty">正在加载订单…</td></tr> : !orders.length ? <tr><td colSpan={6} className="v3-empty">当前范围没有已核实的订单</td></tr> : orders.map((order) => <tr key={order.id}><td className="v3-select"><label><input aria-label={`选择 ${order.orderNo}`} type="checkbox" checked={selected.includes(order.id)} onChange={() => toggleOne(order.id)}/>选择</label></td><td className="v3-time-cell"><b>{order.serviceDate.slice(5).replace("-", "/")} {order.pickupTime}</b><small>{order.city}</small></td><td className="v3-order-cell"><Link onClick={(event) => { event.preventDefault(); setDetailAction("edit"); setDetailOrder(order); }} href={`/orders/${order.id}`}>{order.orderNo}</Link>{order.status === "CANCELLED" && <small className="v3-cancel-reason">已取消：{order.cancelReason || "未记录"}</small>}</td><td className="v3-passenger-cell"><span className="v3-primary-line">{order.passengerName}</span><small title={order.route}>{order.route}</small>{order.latestExceptionNote && <small>备注：{order.latestExceptionNote}</small>}</td><td className="v3-fleet-cell"><span className="v3-primary-line">{order.vehicleType}</span><small title={order.fleetName}>{order.fleetName}</small></td><td className="v3-driver-cell"><DriverVehicle order={order} /></td></tr>)}
       </tbody></table></div>
@@ -129,6 +131,7 @@ export function OrderDashboard() {
     {modal === "dispatch" && <DispatchPreviewDialog orderIds={selected} onClose={() => setModal(null)}/>}
     {modal === "customer-contact" && <CustomerContactPreviewDialog orderIds={selected} onClose={() => setModal(null)} />}
     {previewOrder && <DispatchPreviewDialog orderIds={[previewOrder.id]} mode="single" onClose={() => setPreviewOrder(null)} editHref={`/orders/${previewOrder.id}`} />}
+    {iwayOrderIds && <IwayPreviewDialog orderIds={iwayOrderIds} onClose={() => setIwayOrderIds(null)} />}
     <OrderDetailDrawer order={detailOrder} initialAction={detailAction} onChanged={() => setRefreshVersion((version) => version + 1)} onClose={() => setDetailOrder(null)} onDispatch={(order) => { setDetailOrder(null); setPreviewOrder(order); }} />
   </main>;
 }

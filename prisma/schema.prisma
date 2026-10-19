@@ -35,6 +35,7 @@ model Order {
 
   fleet         Fleet?                 @relation(fields: [fleetId], references: [id])
   driverDetail  DriverDetail?
+  driverVehicleAssignments OrderDriverVehicleAssignment[]
   dispatchLinks DispatchBatchOrder[]
   iwayLinks     IwayReturnBatchOrder[]
   activityLogs  ActivityLog[]
@@ -78,12 +79,144 @@ model DriverDetail {
   normalizedDriverPhone String?
   confirmedVehicleModel String?
   licensePlate          String?
+  driverProfileId       String?
+  vehicleProfileId      String?
+  thaiDriverName        String?
+  driverNameSource      String    @default("MANUAL")
+  iwayDriverName        String?
   rawReply              String?
   confirmedAt           DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driverProfile DriverProfile? @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
+  vehicleProfile VehicleProfile? @relation(fields: [vehicleProfileId], references: [id], onDelete: SetNull)
+
+  @@index([driverProfileId])
+  @@index([vehicleProfileId])
+}
+
+// 独立司机档案只从本功能上线后的资料保存动作建立；不会从旧订单回填或猜测合并。
+model DriverProfile {
+  id                   String   @id @default(cuid())
+  displayName          String   @default("无名氏")
+  thaiName             String?
+  confirmedEnglishName String?
+  nameSource           String   @default("UNKNOWN")
+  mergedIntoId         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  mergedInto           DriverProfile? @relation("DriverProfileMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedProfiles       DriverProfile[] @relation("DriverProfileMerge")
+  phones               DriverPhone[]
+  details              DriverDetail[]
+  assignments          OrderDriverVehicleAssignment[]
+  nameHistory          DriverNameHistory[]
+  temporaryNames       TemporaryDriverName[]
+  mergeSources         DriverProfileMerge[] @relation("MergeSource")
+  mergeTargets         DriverProfileMerge[] @relation("MergeTarget")
+
+  @@index([displayName])
+  @@index([mergedIntoId])
+}
+
+model DriverPhone {
+  id              String   @id @default(cuid())
+  driverProfileId String
+  rawPhone        String
+  normalizedPhone String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  driverProfile DriverProfile @relation(fields: [driverProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([normalizedPhone])
+  @@index([driverProfileId])
+}
+
+model DriverNameHistory {
+  id              String   @id @default(cuid())
+  driverProfileId String
+  name            String
+  nameSource      String
+  thaiName        String?
+  createdAt       DateTime @default(now())
+
+  driverProfile DriverProfile @relation(fields: [driverProfileId], references: [id], onDelete: Restrict)
+
+  @@index([driverProfileId, createdAt])
+}
+
+model TemporaryDriverName {
+  id              String   @id @default(cuid())
+  driverProfileId String
+  orderId         String   @unique
+  generatedName   String
+  generation      Int      @default(1)
+  createdAt       DateTime @default(now())
+  regeneratedAt   DateTime?
+
+  driverProfile DriverProfile @relation(fields: [driverProfileId], references: [id], onDelete: Restrict)
+
+  @@index([driverProfileId, createdAt])
+}
+
+model VehicleProfile {
+  id              String   @id @default(cuid())
+  rawLicensePlate String?
+  normalizedPlate String?  @unique
+  brand           String?
+  vehicleModel    String?
+  photoPath       String?
+  dataSource      String   @default("MANUAL")
+  isVerified      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  details      DriverDetail[]
+  assignments  OrderDriverVehicleAssignment[]
+
+  @@index([vehicleModel])
+}
+
+// 每次确认或改写司机/车辆资料都保留一条搭配记录；旧记录只关闭，不删除。
+model OrderDriverVehicleAssignment {
+  id               String   @id @default(cuid())
+  orderId          String
+  driverProfileId  String?
+  vehicleProfileId String?
+  driverNameForIway String?
+  driverNameSource String   @default("MANUAL")
+  orderStatus      String
+  isCurrent        Boolean  @default(true)
+  assignedAt       DateTime @default(now())
+  endedAt          DateTime?
+  endReason        String?
+
+  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driverProfile  DriverProfile? @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
+  vehicleProfile VehicleProfile? @relation(fields: [vehicleProfileId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, isCurrent])
+  @@index([driverProfileId, assignedAt])
+  @@index([vehicleProfileId, assignedAt])
+}
+
+model DriverProfileMerge {
+  id                 String   @id @default(cuid())
+  sourceProfileId    String
+  targetProfileId    String
+  operator           String?
+  summary            String
+  createdAt          DateTime @default(now())
+
+  sourceProfile DriverProfile @relation("MergeSource", fields: [sourceProfileId], references: [id], onDelete: Restrict)
+  targetProfile DriverProfile @relation("MergeTarget", fields: [targetProfileId], references: [id], onDelete: Restrict)
+
+  @@index([sourceProfileId, createdAt])
+  @@index([targetProfileId, createdAt])
 }
 
 model DispatchBatch {
@@ -197,6 +330,8 @@ model IwayReturnBatch {
 model IwayReturnBatchOrder {
   iwayReturnBatchId String
   orderId           String
+  driverNameSnapshot String?
+  driverNameSourceSnapshot String?
   iwayReturnBatch   IwayReturnBatch @relation(fields: [iwayReturnBatchId], references: [id], onDelete: Cascade)
   order             Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
