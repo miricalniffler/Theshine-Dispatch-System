@@ -54,10 +54,6 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
     const payload = await response.json();
     setSyncing(false);
     if (!response.ok) { setNote(payload.error?.message || "同步失败"); return; }
-    if (payload.data?.localScheduled) {
-      setNote("服务器未配置飞书连接。本机同步助手会持续按周期读取飞书；请保持电脑唤醒后查看下一次同步结果。");
-      return;
-    }
     if (payload.data?.alreadyRunning) { setNote("已有一轮飞书同步正在进行，请等待完成后查看结果。"); return; }
     const now = new Date().toISOString();
     setLatestRun({ status: "SUCCEEDED", startedAt: now, completedAt: now, createdCount: payload.data.created, updatedCount: payload.data.updated, cancelledCount: payload.data.cancelled, skippedCount: payload.data.skipped });

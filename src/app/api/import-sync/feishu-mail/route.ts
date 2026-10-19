@@ -7,16 +7,17 @@ import { db } from "@/lib/db";
 export async function GET() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
   const scheduleEnabled = process.env.FEISHU_MAIL_SYNC_ENABLED === "true" || process.env.FEISHU_MAIL_SYNC_ENABLED === "1";
-  return success({ connector, scheduleEnabled, cronSecretConfigured: Boolean(process.env.CRON_SECRET), syncMode: connector?.configured ? "server" : "local-scheduled", latestRun: await getFeishuSyncStatus() });
+  return success({ connector, scheduleEnabled, cronSecretConfigured: Boolean(process.env.CRON_SECRET), syncMode: connector?.configured ? "server" : "not-configured", latestRun: await getFeishuSyncStatus() });
 }
 
 export async function POST() {
   const connector = listConnectorStatus().find((item) => item.id === "feishu-mail");
   if (!connector?.configured) {
-    // The production server has no authorised Feishu bridge. The Mac
-    // LaunchAgent reads Feishu on its own schedule, irrespective of this UI
-    // action; a click only asks the page to wait for the next recorded run.
-    return success({ completed: false, localScheduled: true, message: "服务器飞书连接未启用；本机同步助手会按周期自动读取飞书。" });
+    // A browser request cannot start a helper on an operator's computer, and
+    // Vercel Preview deployments do not run project cron jobs. Returning a
+    // successful response here previously made the UI wait for a run that
+    // could never occur in this environment.
+    return failure("FEISHU_SYNC_NOT_CONFIGURED", `服务器飞书同步尚未配置，无法立即读取订单。${connector?.message || "请配置飞书邮件导入桥接。"}`, undefined, 503);
   }
 
   // Once Vercel has a real Feishu bridge, clear legacy local-helper requests
