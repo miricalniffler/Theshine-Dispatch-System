@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { parseCompactIwayOrEsfortyOrder } from "../src/app/api/orders/import/parse/route";
+import { parseCompactIwayOrEsfortyOrder, parseIwayLabelledOrder } from "../src/app/api/orders/import/parse/route";
 
 test("可解析 WhatsApp / Telegram 常见的 iWay 紧凑订单，保留空缺字段供人工核对", () => {
   const parsed = parseCompactIwayOrEsfortyOrder(`949 810
@@ -62,5 +62,30 @@ Minibus`);
     dropoffAddress: "",
     flightNumber: "",
     passengerPhone: "",
+  });
+});
+
+test("可解析 WhatsApp/Telegram 带标签 iWay 消息，未出现的信息保持为空", () => {
+  const parsed = parseIwayLabelledOrder(`Order number: 949 810
+Passenger: DIANA NICOLETA MOCANU (8 pax)
+Phone: +40 712 345 678
+Pickup date and time: 19.10.2026 17:55:00
+Vehicle type: Minibus
+From: Suvarnabhumi Airport
+To: Jasmine Grande Residence, Bangkok
+Flight number: VZ343
+Special requests: Meet&Greet`);
+
+  expect(parsed).toMatchObject({
+    platformOrderNumber: "949810",
+    passengerName: "DIANA NICOLETA MOCANU",
+    passengerPhone: "+40 712 345 678",
+    pickupDateTime: "2026-10-19T17:55",
+    pickupAddress: "Suvarnabhumi Airport",
+    dropoffAddress: "Jasmine Grande Residence, Bangkok",
+    platformVehicleType: "Minibus",
+    flightNumber: "VZ343",
+    adults: 8,
+    otherNotes: "Meet&Greet",
   });
 });

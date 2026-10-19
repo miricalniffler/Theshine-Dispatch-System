@@ -116,7 +116,7 @@ function parseStandardOrder(text: string) {
  * reads values that are present in the message: absent fields remain empty and
  * are sent to the review screen as pending rather than guessed.
  */
-function parseIwayLabelledOrder(text: string) {
+export function parseIwayLabelledOrder(text: string) {
   const { adults: labelledAdults, children } = passengerCounts(text);
   const passengerLine = pick(text, "(?:Passenger|Client|Clients|Guest)(?:\\s+name)?");
   const passengerPhone = pick(text, "(?:Passenger\\s+)?(?:Phone|Mobile|Tel(?:ephone)?)")
@@ -148,7 +148,7 @@ function parseIwayLabelledOrder(text: string) {
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
-    otherNotes: pick(text, "(?:Remarks|Notes?|Special\s+requests?)"),
+    otherNotes: pick(text, "(?:Remarks|Notes?|Special\\s+requests?)"),
   };
 }
 

@@ -42,7 +42,9 @@ async function candidateOrdersFor(reply: { dispatchBatchId: string | null; candi
   const orderIds = ids.length ? ids : reply.dispatchBatchId
     ? (await db.dispatchBatch.findUnique({ where: { id: reply.dispatchBatchId }, include: { orders: true } }))?.orders.map((link) => link.orderId) ?? []
     : [];
-  const where = orderIds.length ? { id: { in: orderIds } } : { serviceDate: bangkokToday(), status: { notIn: ["COMPLETED"] } };
+  // Completed orders can receive a legitimate driver/vehicle correction.
+  // They remain visible to the reply workflow, but cancelled orders never do.
+  const where = orderIds.length ? { id: { in: orderIds } } : { serviceDate: bangkokToday(), status: { notIn: ["CANCELLED"] } };
   const orders = await db.order.findMany({ where, include: { fleet: true }, orderBy: { pickupDateTime: "asc" } });
   return orders.map((order): CandidateOrder => ({
     id: order.id, orderNo: order.platformOrderNumber, passengerName: order.passengerName,
@@ -58,7 +60,7 @@ export async function listReplyContexts() {
 
 export async function listFleetReplyDates() {
   const today = bangkokToday();
-  const rows = await db.order.findMany({ where: { serviceDate: { gte: today }, status: { notIn: ["COMPLETED"] } }, select: { serviceDate: true }, distinct: ["serviceDate"], orderBy: { serviceDate: "asc" } });
+  const rows = await db.order.findMany({ where: { serviceDate: { gte: today }, status: { notIn: ["CANCELLED"] } }, select: { serviceDate: true }, distinct: ["serviceDate"], orderBy: { serviceDate: "asc" } });
   const dates = [...new Set([bangkokTomorrow(), ...rows.map((row) => row.serviceDate)])].sort();
   return { defaultDate: bangkokTomorrow(), dates };
 }
@@ -67,7 +69,7 @@ export async function createFleetReply(input: { dispatchBatchId?: string; orderI
   const rawText = input.rawText?.trim() ?? "";
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate ?? "") ? input.serviceDate! : bangkokTomorrow();
   const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : undefined;
-  const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["COMPLETED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
+  const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["CANCELLED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
   const orderIds = [...new Set([...(input.orderIds ?? []), ...dateOrderIds])];
   if (!rawText && !(input.images?.length)) throw new Error("SOURCE_REQUIRED");
   const profile = input.fleetProfile ?? "AUTO";
