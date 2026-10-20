@@ -146,14 +146,6 @@ function parseOrder(message, meta) {
   };
 }
 
-function orderNumberFromSubject(subject) {
-  return String(subject || "").match(/#?([\d\s\u00a0]{5,})/)?.[1]?.replace(/[\s\u00a0]/g, "") || "";
-}
-
-function isCancellationSubject(subject) {
-  return /cancel(?:lation|led|ed)?|void/i.test(String(subject || ""));
-}
-
 function todayBangkok() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
@@ -183,8 +175,12 @@ async function main() {
   ]));
   const triageMessages = triages.flatMap((result) => result.messages || []);
   const scannedCount = triages.reduce((total, result) => total + Number(result.count || 0), 0);
+  // This emergency recovery path imports only verified new-order notices.
+  // Amendments and every cancellation-shaped mail are deliberately excluded:
+  // they require the stricter event processor and must never change an
+  // existing production order through this legacy helper.
   const candidates = triageMessages.filter((mail) =>
-    /(?:Transfer service order|New ride\s*#|AMENDMENT to the transfer|cancel(?:lation|led|ed)?.*transfer|transfer.*cancel(?:lation|led|ed)?)/i.test(mail.subject) &&
+    /(?:Transfer service order|New ride\s*#)/i.test(mail.subject) &&
     /i[’']way/i.test(mail.subject),
   );
   const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
@@ -204,9 +200,6 @@ async function main() {
   const metadata = new Map(uniqueCandidates.map((mail) => [mail.message_id, mail]));
   const parseResults = details.data.messages.map((message) => {
     const meta = metadata.get(message.message_id);
-    if (isCancellationSubject(meta?.subject)) {
-      return { message, event: { action: "cancel", orderNo: orderNumberFromSubject(meta.subject), sourceMessageId: message.message_id, sourceSubject: meta.subject, receivedAt: new Date(meta.date) } };
-    }
     const order = parseOrder(message, meta);
     return { message, event: order ? { action: "upsert", ...order } : null };
   });
@@ -217,28 +210,18 @@ async function main() {
   const future = [];
   for (const event of latestByOrder.values()) {
     if (event.action === "upsert" && event.serviceDate >= today) future.push(event);
-    if (event.action === "cancel") {
-      const existing = await db.order.findUnique({ where: { platformOrderNumber: event.orderNo } });
-      if (existing?.serviceDate >= today) future.push(event);
-    }
   }
   if (dryRun) {
     console.log(JSON.stringify({
       scanned: scannedCount,
       candidateMessages: uniqueCandidates.length,
       parsedMessages: parsed.filter((event) => event.action === "upsert").length,
-      cancellationMessages: parsed.filter((event) => event.action === "cancel").length,
-      rejectedMessages: rejectedMessages.map((mail) => ({ date: mail?.date, subject: mail?.subject, messageId: mail?.message_id })),
+      cancellationMessages: 0,
+      rejectedMessages: rejectedMessages.length,
       futureOrders: future.map((event) => ({
-        action: event.action,
         orderNo: event.orderNo,
         city: event.city,
         serviceDate: event.serviceDate,
-        pickupTime: event.pickupDateTime?.toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }),
-        passengerName: event.passengerName,
-        pickupAddress: event.pickupAddress,
-        dropoffAddress: event.dropoffAddress,
-        sourceSubject: event.sourceSubject,
       })),
     }, null, 2));
     return;
@@ -246,27 +229,16 @@ async function main() {
   const fleets = new Map();
   for (const city of ["曼谷", "苏梅"]) {
     const name = `${city}车队`;
-    fleets.set(city, await db.fleet.upsert({
-      where: { name_city: { name, city } },
-      update: { isActive: true },
-      create: { name, city, isActive: true, note: JSON.stringify({ chatNote: "", vehicleTypes: [], note: "" }) },
-    }));
+    const fleet = await db.fleet.findUnique({ where: { name_city: { name, city } } });
+    if (!fleet) throw new Error(`找不到${name}；为避免创建额外车队，本次新订单未导入。`);
+    fleets.set(city, fleet);
   }
-  const summary = { scanned: scannedCount, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.filter((event) => event.action === "upsert").length, cancellationMessages: parsed.filter((event) => event.action === "cancel").length, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
+  const summary = { scanned: scannedCount, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.length, cancellationMessages: 0, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
   for (const item of future) {
     const existing = await db.order.findUnique({ where: { platformOrderNumber: item.orderNo } });
-    if (item.action === "cancel") {
-      if (existing && existing.status !== "CANCELLED") {
-        await db.$transaction([
-          db.order.update({ where: { id: existing.id }, data: { status: "CANCELLED" } }),
-          db.activityLog.create({ data: { orderId: existing.id, action: "从飞书邮箱同步订单取消", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } }),
-        ]);
-        summary.cancelled.push(item.orderNo);
-      } else {
-        summary.unchanged.push(item.orderNo);
-      }
-      continue;
-    }
+    // Do not update, reopen, cancel, or otherwise overwrite an existing order
+    // while operating in new-orders-only recovery mode.
+    if (existing) { summary.unchanged.push(item.orderNo); continue; }
     const fleet = fleets.get(item.city);
     const data = {
       city: item.city,
@@ -287,24 +259,9 @@ async function main() {
       otherNotes: item.otherNotes,
       rawSource: item.rawSource,
     };
-    if (existing) {
-      const comparable = ["city", "serviceDate", "pickupAddress", "dropoffAddress", "passengerName", "passengerPhone", "flightNumber", "platformVehicleType", "seatCount", "adults", "children", "luggage", "meetGreetLine", "otherNotes"];
-      const changed = comparable.some((key) => (existing[key] ?? null) !== (data[key] ?? null)) ||
-        existing.pickupDateTime.toISOString() !== data.pickupDateTime.toISOString() || existing.fleetId !== data.fleetId;
-      if (changed) {
-        await db.$transaction([
-          db.order.update({ where: { id: existing.id }, data: { ...data, status: existing.status === "CANCELLED" ? "READY_TO_DISPATCH" : existing.status } }),
-          db.activityLog.create({ data: { orderId: existing.id, action: "从飞书邮箱同步订单最新信息", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } }),
-        ]);
-        summary.updated.push(item.orderNo);
-      } else {
-        summary.unchanged.push(item.orderNo);
-      }
-    } else {
-      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
-      await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
-      summary.created.push(item.orderNo);
-    }
+    const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
+    await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
+    summary.created.push(item.orderNo);
   }
   // 只标记已成功读懂的邮件。格式异常的邮件仍会在下一次刷新重试，避免
   // 一次解析器故障把订单永久忽略。
