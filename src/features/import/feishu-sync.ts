@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { pullConnectorMessages, type ImportedMessage } from "./connectors";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { detectDispatchCity } from "@/lib/city/detect-city";
+import { applyIwayMailEvent } from "./iway-mail-event-service";
 
 export type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
 
@@ -49,25 +50,19 @@ async function recordMessage(message: ImportedMessage, orderId?: string) {
   await db.importedSourceMessage.create({ data: { connector: "feishu-mail", externalId: message.id, action: message.action, sourceText: message.text, orderId, receivedAt: receivedAt(message.receivedAt) } });
 }
 
-async function applyMessage(message: ImportedMessage): Promise<"created" | "updated" | "cancelled" | "skipped"> {
+export async function applyFeishuMailMessage(message: ImportedMessage): Promise<"created" | "updated" | "cancelled" | "skipped"> {
   const externalId = message.id.trim();
   if (!externalId || await db.importedSourceMessage.findUnique({ where: { connector_externalId: { connector: "feishu-mail", externalId } } })) return "skipped";
+  const eventResult = await applyIwayMailEvent(message);
+  if (eventResult) { await recordMessage(message); return eventResult; }
   const platformOrderNumber = orderNumber(message);
   if (!platformOrderNumber) { await recordMessage(message); return "skipped"; }
   const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (message.action === "cancel") {
-    if (!existing) { await recordMessage(message); return "skipped"; }
-    const cancelled = await db.$transaction(async (tx) => {
-      // Never let a delayed external cancellation overwrite a terminal
-      // business state, or duplicate a local cancellation audit record.
-      if (existing.status === "COMPLETED" || existing.status === "CANCELLED") return false;
-      const changed = await tx.order.updateMany({ where: { id: existing.id, status: existing.status }, data: { status: "CANCELLED", rawSource: message.text } });
-      if (!changed.count) return false;
-      await tx.activityLog.create({ data: { orderId: existing.id, action: "飞书邮件同步：订单已取消", actor: "系统定时任务", metadata: JSON.stringify({ messageId: message.id, previousStatus: existing.status }) } });
-      return true;
-    });
-    await recordMessage(message, existing.id);
-    return cancelled ? "cancelled" : "skipped";
+    // Cancellation is exclusively handled by applyIwayMailEvent above.  This
+    // legacy action flag is not sufficient evidence to change an order.
+    await recordMessage(message, existing?.id);
+    return "skipped";
   }
   const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
   const passengerName = pick(message.text, "Passenger Name");
@@ -105,7 +100,7 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   return "created";
 }
 
-async function startFeishuMailSync(): Promise<SyncSummary> {
+async function processFeishuMailMessages(items: ImportedMessage[]): Promise<SyncSummary> {
   const staleBefore = new Date(Date.now() - staleRunMs);
   await db.importSyncRun.updateMany({
     where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
@@ -119,9 +114,8 @@ async function startFeishuMailSync(): Promise<SyncSummary> {
 
   const run = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
   try {
-    const { items } = await pullConnectorMessages("feishu-mail", { allowEmpty: true });
     const summary = { created: 0, updated: 0, cancelled: 0, skipped: 0 };
-    for (const item of items) summary[await applyMessage(item)] += 1;
+    for (const item of items) summary[await applyFeishuMailMessage(item)] += 1;
     await db.importSyncRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created, updatedCount: summary.updated, cancelledCount: summary.cancelled, skippedCount: summary.skipped } });
     return { runId: run.id, ...summary };
   } catch (error) {
@@ -129,6 +123,20 @@ async function startFeishuMailSync(): Promise<SyncSummary> {
     await db.importSyncRun.update({ where: { id: run.id }, data: { status: "FAILED", completedAt: new Date(), errorMessage } });
     throw error;
   }
+}
+
+async function startFeishuMailSync(): Promise<SyncSummary> {
+  const { items } = await pullConnectorMessages("feishu-mail", { allowEmpty: true });
+  return processFeishuMailMessages(items);
+}
+
+/**
+ * The Operations Mac submits raw, allow-listed iWay messages here.  It never
+ * receives database credentials and all mutations remain in the same server
+ * transaction used by browser/connector sync.
+ */
+export async function ingestLocalIwayMailMessages(items: ImportedMessage[]): Promise<SyncSummary> {
+  return processFeishuMailMessages(items);
 }
 
 export async function runFeishuMailSync(): Promise<SyncSummary> {

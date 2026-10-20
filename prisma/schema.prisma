@@ -43,6 +43,9 @@ model Order {
   customerNotifications CustomerNotification[]
   customerInboundMessages CustomerInboundMessage[]
   customerCommunicationExceptions CustomerCommunicationException[]
+  iwayMailEvents IwayMailEvent[]
+  iwayCancellationCases IwayCancellationCase[]
+  iwayChangeDrafts IwayChangeDraft[]
   customerConfirmationStatus String?
   customerConfirmedAt DateTime?
   customerLargeLuggageCount Int?
@@ -401,6 +404,69 @@ model ImportedSourceMessage {
 
   @@unique([connector, externalId])
   @@index([orderId])
+}
+
+// 飞书邮箱中的 iWay 邮件先保存为不可重复的事件，再决定是否改变订单状态。
+// 这样邮件重放、乱序或格式不明确时，都不会静默覆盖人工业务操作。
+model IwayMailEvent {
+  id          String   @id @default(cuid())
+  externalId  String   @unique
+  sender      String?
+  subject     String?
+  eventType   String
+  disposition String
+  orderId     String?
+  eventAt     DateTime?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  cancellationCase IwayCancellationCase?
+  changeDraft IwayChangeDraft?
+
+  @@index([orderId, eventAt])
+  @@index([eventType, disposition, createdAt])
+}
+
+// 每次外部取消都保留一份独立的费用/通知处理依据；不删除司机、车辆或历史派单资料。
+model IwayCancellationCase {
+  id                      String   @id @default(cuid())
+  orderId                 String
+  mailEventId             String   @unique
+  previousStatus          String
+  cancellationReason      String?
+  mailReceivedAt          DateTime?
+  processedAt             DateTime @default(now())
+  fleetNotificationStatus String   @default("NOT_REQUIRED")
+  fleetNotifiedAt         DateTime?
+  fleetNotifiedBy         String?
+  assignmentSnapshot      String?
+  restoredAt              DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mailEvent IwayMailEvent @relation(fields: [mailEventId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, processedAt])
+  @@index([fleetNotificationStatus, createdAt])
+}
+
+// 修改邮件只保存待确认差异，绝不自动覆盖已派车订单。
+model IwayChangeDraft {
+  id          String   @id @default(cuid())
+  orderId     String
+  mailEventId String   @unique
+  changes     String
+  status      String   @default("PENDING_REVIEW")
+  createdAt   DateTime @default(now())
+  reviewedAt  DateTime?
+  reviewedBy  String?
+
+  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mailEvent IwayMailEvent @relation(fields: [mailEventId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, status, createdAt])
 }
 
 // 一条 AirportGuide 就是一份可保留的指引版本。新版本启用时，旧版本保留但停用，
