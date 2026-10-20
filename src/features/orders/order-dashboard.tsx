@@ -11,6 +11,7 @@ import "./orders.css";
 import "./orders-table-layout.css";
 
 const exceptionLabels = { MISSING_CUSTOMER_PHONE: "缺少客人电话", AIRPORT_GUIDE_MISSING: "缺少机场指引", AIRPORT_UNRESOLVED: "机场无法确定", CUSTOMER_REPLY_REVIEW: "客人回复待查看", CUSTOMER_ORDER_DISCREPANCY: "客人说订单有误", UNUSUAL_LUGGAGE: "行李偏多", VEHICLE_CAPACITY_RISK: "车型承载风险", VEHICLE_CAPACITY_RULE_MISSING: "缺车型承载规则", DRIVER_NOTIFICATION_INCOMPLETE: "司机通知资料不完整" };
+type SyncRun = { status: "REQUESTED" | "RUNNING" | "SUCCEEDED" | "FAILED"; startedAt?: string; completedAt?: string | null; createdCount: number; updatedCount: number; cancelledCount: number; skippedCount: number; errorMessage?: string | null };
 function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()); }
 function displayToday() { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Bangkok", year: "numeric", month: "long", day: "numeric" }).format(new Date()); }
 function displaySyncFailure(message: string) {
@@ -81,6 +82,24 @@ export function OrderDashboard() {
       const response = await fetch("/api/import-sync/feishu-mail", { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "同步请求发送失败");
+      if (payload.data?.localScheduled) {
+        setSyncMessage("正在等待本机飞书同步助手的下一轮结果…");
+        const requestedAt = Date.now();
+        while (Date.now() - requestedAt < 90_000) {
+          await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+          const statusResponse = await fetch("/api/import-sync/feishu-mail", { cache: "no-store" });
+          const statusPayload = await statusResponse.json();
+          const run = statusPayload.data?.latestRun as SyncRun | undefined;
+          const completedAt = Date.parse(run?.completedAt || run?.startedAt || "");
+          if (!run || run.status === "RUNNING" || Number.isNaN(completedAt) || completedAt < requestedAt) continue;
+          if (run.status === "FAILED") throw new Error(displaySyncFailure(run.errorMessage || ""));
+          setRefreshVersion((version) => version + 1);
+          setSyncMessage(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔，取消 ${run.cancelledCount} 笔，跳过 ${run.skippedCount} 笔。订单列表已刷新。`);
+          return;
+        }
+        setSyncMessage("本机同步助手没有在 90 秒内提交结果；订单列表未被当作已同步。请检查运行同步助手的电脑是否开机、已登录飞书。已有订单不会受影响。");
+        return;
+      }
       if (payload.data?.alreadyRunning) {
         setSyncMessage("已有一轮飞书同步正在进行，请等待完成后刷新订单列表。");
         return;
