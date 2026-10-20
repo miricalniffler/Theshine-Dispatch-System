@@ -121,6 +121,23 @@ export async function archiveDriverVehicle(tx: Prisma.TransactionClient, input: 
 
 export function isTemporaryName(source?: string | null) { return source === "TEMPORARY"; }
 
+/**
+ * Reads an explicitly labelled plate from the original fleet message.  This
+ * is display-only compatibility for older archive rows that were saved with
+ * the iWay-normalised plate.  It never writes back to an order or guesses a
+ * missing plate.
+ */
+export function labelledPlateFromRawReply(rawReply?: string | null) {
+  const match = rawReply?.match(/(?:car\s*plate|plate\s*(?:number)?|ทะเบียน(?:รถ)?)\s*[:：-]+\s*([^\r\n]+)/i);
+  const value = match?.[1]?.trim().replace(/[;,，。]+$/, "") || null;
+  return value && /[\p{L}\p{N}]/u.test(value) ? value : null;
+}
+
+function usableArchiveRawPlate(rawPlate?: string | null, normalized?: string | null) {
+  const value = rawPlate?.trim() || null;
+  return value && value !== (normalized || "").trim() && /[^\d\s-]/u.test(value) ? value : null;
+}
+
 export async function listDriverProfiles(query = "") {
   const needle = query.trim();
   const profiles = await db.driverProfile.findMany({
@@ -132,7 +149,13 @@ export async function listDriverProfiles(query = "") {
 
 export async function listVehicleProfiles(query = "") {
   const needle = query.trim();
-  return db.vehicleProfile.findMany({ where: needle ? { OR: [{ rawLicensePlate: { contains: needle, mode: "insensitive" } }, { normalizedPlate: { contains: needle, mode: "insensitive" } }, { vehicleModel: { contains: needle, mode: "insensitive" } }] } : {}, include: { assignments: { include: { driverProfile: true, order: { select: { platformOrderNumber: true, serviceDate: true, status: true } } }, orderBy: { assignedAt: "desc" }, take: 30 } }, orderBy: { updatedAt: "desc" }, take: 100 });
+  const profiles = await db.vehicleProfile.findMany({ where: needle ? { OR: [{ rawLicensePlate: { contains: needle, mode: "insensitive" } }, { normalizedPlate: { contains: needle, mode: "insensitive" } }, { vehicleModel: { contains: needle, mode: "insensitive" } }] } : {}, include: { assignments: { include: { driverProfile: true, order: { select: { platformOrderNumber: true, serviceDate: true, status: true, driverDetail: { select: { rawReply: true } } } } }, orderBy: { assignedAt: "desc" }, take: 30 } }, orderBy: { updatedAt: "desc" }, take: 100 });
+  return profiles.map((profile) => {
+    const archiveRaw = usableArchiveRawPlate(profile.rawLicensePlate, profile.normalizedPlate);
+    const replyRaw = profile.assignments.map((item) => labelledPlateFromRawReply(item.order.driverDetail?.rawReply)).find(Boolean) || null;
+    const displayLicensePlate = archiveRaw || replyRaw || profile.rawLicensePlate || profile.normalizedPlate || null;
+    return { ...profile, displayLicensePlate, displayPlateSource: archiveRaw ? "档案原文" : replyRaw ? "车队原始回复（仅展示）" : profile.rawLicensePlate ? "档案原文待核对" : "标准化车牌待核对" };
+  });
 }
 
 export async function addDriverPhone(driverProfileId: string, rawPhone: string) {
