@@ -392,7 +392,7 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   const candidates = await candidateOrdersFor(reply);
   const allowed = new Set(candidates.map((order) => order.id));
   const rules = loadRules();
-  const accepted: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string }[] = [];
+  const accepted: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; rawLicensePlate: string; vehicleCategory?: string; vehicleModel: string }[] = [];
   const errors: { orderId: string; message: string }[] = [];
   for (const record of input.records) {
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
@@ -412,10 +412,10 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     if (rules.transforms.generic_vehicle_labels_not_allowed_for_return.some((item) => item.toLowerCase() === vehicle.toLowerCase())) { errors.push({ orderId: record.orderId, message: "i’way 回传需要具体车型，不能只填 Van、Minibus、Sedan 等大类。" }); continue; }
     const licensePlate = normalizeLicensePlateForReturn(record.licensePlate);
     if (!licensePlate) { errors.push({ orderId: record.orderId, message: `${record.orderId}：请补充或修改车牌。` }); continue; }
-    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate, vehicleCategory: record.vehicleCategory?.trim() || undefined, vehicleModel: vehicle });
+    accepted.push({ ...record, driverName: record.driverName.trim(), driverPhone: phone, licensePlate, rawLicensePlate: record.licensePlate.trim(), vehicleCategory: record.vehicleCategory?.trim() || undefined, vehicleModel: vehicle });
   }
   if (errors.length) return { valid: false, errors, confirmed: 0 };
-  for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleCategory: record.vehicleCategory ?? null, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate });
+  for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleCategory: record.vehicleCategory ?? null, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate, rawLicensePlate: record.rawLicensePlate });
   await db.$transaction(async (tx) => {
     await tx.driverDetailConfirmation.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, fleetReplyId: replyId, extractionId: input.extractionId || null, finalDriverName: record.driverName, finalPhone: record.driverPhone, finalPlate: record.licensePlate, finalVehicleModel: record.vehicleModel, confirmedBy: "运营人员", rulesVersion: rules.rules_version })) });
     await tx.activityLog.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, action: "确认车队回传资料", actor: "运营人员", metadata: `车队回复：${replyId}；规则版本：${rules.rules_version}` })) });

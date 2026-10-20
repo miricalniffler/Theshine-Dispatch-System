@@ -22,7 +22,7 @@ export type DriverDetails = {
   iwayDriverName: string | null;
 };
 
-export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null };
+export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null; rawLicensePlate?: string | null };
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -159,7 +159,9 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       rawPhone: input.rawDriverPhone,
       vehicleModel: record.confirmedVehicleModel,
       vehicleCategory: record.confirmedVehicleCategory,
-      rawPlate: input.licensePlate,
+      // The return format can normalize a plate, but the archive must retain
+      // the original Thai text for future matching and for operators to audit.
+      rawPlate: input.rawLicensePlate ?? input.licensePlate,
     });
     const archived = await tx.driverDetail.update({
       where: { id: saved.id },
