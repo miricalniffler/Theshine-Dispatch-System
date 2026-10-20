@@ -10,9 +10,9 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
     const order = await tx.order.findUnique({ where: { id }, select: { status: true } });
     if (!order) return { kind: "missing" as const };
     if (order.status !== "CANCELLED") return { kind: "not-cancelled" as const };
-    const cancellation = await tx.activityLog.findFirst({ where: { orderId: id, action: { in: ["订单已取消", "飞书邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" } });
+    const cancellation = await tx.activityLog.findFirst({ where: { orderId: id, action: { in: ["订单已取消", "飞书邮件同步：订单已取消", "iWay 邮件：订单已取消"] } }, orderBy: { createdAt: "desc" } });
     if (!cancellation) return { kind: "history" as const };
-    if (cancellation.action === "飞书邮件同步：订单已取消") return { kind: "external" as const };
+    if (cancellation.action === "飞书邮件同步：订单已取消" || cancellation.action === "iWay 邮件：订单已取消") return { kind: "external" as const };
     const status = previousStatus(cancellation.metadata);
     if (!status) return { kind: "history" as const };
     const changed = await tx.order.updateMany({ where: { id, status: "CANCELLED" }, data: { status } });

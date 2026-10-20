@@ -16,6 +16,8 @@ export type Order = {
   cancelReason?: string | null;
   cancelledAt?: string | null;
   restoreBlockedReason?: string | null;
+  iwayCancellation?: { source: string; eventAt: string | null; fleetNotificationStatus: string; fleetNotifiedAt: string | null } | null;
+  iwayChangePending?: boolean;
   latestExceptionNote?: string | null;
   latestExceptionAt?: string | null;
   exceptions: OrderException[];
