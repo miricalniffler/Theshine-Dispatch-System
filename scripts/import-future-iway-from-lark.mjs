@@ -67,6 +67,19 @@ function capture(text, pattern) {
   return normalizedText(text.match(pattern)?.[1] || "");
 }
 
+function phonesFrom(value) {
+  const normalised = normalizedText(value).replace(/[–—]/g, "-");
+  return [...new Set([...normalised.matchAll(/(?:\+?\d[\d\s()\-]{5,}\d)/g)]
+    .map((match) => match[0].replace(/\s+/g, " ").trim())
+    .filter(Boolean))];
+}
+
+function addressFrom(value) {
+  return normalizedText(value)
+    .replace(/\s+(?:rent\s+a\s+vehicle|intercity|waiting\s+time|child\s+seat|extra\s+services?)\s*:[\s\S]*$/i, "")
+    .trim();
+}
+
 function serviceDate(value) {
   const match = value.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})$/);
   if (!match) return "";
@@ -108,14 +121,16 @@ function parseOrder(message, meta) {
   const seatCount = Number(modelCars.match(/seats\s*-\s*(\d+)/i)?.[1] || 0) || null;
   const pax = Number(capture(text, /Pax:\s*(\d+)/i)) || 0;
   const transfer = capture(text, /Transfer:\s*(.*?)\s+Flight number:/i);
-  const [pickupAddress, dropoffAddress] = transfer.split(/\s*(?:⇒|=>|→)\s*/);
+  const [pickupRaw, dropoffRaw] = transfer.split(/\s*(?:⇒|=>|→)\s*/);
+  const pickupAddress = addressFrom(pickupRaw);
+  const dropoffAddress = addressFrom(dropoffRaw);
   const rawFlight = capture(text, /Flight number:\s*(.*?)\s+Greeting sign:/i);
   const flightNumber = rawFlight.split("(")[0].replace(/[↓↑]/g, "").trim() || null;
   const greetingSign = capture(text, /Greeting sign:\s*(.*?)\s+Additional remarks:/i);
   const passengerBlock = capture(text, /Passengers:\s*(.*?)\s+Phone:/i);
   const passengers = passengerBlock.split(/\s*,\s*/).map((name) => name.trim()).filter(Boolean);
   const phoneBlock = capture(text, /Phone:\s*(.*?)\s+Please send us a confirmation/i);
-  const phones = [...new Set(phoneBlock.split(/\s*,\s*/).map((phone) => phone.trim()).filter(Boolean))];
+  const phones = phonesFrom(phoneBlock);
   const additionalRemarks = capture(text, /Additional remarks:\s*(.*?)\s+i[’']way notes:/i);
   const city = cityFromOrder(iwayCity, pickupAddress, dropoffAddress);
   const children = Number(capture(text, /Children:\s*(\d+)/i)) || 0;
@@ -127,8 +142,8 @@ function parseOrder(message, meta) {
     city,
     serviceDate: date,
     pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00+07:00`),
-    pickupAddress: pickupAddress.trim(),
-    dropoffAddress: dropoffAddress.trim(),
+    pickupAddress,
+    dropoffAddress,
     passengerName: passengers.at(-1),
     passengerPhone: phones.join(" / "),
     flightNumber,

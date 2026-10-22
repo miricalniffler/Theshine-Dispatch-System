@@ -23,17 +23,32 @@ type DispatchOrder = {
   meetGreetLine: string | null;
 };
 
+// 历史订单可能是在旧邮件模板下导入的。预览层同样做无写入的净化，避免
+// 邮件页脚再次被复制给车队；原始订单数据和审计记录不会被改动。
+function safePhone(value: string) {
+  const normalised = value.replace(/[–—]/g, "-");
+  const match = normalised.match(/(?:\+?\d[\d\s()\-]{5,}\d)/);
+  return match?.[0]?.replace(/\s+/g, " ").trim() || value;
+}
+
+function safeAddress(value: string) {
+  return value
+    .replace(/\s+(?:rent\s+a\s+vehicle|intercity|waiting\s+time|child\s+seat|extra\s+services?)\s*:[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function contentFor(order: DispatchOrder, rules = loadRules()) {
   return {
     platform_order_number: order.orderNo,
     passenger_name: order.passengerName,
-    passenger_phone: formatInternationalPhone(order.passengerPhone, rules) ?? order.passengerPhone,
+    passenger_phone: formatInternationalPhone(safePhone(order.passengerPhone), rules) ?? safePhone(order.passengerPhone),
     flight_number: order.flightNumber,
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
     pickup_datetime: `${order.serviceDate} ${order.pickupTime}`,
-    pickup_address: order.pickupAddress,
-    dropoff_address: order.dropoffAddress,
+    pickup_address: safeAddress(order.pickupAddress),
+    dropoff_address: safeAddress(order.dropoffAddress),
     platform_vehicle_type: order.vehicleType,
     seat_count: order.vehicleType === "Van" ? 8 : null,
     adults: order.adults,

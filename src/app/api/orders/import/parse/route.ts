@@ -8,6 +8,22 @@ function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
 }
 
+// iWay 邮件偶尔会把底部的说明文字接在同一行字段之后。导入时只保留
+// 第一个像电话号码的片段，避免把邮件正文误当成乘客电话。
+function phoneFrom(value: string) {
+  const normalised = value.replace(/[–—]/g, "-");
+  const match = normalised.match(/(?:\+?\d[\d\s()\-]{5,}\d)/);
+  return match?.[0]?.replace(/\s+/g, " ").trim() || "";
+}
+
+// 以下是 iWay 邮件中地址字段之后出现的辅助字段，不属于送达地点。
+function addressFrom(value: string) {
+  return value
+    .replace(/\s+(?:rent\s+a\s+vehicle|intercity|waiting\s+time|child\s+seat|extra\s+services?)\s*:[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normaliseOrderNumber(value: string) {
   return value.replace(/^\s*(?:ride|order(?:\s*(?:number|no\.?|id))?)?\s*[:#№-]*\s*/i, "").replace(/\s/g, "");
 }
@@ -59,10 +75,10 @@ function parseIwayRide(text: string) {
   const dateParts = date.match(/(\d{1,2})[./-](\d{1,2})/);
   const serviceDate = dateParts ? `${year}-${dateParts[2].padStart(2, "0")}-${dateParts[1].padStart(2, "0")}` : "";
   const itinerary = text.match(/Itinerary\s*:\s*([\s\S]*?)(?=Flight number\/train number\s*:|Departure time\s*:|Remarks\s*:)/i)?.[1] || "";
-  const pickupAddress = itinerary.match(/From\s*:\s*([\s\S]*?)(?=\n\s*To\s*:)/i)?.[1]?.replace(/\s+/g, " ").trim() || "";
-  const dropoffAddress = itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1]?.trim() || "";
+  const pickupAddress = addressFrom(itinerary.match(/From\s*:\s*([\s\S]*?)(?=\n\s*To\s*:)/i)?.[1] || "");
+  const dropoffAddress = addressFrom(itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1] || "");
   const clients = pick(text, "Clients");
-  const passengerPhone = clients.match(/phone\s+([+\d][\d\s-]+)/i)?.[1]?.trim() || "";
+  const passengerPhone = phoneFrom(clients.match(/phone\s+([\s\S]*)/i)?.[1] || "");
   const passengerName = lastPassengerName(clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim());
   const { adults, children } = passengerCounts(text);
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
@@ -87,13 +103,13 @@ function parseIwayRide(text: string) {
 
 function parseStandardOrder(text: string) {
   const { adults, children } = passengerCounts(text);
-  const pickupAddress = pick(text, "Pickup address");
-  const dropoffAddress = pick(text, "Dropoff address");
+  const pickupAddress = addressFrom(pick(text, "Pickup address"));
+  const dropoffAddress = addressFrom(pick(text, "Dropoff address"));
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
-    passengerPhone: pick(text, "(?:Passenger Phone Number|Phone)"),
+    passengerPhone: phoneFrom(pick(text, "(?:Passenger Phone Number|Phone)")),
     pickupDateTime: pick(text, "(?:Departure Time|Pickup Time)"),
     pickupAddress,
     dropoffAddress,
@@ -119,15 +135,15 @@ function parseStandardOrder(text: string) {
 export function parseIwayLabelledOrder(text: string) {
   const { adults: labelledAdults, children } = passengerCounts(text);
   const passengerLine = pick(text, "(?:Passenger|Client|Clients|Guest)(?:\\s+name)?");
-  const passengerPhone = pick(text, "(?:Passenger\\s+)?(?:Phone|Mobile|Tel(?:ephone)?)")
-    || passengerLine.match(/(?:\+?\d[\d\s()\-]{6,})/)?.[1]?.trim()
+  const passengerPhone = phoneFrom(pick(text, "(?:Passenger\\s+Phone\\s+Number|Passenger\\s+Phone|Phone|Mobile|Tel(?:ephone)?)"))
+    || phoneFrom(passengerLine)
     || "";
   const passengerName = passengerLine
     .replace(/(?:\+?\d[\d\s()\-]{6,})/g, "")
     .replace(/\s*\(\s*\d+\s*pax\s*\)\s*/i, " ")
     .trim();
-  const pickupAddress = pick(text, "(?:From|Pickup(?:\\s+(?:address|point|location))?|Pick\\s*up)");
-  const dropoffAddress = pick(text, "(?:To|Dropoff|Drop\\s*off|Destination)(?:\\s+(?:address|point|location))?");
+  const pickupAddress = addressFrom(pick(text, "(?:From|Pickup(?:\\s+(?:address|point|location))?|Pick\\s*up)"));
+  const dropoffAddress = addressFrom(pick(text, "(?:To|Dropoff|Drop\\s*off|Destination)(?:\\s+(?:address|point|location))?"));
   const rawDateTime = pick(text, "(?:Pickup\\s*)?(?:Date(?:\\s*(?:/|and)\\s*Time)?|Date\\s*&\\s*Time|Pickup\\s+time|Time)");
   const pickupDateTime = compactDateTime(rawDateTime) || rawDateTime;
   const pax = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);

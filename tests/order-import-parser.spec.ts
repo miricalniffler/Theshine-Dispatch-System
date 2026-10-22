@@ -89,3 +89,20 @@ Special requests: Meet&Greet`);
     otherNotes: "Meet&Greet",
   });
 });
+
+test("iWay 邮件字段混入页脚文字时，只保留电话号码和真实送达地点", () => {
+  const parsed = parseIwayLabelledOrder(`Order number: 1114217
+Passenger: Trofimova Daria (2 pax)
+Passenger Phone Number: +7 902 997–70–44 newsletter promotion text
+Pickup date and time: 23.10.2026 05:30:00
+Vehicle type: COMFORT
+From: Pattaya South, Pinnacle Grand Jomtien Resort
+To: airport Suvarnabhumi Rent a vehicle: () Intercity:
+Flight number: none`);
+
+  expect(parsed).toMatchObject({
+    platformOrderNumber: "1114217",
+    passengerPhone: "+7 902 997-70-44",
+    dropoffAddress: "airport Suvarnabhumi",
+  });
+});
