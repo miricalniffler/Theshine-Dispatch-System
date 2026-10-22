@@ -19,6 +19,19 @@ function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
 }
 
+function phoneFrom(value: string) {
+  const normalised = value.replace(/[–—]/g, "-");
+  const match = normalised.match(/(?:\+?\d[\d\s()\-]{5,}\d)/);
+  return match?.[0]?.replace(/\s+/g, " ").trim() || "";
+}
+
+function addressFrom(value: string) {
+  return value
+    .replace(/\s+(?:rent\s+a\s+vehicle|intercity|waiting\s+time|child\s+seat|extra\s+services?)\s*:[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function orderNumber(message: ImportedMessage) {
   return pick(message.text, "(?:Order Number|Order ID)") || message.subject?.match(/#(\d+)/)?.[1] || "";
 }
@@ -71,9 +84,9 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   }
   const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
   const passengerName = pick(message.text, "Passenger Name");
-  const passengerPhone = pick(message.text, "(?:Passenger Phone Number|Phone)");
-  const pickupAddress = pick(message.text, "Pickup address");
-  const dropoffAddress = pick(message.text, "Dropoff address");
+  const passengerPhone = phoneFrom(pick(message.text, "(?:Passenger Phone Number|Phone)"));
+  const pickupAddress = addressFrom(pick(message.text, "Pickup address"));
+  const dropoffAddress = addressFrom(pick(message.text, "Dropoff address"));
   const platformVehicleType = pick(message.text, "Vehicle Type");
   if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
