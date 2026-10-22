@@ -142,7 +142,7 @@ export function FleetReplyWorkspace() {
       setIwayText("");
       setReturnOrderIds([]);
       setUnresolved(errors.length ? errors : ["没有可自动匹配的订单，请补充订单号后修改资料。"]);
-      return;
+      return { savedOrderIds, errors: errors.length ? errors : ["没有可自动匹配的订单，请补充订单号后修改资料。"] };
     }
     const previewResponse = await fetch("/api/iway-return-batches/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds: savedOrderIds }) });
     const preview = await previewResponse.json();
@@ -154,6 +154,7 @@ export function FleetReplyWorkspace() {
     setMarkedReturned(false);
     void loadReturnItems();
     setNotice({ tone: errors.length ? "error" : "success", text: errors.length ? `已生成 ${savedOrderIds.length} 笔可回传内容；另有资料需要修改。` : `已自动保存并生成 ${savedOrderIds.length} 笔 i’way 回传内容。` });
+    return { savedOrderIds, errors };
   }
 
   async function copyIwayReturn() {
@@ -207,10 +208,17 @@ export function FleetReplyWorkspace() {
       setResult(analysed.data.result);
       const nextForms = formsFromResult(analysed.data.result, candidateOrders);
       setForms(nextForms);
-      // AI and rules only create a reviewable draft. They must never overwrite
-      // live driver or vehicle details until an operator explicitly saves.
-      setShowEditor(true);
-      setNotice({ tone: "success", text: "识别结果已生成。请核对下方字段后，点击“保存修改并重新生成回传”。" });
+      // 已准确匹配订单且资料齐全的回复，直接保存并生成回传文本。运营人员
+      // 随后仍可点击“修改回传资料”更正；不完整或匹配不确定的结果才需要人工处理。
+      const ready = nextForms.filter((form, index) => {
+        const record = analysed.data.result.records[index] as ReplyRecord | undefined;
+        return Boolean(record && record.order_match.confidence === "high" && isComplete(form));
+      });
+      const autoSave = ready.length ? await saveAndGenerate(created.data.id, ready, analysed.data.extractionId) : null;
+      const needsEdit = ready.length !== nextForms.length || Boolean(autoSave?.errors.length);
+      setShowEditor(needsEdit);
+      if (!ready.length) setNotice({ tone: "error", text: "识别结果尚不完整或订单匹配不够确定，请补充后再保存。" });
+      else if (needsEdit && !autoSave?.errors.length) setNotice({ tone: "success", text: `已自动保存 ${ready.length} 笔完整资料并生成 i’way 回传；其余资料请补充后再保存。` });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "分析失败。" });
     } finally {
