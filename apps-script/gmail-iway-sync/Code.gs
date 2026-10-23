@@ -8,7 +8,7 @@
 
 var IWAY_SENDERS = ['control@iwayex.com', 'noreply@iway.ru'];
 var LOOKBACK_DAYS = 7;
-var MAX_THREADS_PER_SENDER = 30;
+var MAX_THREADS = 20;
 
 function setupIwayGmailSync() {
   var props = PropertiesService.getScriptProperties();
@@ -37,7 +37,10 @@ function syncIwayGmailOrders() {
       method: 'post',
       contentType: 'application/json',
       headers: { Authorization: 'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') },
-      payload: JSON.stringify({ messages: messages }),
+      payload: JSON.stringify({
+        targetEnvironment: props.getProperty('IWAY_GMAIL_TARGET_ENVIRONMENT'),
+        messages: messages,
+      }),
       muteHttpExceptions: true,
     });
     if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('导入服务返回 HTTP ' + response.getResponseCode());
@@ -52,24 +55,29 @@ function syncIwayGmailOrders() {
 
 function collectNewOrderMessages_(enabledAt, seen) {
   var byId = {};
-  IWAY_SENDERS.forEach(function (sender) {
-    GmailApp.search('from:' + sender + ' newer_than:' + LOOKBACK_DAYS + 'd', 0, MAX_THREADS_PER_SENDER).forEach(function (thread) {
-      thread.getMessages().forEach(function (message) {
+  // One bounded search is intentionally cheaper than a separate full scan for
+  // each sender.  Exact sender validation still happens below and again on the
+  // server, so this broader Gmail search does not weaken the trust boundary.
+  var senderQuery = IWAY_SENDERS.map(function (sender) { return 'from:' + sender; }).join(' OR ');
+  GmailApp.search('(' + senderQuery + ') newer_than:' + LOOKBACK_DAYS + 'd', 0, MAX_THREADS).forEach(function (thread) {
+    thread.getMessages().forEach(function (message) {
         var id = message.getId();
         if (seen[id] || message.getDate().getTime() <= enabledAt.getTime()) return;
+        if (!isTrustedSender_(message.getFrom())) return;
         var subject = message.getSubject() || '';
         // Only new-order notices reach the server. Cancellation, amendment,
         // and arbitrary email are deliberately not submitted by this bridge.
         if (!/^(?:transfer\s+service\s+order|new\s+ride\s*#)/i.test(subject)) return;
         if (/\b(?:cancel(?:led|lation)?|void|amendment|modified?|change(?:d)?)\b/i.test(subject)) return;
+        var text = message.getPlainBody();
+        if (!isStructuredNewOrder_(text)) return;
         byId[id] = {
           id: id,
           sender: message.getFrom(),
           subject: subject,
           receivedAt: message.getDate().toISOString(),
-          text: message.getPlainBody(),
+          text: text,
         };
-      });
     });
   });
   return Object.keys(byId).sort().slice(0, 20).map(function (id) { return byId[id]; });
@@ -87,7 +95,22 @@ function saveSeen_(props, seen) {
 }
 
 function requireConfig_(props) {
-  ['IWAY_GMAIL_INGEST_URL', 'IWAY_GMAIL_INGEST_TOKEN'].forEach(function (key) {
+  ['IWAY_GMAIL_INGEST_URL', 'IWAY_GMAIL_INGEST_TOKEN', 'IWAY_GMAIL_TARGET_ENVIRONMENT'].forEach(function (key) {
     if (!props.getProperty(key)) throw new Error(key + ' 未设置。');
   });
+  var target = props.getProperty('IWAY_GMAIL_TARGET_ENVIRONMENT');
+  if (target !== 'preview' && target !== 'production') throw new Error('IWAY_GMAIL_TARGET_ENVIRONMENT 只能是 preview 或 production。');
+}
+
+function isStructuredNewOrder_(text) {
+  return /Ride number\s*[:：]/i.test(text)
+    && /Vehicle class\s*[:：]/i.test(text)
+    && /Itinerary\s*[:：]/i.test(text)
+    && /Clients\s*[:：]/i.test(text);
+}
+
+function isTrustedSender_(from) {
+  var match = String(from || '').match(/<([^>]+)>/);
+  var address = (match ? match[1] : from || '').trim().toLowerCase();
+  return IWAY_SENDERS.indexOf(address) !== -1;
 }
