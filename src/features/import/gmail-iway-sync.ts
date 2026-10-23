@@ -107,5 +107,10 @@ export async function getGmailIwaySyncStatus() {
 }
 
 export function gmailIwaySyncReady() {
-  return Boolean(process.env.IWAY_GMAIL_INGEST_TOKEN?.trim() && process.env.IWAY_GMAIL_ENABLED_AT?.trim());
+  const target = process.env.IWAY_GMAIL_TARGET_ENVIRONMENT?.trim();
+  return Boolean(
+    process.env.IWAY_GMAIL_INGEST_TOKEN?.trim()
+    && process.env.IWAY_GMAIL_ENABLED_AT?.trim()
+    && (target === "preview" || target === "production"),
+  );
 }
