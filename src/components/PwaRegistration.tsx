@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-/** Registers only the privacy-safe static-asset worker in secure browsers. */
+/** Registers the compatibility worker. It deliberately does not cache app code. */
 export function PwaRegistration() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -17,7 +17,7 @@ export function PwaRegistration() {
     }
 
     if (!window.isSecureContext) return;
-    void navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {
+    void navigator.serviceWorker.register("/service-worker.js", { scope: "/", updateViaCache: "none" }).catch(() => {
       // The site remains fully usable online if installation support is unavailable.
     });
   }, []);
