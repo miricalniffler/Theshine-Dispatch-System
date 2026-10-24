@@ -65,7 +65,7 @@ test.describe("已登录后的手机工作台", () => {
   });
 
   test("订单和车队回传页面都提供 i’way 批量入口", async ({ page }) => {
-    await expect(page.getByRole("button", { name: "批量回传 i’way" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "回传 i’way" })).toBeVisible();
     await page.goto("/driver-details");
     await expect(page.getByRole("heading", { name: "待回传 i’way" })).toBeVisible();
     await expect(page.getByRole("button", { name: "生成标准文本" })).toBeVisible();
@@ -77,8 +77,8 @@ test.describe("已登录后的手机工作台", () => {
     await page.getByLabel("打开更多功能").click();
     const sheet = page.getByRole("dialog", { name: "更多功能" });
     await expect(sheet).toBeVisible();
-    await expect(page.getByRole("link", { name: "订单", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "车队回传", exact: true })).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "订单", exact: true })).toBeVisible();
+    await expect(sheet.getByRole("link", { name: "车队回传", exact: true })).toBeVisible();
     await expect(sheet.getByRole("link", { name: "历史订单" })).toBeVisible();
     await sheet.getByLabel("关闭更多功能").click();
     await expect(sheet).toBeHidden();

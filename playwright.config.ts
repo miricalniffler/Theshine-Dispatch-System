@@ -23,6 +23,17 @@ export default defineConfig({
   },
   projects: [
     {
+      name: "iphone-safari",
+      use: {
+        ...devices["iPhone 14 Pro"],
+        browserName: "webkit",
+        viewport: { width: 393, height: 852 },
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+      },
+    },
+    {
       name: "iphone-16",
       use: {
         ...devices["iPhone 14 Pro"],
