@@ -44,6 +44,21 @@ test("登录页在所有目标屏幕均可使用", async ({ page }) => {
   await expectNoDocumentOverflow(page);
 });
 
+test("存储受限时登录页仍可启动", async ({ page }, testInfo) => {
+  test.skip(!isMobileProject(testInfo.project.name), "只验证手机浏览器的受限存储场景。");
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("Storage is unavailable", "SecurityError");
+      },
+    });
+  });
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { name: "接送机发单平台" })).toBeVisible();
+  await expect(page.getByLabel("团队访问密码")).toBeVisible();
+});
+
 test.describe("已登录后的手机工作台", () => {
   test.skip(!password && !accessToken, "未配置测试登录信息；跳过需要登录的只读冒烟测试。");
 
