@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const publicPaths = ["/login", "/api/access/login", "/api/access/logout"];
+// These pages deliberately stay outside the team-login guard. They contain no
+// account, order, or configuration data and help diagnose mobile startup.
+const publicPaths = ["/login", "/diagnostics/mobile", "/diagnostics/app", "/api/access/login", "/api/access/logout"];
 
 export async function proxy(request: NextRequest) {
   if (publicPaths.some((path) => request.nextUrl.pathname.startsWith(path))) {
