@@ -22,3 +22,11 @@ test("浏览器渲染异常有可见的恢复页面，而不是白屏", () => {
   expect(source).toContain("重新加载");
   expect(source).toContain("回到登录页");
 });
+
+test("未登录页面也能更新根作用域兼容性 Service Worker", () => {
+  const proxy = readFileSync(resolve(process.cwd(), "src/proxy.ts"), "utf8");
+  const registration = readFileSync(resolve(process.cwd(), "src/components/PwaRegistration.tsx"), "utf8");
+  expect(proxy).toContain('"/service-worker.js"');
+  expect(registration).toContain("/service-worker.js?rev=compat-v2");
+  expect(registration).toContain("registration.update()");
+});

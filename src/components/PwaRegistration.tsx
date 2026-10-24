@@ -17,7 +17,14 @@ export function PwaRegistration() {
     }
 
     if (!window.isSecureContext) return;
-    void navigator.serviceWorker.register("/service-worker.js", { scope: "/", updateViaCache: "none" }).catch(() => {
+    // This worker must be retrievable before login. If it were protected by
+    // the app proxy, an old root-scoped worker on Safari could remain in
+    // control indefinitely and continue intercepting even diagnostic routes.
+    // A changed script URL also forces an update check for registrations made
+    // by releases before the compatibility worker existed.
+    void navigator.serviceWorker.register("/service-worker.js?rev=compat-v2", { scope: "/", updateViaCache: "none" }).then((registration) =>
+      registration.update(),
+    ).catch(() => {
       // The site remains fully usable online if installation support is unavailable.
     });
   }, []);
