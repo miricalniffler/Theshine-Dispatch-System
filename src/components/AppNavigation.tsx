@@ -38,7 +38,13 @@ export function AppNavigation({ children }: { children: React.ReactNode }) {
     } catch { /* 首次使用或旧设置异常时，使用默认菜单。 */ }
   }, []);
 
-  useEffect(() => { window.localStorage.setItem(storageKey, JSON.stringify({ order, labels })); }, [order, labels]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify({ order, labels }));
+    } catch {
+      // Private browsing or device policy can disable storage; navigation still works without saved preferences.
+    }
+  }, [order, labels]);
 
   const links = useMemo(() => order.map((href) => defaultLinks.find((link) => link.href === href)).filter((link): link is NavLink => Boolean(link)), [order]);
   const labelFor = (link: NavLink) => labels[link.href]?.trim() || link.defaultLabel;
