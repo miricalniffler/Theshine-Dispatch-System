@@ -20,9 +20,10 @@ export type DriverDetails = {
   vehicleProfileId: string | null;
   driverNameSource: string;
   iwayDriverName: string | null;
+  reassignmentCount?: number;
 };
 
-export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null; rawLicensePlate?: string | null };
+export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null; rawLicensePlate?: string | null; changeType?: "EDIT" | "REASSIGNMENT" };
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -45,7 +46,7 @@ function toOrder(row: PersistedOrder & { fleet?: { name: string } | null }): Ord
   };
 }
 
-function toDriverDetails(row: DriverDetail): DriverDetails {
+function toDriverDetails(row: DriverDetail, reassignmentCount = 0): DriverDetails {
   // 旧数据也按当前规则展示，避免历史上保存的简称（如 All New V9）
   // 在回传时漏掉品牌与车型前缀。
   const rules = loadRules();
@@ -63,6 +64,7 @@ function toDriverDetails(row: DriverDetail): DriverDetails {
     vehicleProfileId: row.vehicleProfileId,
     driverNameSource: row.driverNameSource,
     iwayDriverName: row.iwayDriverName,
+    reassignmentCount,
   };
 }
 
@@ -102,10 +104,10 @@ export async function listDriverWork() {
   const today = new Date().toISOString().slice(0, 10);
   const rows = await db.order.findMany({
     where: { serviceDate: { gte: today }, status: { in: ["DISPATCHED", "DRIVER_CONFIRMED", "RETURNED", "COMPLETED"] } },
-    include: { driverDetail: true, fleet: true },
+    include: { driverDetail: true, fleet: true, driverVehicleAssignments: { where: { isCurrent: false }, select: { id: true } } },
     orderBy: { pickupDateTime: "asc" },
   });
-  return rows.map((row) => ({ order: toOrder(row), driver: row.driverDetail ? toDriverDetails(row.driverDetail) : null }));
+  return rows.map((row) => ({ order: toOrder(row), driver: row.driverDetail ? toDriverDetails(row.driverDetail, row.driverVehicleAssignments.length) : null }));
 }
 
 export async function getDriverDetails(orderId: string) {
@@ -162,6 +164,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       // The return format can normalize a plate, but the archive must retain
       // the original Thai text for future matching and for operators to audit.
       rawPlate: input.rawLicensePlate ?? input.licensePlate,
+      assignmentEndReason: input.changeType === "REASSIGNMENT" ? "订单换车/换司机" : undefined,
     });
     const archived = await tx.driverDetail.update({
       where: { id: saved.id },
@@ -171,6 +174,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     // rewind of the order lifecycle.  In particular, moving a COMPLETED
     // order back to DRIVER_CONFIRMED made the original completion disappear
     // and could accidentally put it back into the normal bulk-return queue.
+    if (input.changeType === "REASSIGNMENT") await tx.activityLog.create({ data: { orderId, action: "订单换车/换司机", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     if (check.valid && (currentOrder.status === "DISPATCHED" || currentOrder.status === "READY_TO_DISPATCH")) {
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
