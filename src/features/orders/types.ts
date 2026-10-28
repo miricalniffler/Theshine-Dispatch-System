@@ -25,6 +25,7 @@ export type Order = {
     normalizedDriverPhone: string | null;
     confirmedVehicleModel: string | null;
     licensePlate: string | null;
+    reassignmentCount?: number;
   } | null;
 };
 

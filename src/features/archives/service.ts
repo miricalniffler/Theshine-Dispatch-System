@@ -18,6 +18,7 @@ export type ArchiveInput = {
   vehicleModel?: string | null;
   vehicleCategory?: string | null;
   rawPlate?: string | null;
+  assignmentEndReason?: string | null;
 };
 
 function meaningfulName(value?: string | null) {
@@ -113,7 +114,7 @@ export async function archiveDriverVehicle(tx: Prisma.TransactionClient, input: 
   const active = await tx.orderDriverVehicleAssignment.findFirst({ where: { orderId: input.orderId, isCurrent: true }, orderBy: { assignedAt: "desc" } });
   const changed = !active || active.driverProfileId !== driver.id || active.vehicleProfileId !== vehicle?.id || active.driverNameForIway !== iwayDriverName || active.driverNameSource !== source;
   if (changed) {
-    await tx.orderDriverVehicleAssignment.updateMany({ where: { orderId: input.orderId, isCurrent: true }, data: { isCurrent: false, endedAt: new Date(), endReason: "司机或车辆资料已更新" } });
+    await tx.orderDriverVehicleAssignment.updateMany({ where: { orderId: input.orderId, isCurrent: true }, data: { isCurrent: false, endedAt: new Date(), endReason: input.assignmentEndReason || "司机或车辆资料已更新" } });
     await tx.orderDriverVehicleAssignment.create({ data: { orderId: input.orderId, driverProfileId: driver.id, vehicleProfileId: vehicle?.id, driverNameForIway: iwayDriverName, driverNameSource: source, orderStatus: input.orderStatus } });
   }
   return { driverProfileId: driver.id, vehicleProfileId: vehicle?.id || null, normalizedPhone, normalizedPlate: normalizedVehiclePlate, driverNameSource: source, iwayDriverName, displayName: driver.displayName };

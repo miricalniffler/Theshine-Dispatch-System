@@ -13,7 +13,7 @@ type AssistResult = { status: "NOT_NEEDED" | "MANUAL_REVIEW_REQUIRED" | "SUGGEST
 
 const statusText: Record<Order["status"], string> = { PENDING_REVIEW: "待核对", READY_TO_DISPATCH: "待派单", DISPATCHED: "等待司机资料", DRIVER_CONFIRMED: "可回传", RETURNED: "已回传", COMPLETED: "已完成", CANCELLED: "已取消" };
 
-function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, confirmedVehicleCategory: null, licensePlate: null, confirmedAt: null, driverProfileId: null, vehicleProfileId: null, driverNameSource: "MANUAL", iwayDriverName: null }; }
+function blankDriver(): DriverDetails { return { orderId: "", rawReply: "", confirmedDriverName: null, rawDriverPhone: null, normalizedDriverPhone: null, confirmedVehicleModel: null, confirmedVehicleCategory: null, licensePlate: null, confirmedAt: null, driverProfileId: null, vehicleProfileId: null, driverNameSource: "MANUAL", iwayDriverName: null, reassignmentCount: 0 }; }
 
 function bangkokTomorrowDate() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -42,7 +42,7 @@ async function copyTextWithFallback(text: string) {
   return copied;
 }
 
-function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSaved: () => void; focused?: boolean }) {
+function DriverCard({ item, onSaved, focused = false, reassignment = false, editingReturn = false }: { item: WorkItem; onSaved: () => void; focused?: boolean; reassignment?: boolean; editingReturn?: boolean }) {
   const [form, setForm] = useState<DriverDetails>({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id });
   const [saving, setSaving] = useState(false);
   const [analysing, setAnalysing] = useState(false);
@@ -81,16 +81,16 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
   }
   async function save() {
     setSaving(true); setNotice(null);
-    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+    const response = await fetch(`/api/orders/${item.order.id}/driver-details`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, changeType: reassignment ? "REASSIGNMENT" : "EDIT" }) });
     const payload = await response.json();
     setSaving(false);
     if (!response.ok) { setNotice({ tone: "error", message: payload.error?.message ?? "保存失败" }); return; }
     setForm(payload.data.driver);
-    setNotice(payload.data.valid ? { tone: "success", message: "资料完整，订单已进入待回传。" } : { tone: "error", message: `已保存草稿；还缺少：${payload.data.missingFields.join("、")}` });
+    setNotice(payload.data.valid ? { tone: "success", message: reassignment ? "已记录换车/换司机；旧资料已保留，当前资料已生效。" : "资料完整，订单已进入待回传。" } : { tone: "error", message: `已保存草稿；还缺少：${payload.data.missingFields.join("、")}` });
     onSaved();
   }
   return <article className={`driver-card${focused ? " focused-driver-card" : ""}`}>
-    <header><div><span className="order-mark">{focused ? "正在录入 · " : ""}{item.order.city} · {item.order.serviceDate} {item.order.pickupTime}</span><h2>{item.order.orderNo}</h2><p>{item.order.passengerName} · {item.order.route}</p></div><span className={`work-status ${item.order.status.toLowerCase()}`}>{statusText[item.order.status]}</span></header>
+    <header><div><span className="order-mark">{reassignment ? "换车/换司机 · " : focused ? "正在录入 · " : ""}{item.order.city} · {item.order.serviceDate} {item.order.pickupTime}</span><h2>{item.order.orderNo}</h2><p>{item.order.passengerName} · {item.order.route}</p></div><div className="driver-status-stack">{(item.driver?.reassignmentCount ?? 0) > 0 && <span className="reassigned-badge">已换车</span>}<span className={`work-status ${item.order.status.toLowerCase()}`}>{statusText[item.order.status]}</span></div></header>
     <label className="wide-field">车队原始回复（保留原文）<textarea value={form.rawReply ?? ""} autoCapitalize="none" placeholder="粘贴车队回复；系统不会替你发送任何消息" onChange={(event) => set("rawReply", event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) attachVehicleImage(image); }} /></label>
     <section className="driver-assist" aria-label="车辆图片和翻译协助" onPaste={(event) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")); if (image) { event.preventDefault(); attachVehicleImage(image); } }} tabIndex={0}>
       <div><strong>粘贴车队回复和车辆图片</strong><p>可直接从微信粘贴文字；点击此区域后也可粘贴车辆截图。系统只给出翻译和车型建议，最终以你确认保存的信息为准。</p></div>
@@ -107,7 +107,7 @@ function DriverCard({ item, onSaved, focused = false }: { item: WorkItem; onSave
     </div>
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
-    <footer><small>电话和车型会按当前 YAML 规则转换；原号码不会被覆盖。</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : "保存并校验"}</button></div></footer>
+    <footer><small>{reassignment ? "保存后会保留原司机/车辆记录，并把本次资料标为当前使用。" : editingReturn ? "这里可单独修改司机、电话、车型或完整车牌；不会被标记为换车。" : "电话和车型会按当前 YAML 规则转换；车牌原文（含泰文）会完整保留。"}</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : reassignment ? "确认换车/换司机" : editingReturn ? "保存回传修改" : "保存并校验"}</button></div></footer>
   </article>;
 }
 
@@ -115,10 +115,13 @@ export function DriverWorkspace() {
   const [items, setItems] = useState<WorkItem[]>([]); const [loading, setLoading] = useState(true);
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId");
+  const reassignment = searchParams.get("action") === "reassign";
+  const editingReturn = Boolean(orderId && !reassignment);
   const refresh = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setItems(payload.data)).finally(() => setLoading(false));
   useEffect(() => { refresh(); }, []);
   const orderedItems = orderId ? [...items].sort((left, right) => Number(right.order.id === orderId) - Number(left.order.id === orderId)) : items;
-  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>把车队回复变成可回传的信息</h1><p>{orderId ? "已打开你选择的订单。粘贴车队回复和车辆图片后，先查看建议，再确认保存。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{orderedItems.length ? orderedItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">没有需要确认司机资料的订单。</p>}</section>}</main>;
+  const visibleItems = orderId ? orderedItems.filter((item) => item.order.id === orderId) : orderedItems;
+  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>{reassignment ? "换车 / 换司机" : editingReturn ? "修改回传信息" : "把车队回复变成可回传的信息"}</h1><p>{reassignment ? "请重新粘贴车队回复或上传车辆图片，核对司机、电话、车型和完整车牌后确认。旧资料会保留在历史中，首页会显示已换车。" : editingReturn ? "可单独修改司机姓名、电话、车型或完整车牌。普通修改不会被标记为换车。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{visibleItems.length ? visibleItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} reassignment={reassignment && item.order.id === orderId} editingReturn={editingReturn && item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">未找到可修改的司机资料；请先录入车队回传信息。</p>}</section>}</main>;
 }
 
 export function IwayReturnWorkspace() {
