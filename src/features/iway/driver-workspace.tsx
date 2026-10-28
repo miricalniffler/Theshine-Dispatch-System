@@ -42,7 +42,7 @@ async function copyTextWithFallback(text: string) {
   return copied;
 }
 
-function DriverCard({ item, onSaved, focused = false, reassignment = false }: { item: WorkItem; onSaved: () => void; focused?: boolean; reassignment?: boolean }) {
+function DriverCard({ item, onSaved, focused = false, reassignment = false, editingReturn = false }: { item: WorkItem; onSaved: () => void; focused?: boolean; reassignment?: boolean; editingReturn?: boolean }) {
   const [form, setForm] = useState<DriverDetails>({ ...blankDriver(), ...(item.driver ?? {}), orderId: item.order.id });
   const [saving, setSaving] = useState(false);
   const [analysing, setAnalysing] = useState(false);
@@ -107,7 +107,7 @@ function DriverCard({ item, onSaved, focused = false, reassignment = false }: { 
     </div>
     {form.normalizedDriverPhone && <p className="normalized">规范后的泰国电话：<strong>{form.normalizedDriverPhone}</strong></p>}
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.message}</p>}
-    <footer><small>{reassignment ? "保存后会保留原司机/车辆记录，并把本次资料标为当前使用。" : "电话和车型会按当前 YAML 规则转换；车牌原文（含泰文）会完整保留。"}</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : reassignment ? "确认换车/换司机" : "保存并校验"}</button></div></footer>
+    <footer><small>{reassignment ? "保存后会保留原司机/车辆记录，并把本次资料标为当前使用。" : editingReturn ? "这里可单独修改司机、电话、车型或完整车牌；不会被标记为换车。" : "电话和车型会按当前 YAML 规则转换；车牌原文（含泰文）会完整保留。"}</small><div className="driver-footer-actions"><Link href="/driver-details" className="driver-return-link">前往车队回传</Link><button type="button" onClick={save} disabled={saving}>{saving ? "保存中…" : reassignment ? "确认换车/换司机" : editingReturn ? "保存回传修改" : "保存并校验"}</button></div></footer>
   </article>;
 }
 
@@ -116,10 +116,12 @@ export function DriverWorkspace() {
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId");
   const reassignment = searchParams.get("action") === "reassign";
+  const editingReturn = Boolean(orderId && !reassignment);
   const refresh = () => fetch("/api/driver-details").then((response) => response.json()).then((payload) => setItems(payload.data)).finally(() => setLoading(false));
   useEffect(() => { refresh(); }, []);
   const orderedItems = orderId ? [...items].sort((left, right) => Number(right.order.id === orderId) - Number(left.order.id === orderId)) : items;
-  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>{reassignment ? "换车 / 换司机" : "把车队回复变成可回传的信息"}</h1><p>{reassignment ? "请重新粘贴车队回复或上传车辆图片，核对司机、电话、车型和完整车牌后确认。旧资料会保留在历史中，首页会显示已换车。" : orderId ? "已打开你选择的订单。粘贴车队回复和车辆图片后，先查看建议，再确认保存。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{orderedItems.length ? orderedItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} reassignment={reassignment && item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">没有需要确认司机资料的订单。</p>}</section>}</main>;
+  const visibleItems = orderId ? orderedItems.filter((item) => item.order.id === orderId) : orderedItems;
+  return <main className="workflow-page"><nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav><header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>{reassignment ? "换车 / 换司机" : editingReturn ? "修改回传信息" : "把车队回复变成可回传的信息"}</h1><p>{reassignment ? "请重新粘贴车队回复或上传车辆图片，核对司机、电话、车型和完整车牌后确认。旧资料会保留在历史中，首页会显示已换车。" : editingReturn ? "可单独修改司机姓名、电话、车型或完整车牌。普通修改不会被标记为换车。" : "确认四项资料后，系统才允许生成 i’way 回传文本。电话和车型均从规则文件读取并转换。"}</p></header>{loading ? <p className="loading">正在加载司机资料…</p> : <section className="driver-list">{visibleItems.length ? visibleItems.map((item) => <DriverCard key={item.order.id} item={item} focused={item.order.id === orderId} reassignment={reassignment && item.order.id === orderId} editingReturn={editingReturn && item.order.id === orderId} onSaved={refresh} />) : <p className="empty-work">未找到可修改的司机资料；请先录入车队回传信息。</p>}</section>}</main>;
 }
 
 export function IwayReturnWorkspace() {
