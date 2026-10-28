@@ -7,8 +7,9 @@
  */
 
 var IWAY_SENDERS = ['control@iwayex.com', 'noreply@iway.ru'];
-var LOOKBACK_DAYS = 7;
-var MAX_THREADS = 20;
+var THREAD_PAGE_SIZE = 50;
+var MESSAGE_BATCH_SIZE = 20;
+var SCAN_OVERLAP_THREADS = 10;
 
 function setupIwayGmailSync() {
   var props = PropertiesService.getScriptProperties();
@@ -16,6 +17,7 @@ function setupIwayGmailSync() {
   // The first activation starts from now. Historical mail remains untouched.
   props.setProperty('IWAY_GMAIL_ENABLED_AT', new Date().toISOString());
   props.deleteProperty('IWAY_GMAIL_SEEN');
+  props.setProperty('IWAY_GMAIL_SCAN_OFFSET', '0');
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'syncIwayGmailOrders') ScriptApp.deleteTrigger(trigger);
   });
@@ -31,8 +33,12 @@ function syncIwayGmailOrders() {
     var enabledAt = new Date(props.getProperty('IWAY_GMAIL_ENABLED_AT'));
     if (isNaN(enabledAt.getTime())) throw new Error('IWAY_GMAIL_ENABLED_AT 未设置。请先运行 setupIwayGmailSync。');
     var seen = getSeen_(props);
-    var messages = collectNewOrderMessages_(enabledAt, seen);
-    if (!messages.length) return;
+    var page = collectNewOrderMessages_(enabledAt, seen, props);
+    var messages = page.messages;
+    if (!messages.length) {
+      if (page.threadCount) advanceScanOffset_(props, page.threadCount);
+      return;
+    }
     var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_INGEST_URL'), {
       method: 'post',
       contentType: 'application/json',
@@ -48,18 +54,28 @@ function syncIwayGmailOrders() {
     var processed = payload && payload.data && Array.isArray(payload.data.processedIds) ? payload.data.processedIds : [];
     processed.forEach(function (id) { seen[id] = Date.now(); });
     saveSeen_(props, seen);
+    // Keep the same page until every eligible message in it is acknowledged.
+    // This makes a temporary network/server failure retryable without skipping
+    // mail, while the server-side external-id constraint makes retries safe.
+    if (processed.length === messages.length && page.remainingEligible === messages.length) {
+      advanceScanOffset_(props, page.threadCount);
+    }
   } finally {
     lock.releaseLock();
   }
 }
 
-function collectNewOrderMessages_(enabledAt, seen) {
+function collectNewOrderMessages_(enabledAt, seen, props) {
   var byId = {};
-  // One bounded search is intentionally cheaper than a separate full scan for
-  // each sender.  Exact sender validation still happens below and again on the
-  // server, so this broader Gmail search does not weaken the trust boundary.
+  // GmailApp.search is paged.  The old 20-thread first-page-only strategy could
+  // starve older mail when a mailbox was backlogged.  A persistent offset plus
+  // overlap walks every result page over later trigger runs; duplicates are
+  // harmless because both the script and server record processed message ids.
   var senderQuery = IWAY_SENDERS.map(function (sender) { return 'from:' + sender; }).join(' OR ');
-  GmailApp.search('(' + senderQuery + ') newer_than:' + LOOKBACK_DAYS + 'd', 0, MAX_THREADS).forEach(function (thread) {
+  var queryStart = Utilities.formatDate(new Date(enabledAt.getTime() - 24 * 60 * 60 * 1000), 'Etc/UTC', 'yyyy/MM/dd');
+  var offset = Number(props.getProperty('IWAY_GMAIL_SCAN_OFFSET') || '0');
+  var threads = GmailApp.search('(' + senderQuery + ') after:' + queryStart, offset, THREAD_PAGE_SIZE);
+  threads.forEach(function (thread) {
     thread.getMessages().forEach(function (message) {
         var id = message.getId();
         if (seen[id] || message.getDate().getTime() <= enabledAt.getTime()) return;
@@ -80,7 +96,26 @@ function collectNewOrderMessages_(enabledAt, seen) {
         };
     });
   });
-  return Object.keys(byId).sort().slice(0, 20).map(function (id) { return byId[id]; });
+  var eligibleIds = Object.keys(byId).sort(function (left, right) {
+    return new Date(byId[left].receivedAt).getTime() - new Date(byId[right].receivedAt).getTime();
+  });
+  return {
+    messages: eligibleIds.slice(0, MESSAGE_BATCH_SIZE).map(function (id) { return byId[id]; }),
+    remainingEligible: eligibleIds.length,
+    threadCount: threads.length,
+  };
+}
+
+function advanceScanOffset_(props, threadCount) {
+  var current = Number(props.getProperty('IWAY_GMAIL_SCAN_OFFSET') || '0');
+  // Re-read a small overlap to tolerate Gmail result reordering/deletion.
+  // Server idempotency avoids duplicate orders; this is safer than skipping a
+  // mail that moved across a page boundary while the trigger was waiting.
+  if (threadCount < THREAD_PAGE_SIZE) {
+    props.setProperty('IWAY_GMAIL_SCAN_OFFSET', '0');
+  } else {
+    props.setProperty('IWAY_GMAIL_SCAN_OFFSET', String(Math.max(0, current + threadCount - SCAN_OVERLAP_THREADS)));
+  }
 }
 
 function getSeen_(props) {
@@ -89,7 +124,7 @@ function getSeen_(props) {
 }
 
 function saveSeen_(props, seen) {
-  var cutoff = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  var cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
   Object.keys(seen).forEach(function (id) { if (seen[id] < cutoff) delete seen[id]; });
   props.setProperty('IWAY_GMAIL_SEEN', JSON.stringify(seen));
 }

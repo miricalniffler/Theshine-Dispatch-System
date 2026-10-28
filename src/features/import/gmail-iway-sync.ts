@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { isIwayNewRideEmail, parseIwayNewRide } from "./iway-new-ride-parser";
+import { zonedLocalDateTimeToUtc } from "./service-timezone";
 
 export type GmailIwayMessage = { id: string; sender: string; subject: string; receivedAt: string; text: string };
 export type GmailIwaySummary = { created: number; skipped: number; rejected: number; processedIds: string[] };
@@ -17,7 +18,7 @@ function trustedSenders() {
   return configured?.length ? configured : defaultSenders;
 }
 
-function isTrustedNewOrder(message: GmailIwayMessage) {
+export function isTrustedGmailNewOrder(message: GmailIwayMessage) {
   const subject = message.subject.trim();
   return trustedSenders().includes(senderAddress(message.sender))
     && /^(?:transfer\s+service\s+order|new\s+ride\s*#)/i.test(subject)
@@ -30,11 +31,34 @@ function validReceivedAt(value: string) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function isAfterEnableWaterline(date: Date) {
-  const value = process.env.IWAY_GMAIL_ENABLED_AT?.trim();
-  if (!value) return false;
-  const enabledAt = new Date(value);
-  return !Number.isNaN(enabledAt.getTime()) && date.getTime() > enabledAt.getTime();
+function missingRequiredFields(parsed: ReturnType<typeof parseIwayNewRide>) {
+  const required: Array<keyof ReturnType<typeof parseIwayNewRide>> = [
+    "platformOrderNumber", "city", "serviceTimeZone", "pickupDateTime", "passengerName", "passengerPhone", "pickupAddress", "dropoffAddress", "platformVehicleType",
+  ];
+  return required.filter((key) => !parsed[key]);
+}
+
+function rejectedAction(parsed: ReturnType<typeof parseIwayNewRide>) {
+  if (!parsed.city) return "NEW_ORDER_REJECTED_CITY_UNCONFIRMED";
+  if (!parsed.serviceTimeZone) return "NEW_ORDER_REJECTED_TIME_ZONE_UNCONFIRMED";
+  if (!parsed.pickupDateTime) return "NEW_ORDER_REJECTED_TIME_UNCONFIRMED";
+  return "NEW_ORDER_REJECTED_MISSING_REQUIRED_FIELDS";
+}
+
+export type GmailIwayClassification =
+  | { accepted: true; receivedAt: Date; parsed: ReturnType<typeof parseIwayNewRide> }
+  | { accepted: false; reason: string; receivedAt?: Date; parsed?: ReturnType<typeof parseIwayNewRide> };
+
+/** Pure eligibility check used by the route and regression tests. */
+export function classifyGmailIwayMessage(message: GmailIwayMessage, enabledAt = process.env.IWAY_GMAIL_ENABLED_AT?.trim()) : GmailIwayClassification {
+  const receivedAt = validReceivedAt(message.receivedAt);
+  if (!receivedAt) return { accepted: false, reason: "INVALID_RECEIVED_AT" };
+  if (!isTrustedGmailNewOrder(message)) return { accepted: false, reason: "UNTRUSTED_OR_NOT_NEW_ORDER", receivedAt };
+  const waterline = enabledAt ? new Date(enabledAt) : null;
+  if (!waterline || Number.isNaN(waterline.getTime()) || receivedAt.getTime() <= waterline.getTime()) return { accepted: false, reason: "BEFORE_ENABLE_WATERLINE", receivedAt };
+  const parsed = parseIwayNewRide(message.text, { referenceDate: receivedAt });
+  if (missingRequiredFields(parsed).length) return { accepted: false, reason: rejectedAction(parsed), receivedAt, parsed };
+  return { accepted: true, receivedAt, parsed };
 }
 
 /**
@@ -46,24 +70,39 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
   const summary: GmailIwaySummary = { created: 0, skipped: 0, rejected: 0, processedIds: [] };
   try {
     for (const message of messages) {
-      const receivedAt = validReceivedAt(message.receivedAt);
-      if (!receivedAt || !isTrustedNewOrder(message) || !isAfterEnableWaterline(receivedAt)) {
+      const classification = classifyGmailIwayMessage(message);
+      if (!classification.accepted) {
+        // A trusted, structured mail with missing/ambiguous order fields is a
+        // permanent safe rejection. Record the reason once so Apps Script can
+        // advance without retrying the same malformed mail every minute.
+        if (classification.parsed && classification.receivedAt) {
+          const known = await db.importedSourceMessage.findUnique({ where: { connector_externalId: { connector, externalId: message.id } } });
+          if (!known) await db.importedSourceMessage.create({ data: {
+            connector,
+            externalId: message.id,
+            action: classification.reason,
+            sourceText: message.text,
+            receivedAt: classification.receivedAt,
+          } });
+          summary.processedIds.push(message.id);
+        }
         summary.rejected += 1;
         continue;
       }
-      const parsed = parseIwayNewRide(message.text);
-      if (!parsed.platformOrderNumber || !parsed.city || !parsed.pickupDateTime || !parsed.passengerName || !parsed.passengerPhone || !parsed.pickupAddress || !parsed.dropoffAddress || !parsed.platformVehicleType) {
-        summary.rejected += 1;
-        continue;
-      }
-      const result = await db.$transaction(async (tx) => {
+      const { receivedAt, parsed } = classification;
+      const result: "created" | "skipped" | "rejected" = await db.$transaction(async (tx) => {
         const known = await tx.importedSourceMessage.findUnique({ where: { connector_externalId: { connector, externalId: message.id } } });
         if (known) return "skipped" as const;
+        // Store a protected audit record for a structurally valid iWay mail
+        // even when it cannot safely create an order.  This prevents an Apps
+        // Script retry storm while retaining a traceable reason; no mail body
+        // ever reaches application logs or an API response.
         const existing = await tx.order.findUnique({ where: { platformOrderNumber: parsed.platformOrderNumber } });
         const sourceMessage = await tx.importedSourceMessage.create({ data: { connector, externalId: message.id, action: existing ? "NEW_ORDER_SKIPPED_EXISTING" : "NEW_ORDER_IMPORTED", sourceText: message.text, orderId: existing?.id, receivedAt } });
         if (existing) return "skipped" as const;
         const fleet = await canonicalFleetForCity(tx, parsed.city);
-        const pickupDateTime = new Date(`${parsed.pickupDateTime}:00+07:00`);
+        const pickupDateTime = zonedLocalDateTimeToUtc(parsed.pickupDateTime, parsed.serviceTimeZone);
+        if (!pickupDateTime) throw new Error("GMAIL_ORDER_TIME_ZONE_CONVERSION_FAILED");
         const created = await tx.order.create({ data: {
           platformOrderNumber: parsed.platformOrderNumber,
           city: parsed.city,

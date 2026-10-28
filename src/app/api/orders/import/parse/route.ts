@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { NextRequest } from "next/server";
 import { detectDispatchCity } from "@/lib/city/detect-city";
 import { isIwayNewRideEmail, parseIwayNewRide } from "@/features/import/iway-new-ride-parser";
+import { detectServiceTimeZone } from "@/features/import/service-timezone";
 
 function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
@@ -57,6 +58,7 @@ function parseStandardOrder(text: string) {
   const pickupAddress = addressFrom(pick(text, "Pickup address"));
   const dropoffAddress = addressFrom(pick(text, "Dropoff address"));
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
@@ -72,6 +74,8 @@ function parseStandardOrder(text: string) {
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: "",
   };
 }
@@ -100,6 +104,7 @@ export function parseIwayLabelledOrder(text: string) {
   const pax = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
   const adults = labelledAdults || pax;
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Ride\s*)?(?:Order\s*)?(?:number|no\\.?|id)")),
     passengerName,
@@ -115,6 +120,8 @@ export function parseIwayLabelledOrder(text: string) {
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: pick(text, "(?:Remarks|Notes?|Special\\s+requests?)"),
   };
 }
@@ -161,6 +168,7 @@ export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | nu
   const dropoffEnd = meetIndex >= 0 ? meetIndex : afterVehicle.length;
   const dropoffAddress = afterVehicle.slice(dropoffStart, dropoffEnd).join(" ").trim();
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
 
   return {
     platformOrderNumber: orderNo,
@@ -177,6 +185,8 @@ export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | nu
     meetGreetLine: meetIndex >= 0 ? afterVehicle[meetIndex] : "",
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: "",
   };
 }
@@ -209,7 +219,10 @@ export async function POST(request: NextRequest) {
   const parsedOrders = isCompactEsforty ? compactOrders : [isIwayRide ? parseIwayNewRide(text) : isIwayLabelled ? parseIwayLabelledOrder(text) : parseStandardOrder(text)];
   const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"] as const;
   const orders = await Promise.all(parsedOrders.map(async (parsed) => {
-    const { cityDetection, ...fields } = parsed;
+    // Time-zone evidence is used by the cloud mail importer. It is not an
+    // editable order field in the manual-review form, where service city
+    // remains the operator-facing routing decision.
+    const { cityDetection, serviceTimeZone: _serviceTimeZone, timeZoneDetection: _timeZoneDetection, ...fields } = parsed;
     const missingFields = required.filter((key) => !fields[key]);
     const exact = fields.platformOrderNumber ? await db.order.findMany({ where: { platformOrderNumber: fields.platformOrderNumber }, select: { id: true, platformOrderNumber: true } }) : [];
     const suspected = fields.passengerName ? await db.order.findMany({ where: { passengerName: fields.passengerName }, select: { id: true, platformOrderNumber: true } }) : [];

@@ -1,4 +1,5 @@
 import { detectDispatchCity } from "@/lib/city/detect-city";
+import { detectServiceTimeZone, type ServiceTimeZoneDetection } from "./service-timezone";
 
 export type ParsedIwayNewRide = {
   platformOrderNumber: string;
@@ -15,6 +16,8 @@ export type ParsedIwayNewRide = {
   meetGreetLine: string;
   city: string;
   cityDetection: ReturnType<typeof detectDispatchCity>;
+  serviceTimeZone: string;
+  timeZoneDetection: ServiceTimeZoneDetection;
   otherNotes: string;
 };
 
@@ -59,14 +62,29 @@ export function isIwayNewRideEmail(text: string) {
  * Parses only fields explicitly present in a structured iWay New ride email.
  * It never infers missing addresses, telephone numbers, or city.
  */
-export function parseIwayNewRide(text: string): ParsedIwayNewRide {
+function serviceDateFor(dateValue: string, departureValue: string, referenceDate?: Date) {
+  const date = dateValue.match(/(\d{1,2})[./-](\d{1,2})(?:[./-](20\d{2}))?/);
+  if (!date) return "";
+  const [, day, month, explicitYear] = date;
+  const departureYear = departureValue.match(/(20\d{2})/)?.[1];
+  let year = explicitYear || departureYear;
+  if (!year && referenceDate && !Number.isNaN(referenceDate.getTime())) {
+    year = String(referenceDate.getUTCFullYear());
+    const candidate = Date.UTC(Number(year), Number(month) - 1, Number(day));
+    // A “new ride” received near year-end with a calendar day that already
+    // passed is for the coming year.  This is bounded to date-only messages;
+    // an explicit year always wins.
+    if (candidate < Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), referenceDate.getUTCDate())) year = String(Number(year) + 1);
+  }
+  return year ? `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}` : "";
+}
+
+export function parseIwayNewRide(text: string, options: { referenceDate?: Date } = {}): ParsedIwayNewRide {
   const rideNumber = pick(text, "Ride number").replace(/^\s*(?:ride|order(?:\s*(?:number|no\\.?|id))?)?\s*[:#№-]*\s*/i, "").replace(/\s/g, "");
   const date = pick(text, "Date");
   const time = pick(text, "Time");
   const flightDeparture = pick(text, "Departure time");
-  const year = flightDeparture.match(/(20\d{2})/)?.[1] || String(new Date().getFullYear());
-  const dateParts = date.match(/(\d{1,2})[./-](\d{1,2})/);
-  const serviceDate = dateParts ? `${year}-${dateParts[2].padStart(2, "0")}-${dateParts[1].padStart(2, "0")}` : "";
+  const serviceDate = serviceDateFor(date, flightDeparture, options.referenceDate);
   const itinerary = text.match(/Itinerary\s*:\s*([\s\S]*?)(?=Flight number\/train number\s*:|Departure time\s*:|Remarks\s*:)/i)?.[1] || "";
   const pickupAddress = addressFrom(itinerary.match(/From\s*:\s*([\s\S]*?)(?=\n\s*To\s*:)/i)?.[1] || "");
   const dropoffAddress = addressFrom(itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1] || "");
@@ -80,6 +98,7 @@ export function parseIwayNewRide(text: string): ParsedIwayNewRide {
   const statedLuggage = pick(text, "(?:Luggage|Number of luggage|Baggage)");
   const signName = pick(text, "(?:Meeting tablet|Greeting sign|Meeting sign|Meet(?:ing)?&?Greet)");
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: rideNumber,
     passengerName,
@@ -95,6 +114,8 @@ export function parseIwayNewRide(text: string): ParsedIwayNewRide {
     meetGreetLine: signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : ""),
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, signName && `Meeting tablet: ${signName}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
   };
 }
