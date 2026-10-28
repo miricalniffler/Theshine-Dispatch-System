@@ -39,10 +39,17 @@ function syncIwayGmailOrders() {
       if (page.threadCount) advanceScanOffset_(props, page.threadCount);
       return;
     }
+    var headers = { Authorization: 'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') };
+    // Preview deployments can keep Vercel SSO enabled. When a Vercel
+    // automation-bypass secret is explicitly placed in Script Properties, use
+    // it only for this server-to-server request; it is never logged or sent to
+    // the application itself.
+    var protectionBypass = props.getProperty('IWAY_GMAIL_VERCEL_PROTECTION_BYPASS_SECRET');
+    if (protectionBypass) headers['x-vercel-protection-bypass'] = protectionBypass;
     var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_INGEST_URL'), {
       method: 'post',
       contentType: 'application/json',
-      headers: { Authorization: 'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') },
+      headers: headers,
       payload: JSON.stringify({
         targetEnvironment: props.getProperty('IWAY_GMAIL_TARGET_ENVIRONMENT'),
         messages: messages,

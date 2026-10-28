@@ -11,6 +11,7 @@
    - `IWAY_GMAIL_INGEST_URL`：测试 Preview 的 `/api/import-sync/gmail-iway` 地址；
    - `IWAY_GMAIL_INGEST_TOKEN`：仅用于该 Preview 的一次性高强度令牌；
    - `IWAY_GMAIL_TARGET_ENVIRONMENT`：`preview`。
+   - 如果 Preview 保留 Vercel 访问保护：`IWAY_GMAIL_VERCEL_PROTECTION_BYPASS_SECRET`：仅用于 Vercel 的自动化绕过密钥。它使 Apps Script 能访问此 Preview，不会关闭网页保护，也不会传给调度系统。
 3. 首次执行 `setupIwayGmailSync`，按 Google 页面完成 Gmail 读取及外部网络访问授权。
 
 首次执行会把当前时间保存为水位线，只处理之后收到的新邮件；不会追溯历史订单。Google 的分钟触发器由平台调度，实际执行可能有少量延迟，并非秒级定时。
@@ -22,6 +23,7 @@
 ## 安全行为
 
 - 邮件只会发送到脚本属性中指定的 HTTPS 导入接口；服务端会核对 `preview` / `production` 目标环境，目标不一致时拒绝写入。
+- Vercel 自动化绕过密钥（如使用）只放在 Apps Script 属性中；它不是订单导入令牌，也不会写进代码或日志。
 - 邮件编号会在 Google 端和服务端各自去重，脚本重启不会重复导入。
 - 服务端再次核验可信发件人、主题、邮件格式、时间水位线和订单号。
 - 解析失败的邮件不会写入订单，会留下不含正文的可追踪处理状态；原始邮件正文不会进入 Apps Script 日志。

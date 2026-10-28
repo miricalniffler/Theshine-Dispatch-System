@@ -29,6 +29,8 @@ test("Gmail 桥接只提交新订单，使用水位线和服务端认证", () =>
   expect(source).toContain("IWAY_GMAIL_ENABLED_AT");
   expect(source).toContain("IWAY_GMAIL_INGEST_TOKEN");
   expect(source).toContain("IWAY_GMAIL_TARGET_ENVIRONMENT");
+  expect(source).toContain("IWAY_GMAIL_VERCEL_PROTECTION_BYPASS_SECRET");
+  expect(source).toContain("x-vercel-protection-bypass");
   expect(source).toContain("IWAY_GMAIL_SEEN");
   expect(source).toContain("THREAD_PAGE_SIZE = 50");
   expect(source).toContain("IWAY_GMAIL_SCAN_OFFSET");
