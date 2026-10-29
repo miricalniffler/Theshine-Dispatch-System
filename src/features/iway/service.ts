@@ -23,7 +23,7 @@ export type DriverDetails = {
   reassignmentCount?: number;
 };
 
-export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null; rawLicensePlate?: string | null; changeType?: "EDIT" | "REASSIGNMENT" };
+export type DriverDetailsInput = Pick<DriverDetails, "rawReply" | "confirmedDriverName" | "rawDriverPhone" | "confirmedVehicleModel" | "licensePlate"> & { confirmedVehicleCategory?: string | null; rawLicensePlate?: string | null; changeType?: "EDIT" | "REASSIGNMENT"; skipArchiveHistory?: boolean };
 
 type IwayBatch = { id: string; orderIds: string[]; serviceDate: string; text: string; ruleVersion: string; copiedAt: string | null; confirmedAt: string | null };
 type OrderWithDriver = PersistedOrder & { driverDetail: DriverDetail | null; fleet?: { name: string } | null };
@@ -148,10 +148,11 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     if (currentOrder.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
     const saved = await tx.driverDetail.upsert({
       where: { orderId },
-      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt },
-      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt },
+      update: { rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt, driverNameSource: record.driverNameSource, iwayDriverName: record.iwayDriverName },
+      create: { orderId, rawReply: record.rawReply, confirmedDriverName: record.confirmedDriverName, rawDriverPhone: record.rawDriverPhone, normalizedDriverPhone: record.normalizedDriverPhone, confirmedVehicleModel: record.confirmedVehicleModel, confirmedVehicleCategory: record.confirmedVehicleCategory, licensePlate: record.licensePlate, confirmedAt, driverNameSource: record.driverNameSource, iwayDriverName: record.iwayDriverName },
     });
-    const archive = await archiveDriverVehicle(tx, {
+    if (!input.skipArchiveHistory) {
+      const archive = await archiveDriverVehicle(tx, {
       orderId,
       orderStatus: currentOrder.status,
       existingDriverProfileId: saved.driverProfileId,
@@ -165,11 +166,12 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       // the original Thai text for future matching and for operators to audit.
       rawPlate: input.rawLicensePlate ?? input.licensePlate,
       assignmentEndReason: input.changeType === "REASSIGNMENT" ? "订单换车/换司机" : undefined,
-    });
-    const archived = await tx.driverDetail.update({
-      where: { id: saved.id },
-      data: { driverProfileId: archive.driverProfileId, vehicleProfileId: archive.vehicleProfileId, driverNameSource: archive.driverNameSource, iwayDriverName: archive.iwayDriverName },
-    });
+      });
+      await tx.driverDetail.update({
+        where: { id: saved.id },
+        data: { driverProfileId: archive.driverProfileId, vehicleProfileId: archive.vehicleProfileId, driverNameSource: archive.driverNameSource, iwayDriverName: archive.iwayDriverName },
+      });
+    }
     // Editing driver/vehicle details after a return is a correction, not a
     // rewind of the order lifecycle.  In particular, moving a COMPLETED
     // order back to DRIVER_CONFIRMED made the original completion disappear
@@ -179,7 +181,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     }
-    return archived;
+    return tx.driverDetail.findUniqueOrThrow({ where: { id: saved.id } });
   });
   return { driver: toDriverDetails(driver), valid: check.valid, missingFields: fieldLabels(check.missingFields), ruleVersion: rules.rules_version };
 }
