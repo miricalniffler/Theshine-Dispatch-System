@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { normalizeLicensePlateForReturn, normalizeThailandPhone } from "@/lib/rules/engine";
+import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
 import { loadRules } from "@/lib/rules/load-rules";
 
 const temporaryThaiMaleNames = ["Somchai", "Anan", "Niran", "Kittipong", "Prasert", "Somsak", "Chai", "Wichai", "Thanawat", "Preecha"];
@@ -71,6 +71,7 @@ export async function archiveDriverVehicle(tx: Prisma.TransactionClient, input: 
   const thaiName = input.thaiDriverName?.trim() || null;
   const normalizedPhone = normalizeThailandPhone(input.rawPhone, rules);
   const normalizedVehiclePlate = normalizedPlate(input.rawPlate);
+  const normalizedVehicleModel = normalizeVehicleModel(input.vehicleModel, rules);
   const source = nameSource(input, actualName);
 
   let driver = input.existingDriverProfileId ? await rootProfile(tx, input.existingDriverProfileId) : null;
@@ -104,10 +105,10 @@ export async function archiveDriverVehicle(tx: Prisma.TransactionClient, input: 
   let vehicle = input.existingVehicleProfileId ? await tx.vehicleProfile.findUnique({ where: { id: input.existingVehicleProfileId } }) : null;
   if (!vehicle && normalizedVehiclePlate) vehicle = await tx.vehicleProfile.findUnique({ where: { normalizedPlate: normalizedVehiclePlate } });
   if (!vehicle && normalizedVehiclePlate) {
-    const vehicleModel = input.vehicleModel?.trim() || null;
+    const vehicleModel = normalizedVehicleModel;
     vehicle = await tx.vehicleProfile.create({ data: { rawLicensePlate: input.rawPlate?.trim() || null, normalizedPlate: normalizedVehiclePlate, vehicleModel, vehicleCategory: input.vehicleCategory?.trim() || null, brand: vehicleModel?.split(/\s+/)[0] || null, dataSource: "MANUAL", isVerified: true } });
-  } else if (vehicle && !vehicle.isVerified && input.vehicleModel?.trim()) {
-    vehicle = await tx.vehicleProfile.update({ where: { id: vehicle.id }, data: { rawLicensePlate: input.rawPlate?.trim() || vehicle.rawLicensePlate, vehicleModel: input.vehicleModel.trim(), vehicleCategory: input.vehicleCategory?.trim() || vehicle.vehicleCategory, brand: input.vehicleModel.trim().split(/\s+/)[0] || vehicle.brand, dataSource: "MANUAL", isVerified: true } });
+  } else if (vehicle && !vehicle.isVerified && normalizedVehicleModel) {
+    vehicle = await tx.vehicleProfile.update({ where: { id: vehicle.id }, data: { rawLicensePlate: input.rawPlate?.trim() || vehicle.rawLicensePlate, vehicleModel: normalizedVehicleModel, vehicleCategory: input.vehicleCategory?.trim() || vehicle.vehicleCategory, brand: normalizedVehicleModel.split(/\s+/)[0] || vehicle.brand, dataSource: "MANUAL", isVerified: true } });
   }
 
   const iwayDriverName = actualName || await stableTemporaryName(tx, driver.id, input.orderId);
@@ -203,6 +204,7 @@ export async function updateVehicleProfile(vehicleProfileId: string, input: { ra
     const duplicate = await db.vehicleProfile.findUnique({ where: { normalizedPlate: normalized } });
     if (duplicate && duplicate.id !== current.id) throw new Error("VEHICLE_PLATE_CONFLICT");
   }
-  return db.vehicleProfile.update({ where: { id: vehicleProfileId }, data: { rawLicensePlate: rawLicensePlate || null, normalizedPlate: normalized, vehicleModel: input.vehicleModel?.trim() || null, vehicleCategory: input.vehicleCategory?.trim() || null, brand: input.brand?.trim() || null, dataSource: "MANUAL", isVerified: true } });
+  const vehicleModel = normalizeVehicleModel(input.vehicleModel, loadRules());
+  return db.vehicleProfile.update({ where: { id: vehicleProfileId }, data: { rawLicensePlate: rawLicensePlate || null, normalizedPlate: normalized, vehicleModel, vehicleCategory: input.vehicleCategory?.trim() || null, brand: input.brand?.trim() || vehicleModel?.split(/\s+/)[0] || null, dataSource: "MANUAL", isVerified: true } });
 }
 

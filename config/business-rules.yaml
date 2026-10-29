@@ -69,6 +69,8 @@ transforms:
       local_digit_lengths: [9, 10]
   vehicle_aliases:
     all new v9: "Toyota HiAce All New V9"
+    hiace: "Toyota HiAce"
+    toyota hiace: "Toyota HiAce"
     yaris: "Toyota Yaris ATIV"
     toyota yaris: "Toyota Yaris ATIV"
     yaris ativ: "Toyota Yaris ATIV"
