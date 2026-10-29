@@ -3,6 +3,8 @@ import { identifyVehicleFromImage, translateThaiForReview } from "@/features/ass
 import { db } from "@/lib/db";
 import { NextRequest } from "next/server";
 import { detectDispatchCity } from "@/lib/city/detect-city";
+import { isIwayNewRideEmail, parseIwayNewRide } from "@/features/import/iway-new-ride-parser";
+import { detectServiceTimeZone } from "@/features/import/service-timezone";
 
 function pick(text: string, label: string) {
   return text.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`, "i"))?.[1]?.trim() || "";
@@ -33,14 +35,6 @@ function numberFrom(value: string) {
   return match ? Number(match[0]) : 0;
 }
 
-function lastPassengerName(value: string) {
-  const names = value
-    .split(/\s*(?:,|;|\/|\n|\s+&\s+|\s+and\s+)\s*/i)
-    .map((name) => name.trim())
-    .filter(Boolean);
-  return names.at(-1) || "";
-}
-
 function passengerCounts(text: string) {
   const children = numberFrom(pick(text, "Children"));
   const statedAdults = pick(text, "Adults");
@@ -59,53 +53,12 @@ function meetGreetFor(text: string) {
   return signName || (/meet\s*&?\s*greet|举牌/i.test(text) ? "Meet&Greet" : "");
 }
 
-function platformVehicleLabel(vehicleClass: string) {
-  const category = vehicleClass.replace(/\s+/g, " ").split("(")[0].trim();
-  // Model cars 是可用示例车，不能替代平台要求的车型等级。
-  if (/^C$/i.test(category)) return "COMFORT";
-  return category;
-}
-
-function parseIwayRide(text: string) {
-  const rideNumber = pick(text, "Ride number");
-  const date = pick(text, "Date");
-  const time = pick(text, "Time");
-  const flightDeparture = pick(text, "Departure time");
-  const year = flightDeparture.match(/(20\d{2})/)?.[1] || String(new Date().getFullYear());
-  const dateParts = date.match(/(\d{1,2})[./-](\d{1,2})/);
-  const serviceDate = dateParts ? `${year}-${dateParts[2].padStart(2, "0")}-${dateParts[1].padStart(2, "0")}` : "";
-  const itinerary = text.match(/Itinerary\s*:\s*([\s\S]*?)(?=Flight number\/train number\s*:|Departure time\s*:|Remarks\s*:)/i)?.[1] || "";
-  const pickupAddress = addressFrom(itinerary.match(/From\s*:\s*([\s\S]*?)(?=\n\s*To\s*:)/i)?.[1] || "");
-  const dropoffAddress = addressFrom(itinerary.match(/To\s*:\s*([^\n]+)/i)?.[1] || "");
-  const clients = pick(text, "Clients");
-  const passengerPhone = phoneFrom(clients.match(/phone\s+([\s\S]*)/i)?.[1] || "");
-  const passengerName = lastPassengerName(clients.replace(/,?\s*phone\s+[+\d][\d\s-]+.*$/i, "").trim());
-  const { adults, children } = passengerCounts(text);
-  const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
-  return {
-    platformOrderNumber: normaliseOrderNumber(rideNumber),
-    passengerName,
-    passengerPhone,
-    pickupDateTime: serviceDate && time ? `${serviceDate}T${time.slice(0, 5)}` : "",
-    pickupAddress,
-    dropoffAddress,
-    platformVehicleType: platformVehicleLabel(pick(text, "Vehicle class")),
-    flightNumber: pick(text, "Flight number/train number"),
-    adults,
-    children,
-    luggage: luggageFor(text, adults + children),
-    meetGreetLine: meetGreetFor(text),
-    city: cityDetection.city ?? "",
-    cityDetection,
-    otherNotes: [flightDeparture && `Flight departure: ${flightDeparture}`, pick(text, "Meeting tablet") && `Meeting tablet: ${pick(text, "Meeting tablet")}`, pick(text, "Remarks")].filter(Boolean).join("\n"),
-  };
-}
-
 function parseStandardOrder(text: string) {
   const { adults, children } = passengerCounts(text);
   const pickupAddress = addressFrom(pick(text, "Pickup address"));
   const dropoffAddress = addressFrom(pick(text, "Dropoff address"));
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
@@ -121,6 +74,8 @@ function parseStandardOrder(text: string) {
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: "",
   };
 }
@@ -149,6 +104,7 @@ export function parseIwayLabelledOrder(text: string) {
   const pax = Number(passengerLine.match(/\(\s*(\d+)\s*pax\s*\)/i)?.[1] || 0);
   const adults = labelledAdults || pax;
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Ride\s*)?(?:Order\s*)?(?:number|no\\.?|id)")),
     passengerName,
@@ -164,6 +120,8 @@ export function parseIwayLabelledOrder(text: string) {
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: pick(text, "(?:Remarks|Notes?|Special\\s+requests?)"),
   };
 }
@@ -210,6 +168,7 @@ export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | nu
   const dropoffEnd = meetIndex >= 0 ? meetIndex : afterVehicle.length;
   const dropoffAddress = afterVehicle.slice(dropoffStart, dropoffEnd).join(" ").trim();
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
 
   return {
     platformOrderNumber: orderNo,
@@ -226,6 +185,8 @@ export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | nu
     meetGreetLine: meetIndex >= 0 ? afterVehicle[meetIndex] : "",
     city: cityDetection.city ?? "",
     cityDetection,
+    serviceTimeZone: timeZoneDetection.timeZone ?? "",
+    timeZoneDetection,
     otherNotes: "",
   };
 }
@@ -240,7 +201,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   if (typeof body.text !== "string" || !body.text.trim()) return failure("EMPTY_SOURCE", "请粘贴订单原文。", undefined, 422);
   const text = body.text.trim();
-  const isIwayRide = /Ride number\s*[:：]/i.test(text) && /Vehicle class\s*[:：]/i.test(text) && /Itinerary\s*[:：]/i.test(text) && /Clients\s*[:：]/i.test(text);
+  const isIwayRide = isIwayNewRideEmail(text);
   const isStandardOrder = /(?:Order Number|Order ID)\s*[:：]/i.test(text) && /Passenger Name\s*[:：]/i.test(text);
   const isIwayLabelled = /(?:ride\s*)?(?:order\s*)?(?:number|no\.?|id)\s*[:#№-]/i.test(text)
     && /(?:pickup\s*)?(?:date|time)\s*[:：]/i.test(text)
@@ -255,10 +216,13 @@ export async function POST(request: NextRequest) {
   if (!["iway_feishu", "esforty", "manual"].includes(sourceType)) return failure("SOURCE_REQUIRED", "请选择订单来源后再识别。", undefined, 422);
   if (!isIwayRide && !isIwayLabelled && !isStandardOrder && !isCompactEsforty) return failure("NOT_AN_ORDER", "未识别到订单格式。可粘贴 i’way 邮件、WhatsApp/Telegram 标签订单、带字段标签的订单，或 esforty 紧凑列表。", undefined, 422);
 
-  const parsedOrders = isCompactEsforty ? compactOrders : [isIwayRide ? parseIwayRide(text) : isIwayLabelled ? parseIwayLabelledOrder(text) : parseStandardOrder(text)];
+  const parsedOrders = isCompactEsforty ? compactOrders : [isIwayRide ? parseIwayNewRide(text) : isIwayLabelled ? parseIwayLabelledOrder(text) : parseStandardOrder(text)];
   const required = ["platformOrderNumber", "passengerName", "passengerPhone", "pickupDateTime", "pickupAddress", "dropoffAddress", "platformVehicleType", "city"] as const;
   const orders = await Promise.all(parsedOrders.map(async (parsed) => {
-    const { cityDetection, ...fields } = parsed;
+    // Time-zone evidence is used by the cloud mail importer. It is not an
+    // editable order field in the manual-review form, where service city
+    // remains the operator-facing routing decision.
+    const { cityDetection, serviceTimeZone: _serviceTimeZone, timeZoneDetection: _timeZoneDetection, ...fields } = parsed;
     const missingFields = required.filter((key) => !fields[key]);
     const exact = fields.platformOrderNumber ? await db.order.findMany({ where: { platformOrderNumber: fields.platformOrderNumber }, select: { id: true, platformOrderNumber: true } }) : [];
     const suspected = fields.passengerName ? await db.order.findMany({ where: { passengerName: fields.passengerName }, select: { id: true, platformOrderNumber: true } }) : [];
