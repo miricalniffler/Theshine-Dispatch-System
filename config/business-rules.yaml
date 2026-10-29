@@ -1,5 +1,5 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-07-26.1"
+rules_version: "2026-10-29.2"
 timezone: "Asia/Bangkok"
 
 templates:
@@ -67,18 +67,81 @@ transforms:
       country_code: "+66"
       convert_local_leading_zero: true
       local_digit_lengths: [9, 10]
+  # 车型目录是“具体型号 → 完整品牌 + 型号”的唯一来源。只有目录中
+  # 唯一对应的型号才补品牌；没有目录项或品牌仍有歧义时，系统保留原文。
+  vehicle_models:
+    - brand: Toyota
+      canonical_name: "Toyota HiAce All New V9"
+      model_aliases: ["all new v9", "hiace all new v9"]
+    - brand: Toyota
+      canonical_name: "Toyota HiAce"
+      model_aliases: ["hiace", "hi ace"]
+    - brand: Toyota
+      canonical_name: "Toyota Commuter"
+      model_aliases: ["commuter", "commut"]
+      aliases: ["commuter toyota", "commut toyota"]
+    - brand: Toyota
+      canonical_name: "Toyota Ventury"
+      model_aliases: ["ventury"]
+    - brand: Toyota
+      canonical_name: "Toyota Yaris ATIV"
+      model_aliases: ["yaris", "yaris ativ"]
+    - brand: Toyota
+      canonical_name: "Toyota Camry"
+      model_aliases: ["camry"]
+    - brand: Toyota
+      canonical_name: "Toyota Fortuner"
+      model_aliases: ["fortuner"]
+    - brand: Toyota
+      canonical_name: "Toyota Alphard"
+      model_aliases: ["alphard"]
+    - brand: Toyota
+      canonical_name: "Toyota Vellfire"
+      model_aliases: ["vellfire"]
+    - brand: Honda
+      canonical_name: "Honda City"
+      model_aliases: ["city"]
+    - brand: Honda
+      canonical_name: "Honda Civic"
+      model_aliases: ["civic"]
+    - brand: Honda
+      canonical_name: "Honda CR-V"
+      model_aliases: ["cr-v", "crv"]
+    - brand: Mitsubishi
+      brand_aliases: ["mitsubishi motors"]
+      canonical_name: "Mitsubishi Xpander"
+      model_aliases: ["xpander"]
+    - brand: Mitsubishi
+      canonical_name: "Mitsubishi Pajero Sport"
+      model_aliases: ["pajero", "pajero sport"]
+    - brand: Hyundai
+      canonical_name: "Hyundai Staria"
+      model_aliases: ["staria"]
+    - brand: Hyundai
+      canonical_name: "Hyundai H-1"
+      model_aliases: ["h-1", "h1"]
+    - brand: Isuzu
+      canonical_name: "Isuzu MU-X"
+      model_aliases: ["mu-x", "mux"]
+    - brand: Kia
+      canonical_name: "Kia Carnival"
+      model_aliases: ["carnival"]
+    - brand: Nissan
+      canonical_name: "Nissan Almera"
+      model_aliases: ["almera"]
+    - brand: Mercedes-Benz
+      brand_aliases: ["mercedes", "mercedes benz", "mercedes-benz"]
+      canonical_name: "Mercedes-Benz V-Class"
+      model_aliases: ["v-class", "v class"]
+    - brand: BYD
+      canonical_name: "BYD M6"
+      model_aliases: ["m6"]
+    - brand: BYD
+      canonical_name: "BYD ATTO 3"
+      model_aliases: ["atto 3", "atto3"]
+  # 历史输入中的拼写修正或车辆大类；具体车型一律由 vehicle_models 处理。
   vehicle_aliases:
-    all new v9: "Toyota HiAce All New V9"
-    hiace: "Toyota HiAce"
-    toyota hiace: "Toyota HiAce"
-    yaris: "Toyota Yaris ATIV"
-    toyota yaris: "Toyota Yaris ATIV"
-    yaris ativ: "Toyota Yaris ATIV"
-    toyota yaris ativ: "Toyota Yaris ATIV"
     seadan: "Sedan"
-    toyota commut: "Toyota Commut"
-    toyota ventury: "Toyota Ventury"
-    pajero: "Mitsubishi Pajero"
     standard: "Standard"
   # 以下只是车辆大类，不能作为 i’way 回传中的具体车型。
   generic_vehicle_labels_not_allowed_for_return: ["Van", "Minibus", "Sedan", "Standard", "Minivan"]

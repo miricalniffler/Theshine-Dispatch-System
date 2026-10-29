@@ -25,6 +25,7 @@ const rulesSchema = z.object({
       display: z.object({ country_calling_codes: z.array(z.string().regex(/^\+\d+$/)), separator: z.string().min(1) }),
       thailand: z.object({ country_code: z.string(), convert_local_leading_zero: z.boolean(), local_digit_lengths: z.array(z.number()) }),
     }),
+    vehicle_models: z.array(z.object({ brand: z.string().min(1), canonical_name: z.string().min(1), model_aliases: z.array(z.string().min(1)).min(1), brand_aliases: z.array(z.string().min(1)).optional(), aliases: z.array(z.string().min(1)).optional() })),
     vehicle_aliases: z.record(z.string(), z.string()),
     generic_vehicle_labels_not_allowed_for_return: z.array(z.string()),
   }),

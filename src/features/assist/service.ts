@@ -1,5 +1,6 @@
 import { isQwenConfigured, qwenJson } from "./qwen";
 import { recognizeVehicleImage } from "./vision";
+import { normalizeVehicleModel } from "@/lib/rules/engine";
 import { AI_MODELS } from "./model-config";
 import { db } from "@/lib/db";
 
@@ -87,5 +88,5 @@ export async function identifyVehicleFromImage(imageUrl: string): Promise<Review
   try { new URL(imageUrl); } catch { return { status: "MANUAL_REVIEW_REQUIRED", provider: "人工复核", message: "车辆图片地址无效，请检查后重试。" }; }
   const result = await recognizeVehicleImage(imageUrl);
   if (!result.vehicle_model) return { status: "MANUAL_REVIEW_REQUIRED", provider: result.provider === "NONE" ? "人工复核" : result.provider, message: result.note };
-  return { status: "SUGGESTION_READY", provider: result.provider, message: result.note, value: result.vehicle_model, confidence: result.confidence === "HIGH" ? 0.9 : result.confidence === "MEDIUM" ? 0.6 : result.confidence === "LOW" ? 0.3 : undefined };
+  return { status: "SUGGESTION_READY", provider: result.provider, message: result.note, value: normalizeVehicleModel(result.vehicle_model, undefined, result.vehicle_brand) ?? undefined, confidence: result.confidence === "HIGH" ? 0.9 : result.confidence === "MEDIUM" ? 0.6 : result.confidence === "LOW" ? 0.3 : undefined };
 }

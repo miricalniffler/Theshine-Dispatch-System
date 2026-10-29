@@ -204,7 +204,7 @@ export async function updateVehicleProfile(vehicleProfileId: string, input: { ra
     const duplicate = await db.vehicleProfile.findUnique({ where: { normalizedPlate: normalized } });
     if (duplicate && duplicate.id !== current.id) throw new Error("VEHICLE_PLATE_CONFLICT");
   }
-  const vehicleModel = normalizeVehicleModel(input.vehicleModel, loadRules());
+  const vehicleModel = normalizeVehicleModel(input.vehicleModel, loadRules(), input.brand);
   return db.vehicleProfile.update({ where: { id: vehicleProfileId }, data: { rawLicensePlate: rawLicensePlate || null, normalizedPlate: normalized, vehicleModel, vehicleCategory: input.vehicleCategory?.trim() || null, brand: input.brand?.trim() || vehicleModel?.split(/\s+/)[0] || null, dataSource: "MANUAL", isVerified: true } });
 }
 
