@@ -122,21 +122,33 @@ export function formatMeetGreetLine(value: string | null | undefined, passengerN
   return renderTemplate(rules.templates.dispatch.meet_greet.greeting_sign_line, { greeting_sign_name: greetingSignName });
 }
 
-export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules()) {
+function vehicleKey(value: string) {
+  return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").trim();
+}
+
+/**
+ * Returns a catalogued, complete brand + model name only when the model alias
+ * identifies one vehicle (or a supplied brand resolves the ambiguity).
+ * Otherwise it deliberately preserves the original wording.
+ */
+export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules(), recognizedBrand?: string | null) {
   if (!vehicle) return null;
   const trimmed = vehicle.trim();
-  const normalizedKey = trimmed.toLocaleLowerCase().replace(/\s+/g, " ");
-  // 车队常把品牌写在后面（例如 “Commuter Toyota”），或简称为
-  // “All New V9”。这些不是 AI 推测，而是已确认的车型别名。
-  if (/\ball\s+new\s+v9\b/i.test(normalizedKey)) return "Toyota HiAce All New V9";
-  // HiAce is a Toyota model.  Fleet replies often omit the brand, but this is
-  // an approved, unambiguous model alias rather than a guess.
-  if (/^(?:toyota\s+)?hiace$/i.test(normalizedKey)) return "Toyota HiAce";
-  // 泰国车队常只写 Yaris；这里使用运营已确认的完整回传名称，避免
-  // iWay 文本缺少 Toyota / ATIV 信息。
-  if (/\b(?:toyota\s+)?yaris(?:\s+ativ)?\b/i.test(normalizedKey)) return "Toyota Yaris ATIV";
-  if (/\bcommut(?:er)?\s+toyota\b/i.test(normalizedKey)) return "Toyota Commut";
-  return rules.transforms.vehicle_aliases[normalizedKey] ?? trimmed;
+  const modelKey = vehicleKey(trimmed);
+  const brandKey = recognizedBrand ? vehicleKey(recognizedBrand) : "";
+  const candidates = rules.transforms.vehicle_models.filter((entry) => {
+    const modelAliases = [entry.canonical_name, ...entry.model_aliases, ...(entry.aliases ?? [])].map(vehicleKey);
+    return modelAliases.includes(modelKey);
+  });
+  const brandMatches = (entry: RulesConfig["transforms"]["vehicle_models"][number]) =>
+    [entry.brand, ...(entry.brand_aliases ?? [])].map(vehicleKey).includes(brandKey);
+  const byBrand = brandKey ? candidates.filter(brandMatches) : [];
+  // When AI explicitly supplied a brand, do not silently replace it with a
+  // different catalog brand.  A conflicting or ambiguous pair stays original
+  // for an operator to review.
+  if (brandKey) return byBrand.length === 1 ? byBrand[0].canonical_name : trimmed;
+  if (candidates.length === 1) return candidates[0].canonical_name;
+  return rules.transforms.vehicle_aliases[trimmed.toLocaleLowerCase().replace(/\s+/g, " ")] ?? trimmed;
 }
 
 export function formatServiceDateLabel(serviceDate: string, locale: "zh" | "en" = "zh") {

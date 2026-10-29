@@ -22,7 +22,7 @@ type ReplyRecord = {
   review_reasons: string[];
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
-type VisualResult = { vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
+type VisualResult = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
@@ -176,7 +176,7 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
     if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
     if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
-    if (item.vehicle_model) target.vehicle_model = field(item.vehicle_model, `${result.recognition.label} 识别`);
+    if (item.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(item.vehicle_model, loadRules(), item.vehicle_brand), `${result.recognition.label} 识别`);
   }
 }
 
@@ -321,7 +321,7 @@ async function applyScreenshotImages(records: ReplyRecord[], images: { storagePa
     if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
     if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
     if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
-    if (!target.vehicle_model.value && scan.vehicle_model) target.vehicle_model = field(scan.vehicle_model, `来自截图 ${index + 1}`);
+    if (!target.vehicle_model.value && scan.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(scan.vehicle_model, loadRules(), scan.vehicle_brand), `来自截图 ${index + 1}`);
     target.image_source_index = index + 1;
   });
 }
@@ -347,7 +347,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     target.image_source_index = imageIndex + 1;
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
-    if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(visual.vehicle_model, loadRules(), visual.vehicle_brand), `来自车辆图片 ${imageIndex + 1}`);
     if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }

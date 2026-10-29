@@ -2,8 +2,8 @@ import { qwenJson, type QwenContent } from "./qwen";
 import { AI_MODELS } from "./model-config";
 
 export type VehicleVision = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; provider: "GLM" | "QWEN" | "NONE"; note: string };
-export type ScreenshotVision = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"]; provider: VehicleVision["provider"]; note: string };
-export type FleetTextVisionRecord = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_category: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"] };
+export type ScreenshotVision = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_brand: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"]; provider: VehicleVision["provider"]; note: string };
+export type FleetTextVisionRecord = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_brand: string | null; vehicle_category: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"] };
 export type FleetTextVision = { records: FleetTextVisionRecord[]; provider: VehicleVision["provider"]; note: string };
 
 /** A separate, deliberately opt-in switch for paid image and OCR requests. */
@@ -55,12 +55,12 @@ function screenshot(value: unknown, provider: ScreenshotVision["provider"], note
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const text = (key: string) => typeof raw[key] === "string" && raw[key].trim() ? raw[key].trim().slice(0, 160) : null;
   const confidence = raw.confidence === "HIGH" || raw.confidence === "MEDIUM" || raw.confidence === "LOW" ? raw.confidence : "UNKNOWN";
-  return { order_number: text("order_number"), driver_name: text("driver_name"), driver_phone: text("driver_phone"), license_plate: text("license_plate"), vehicle_model: text("vehicle_model"), confidence, provider, note };
+  return { order_number: text("order_number"), driver_name: text("driver_name"), driver_phone: text("driver_phone"), license_plate: text("license_plate"), vehicle_brand: text("vehicle_brand"), vehicle_model: text("vehicle_model"), confidence, provider, note };
 }
 
-const screenshotPrompt = "读取泰国车队聊天截图中明确可见的订单号、司机姓名、电话、车牌和具体车型。支持泰文、英文、数字混合。无法确定的字段必须为 null，不能猜测。driver_name 保留截图原文（泰文不要自行翻译）。只输出 JSON：{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}";
+const screenshotPrompt = "读取泰国车队聊天截图中明确可见的订单号、司机姓名、电话、车牌、车辆品牌和具体车型。支持泰文、英文、数字混合。vehicle_brand 与 vehicle_model 分开填写；无法确定的字段必须为 null，不能猜测。driver_name 保留截图原文（泰文不要自行翻译）。只输出 JSON：{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_brand\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}";
 
-const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。仅从原文提取明确出现的订单号、司机姓名、泰国电话、原始车牌（保留泰文）、车辆类别和具体车型。\n\n严格规则：\n- Driver/司机字段绝不能包含 Car Plate、Plate Number、Mobile、Phone、Tel、Vehicle、Model 等标签，也不能包含车牌或电话号码。\n- 车牌必须保留原文，例如“ฮพ 5348 กรุงเทพ”，不得只保留数字。\n- 车辆类别（例如 VAN）与具体车型（例如 Toyota Commuter）分别填写。\n- 无法确定就填 null，不能猜测或补全。\n- 一条原文可有多笔订单。\n\n只输出 JSON：{\"records\":[{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_category\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}]}`;
+const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。仅从原文提取明确出现的订单号、司机姓名、泰国电话、原始车牌（保留泰文）、车辆类别、车辆品牌和具体车型。\n\n严格规则：\n- Driver/司机字段绝不能包含 Car Plate、Plate Number、Mobile、Phone、Tel、Vehicle、Model 等标签，也不能包含车牌或电话号码。\n- 车牌必须保留原文，例如“ฮพ 5348 กรุงเทพ”，不得只保留数字。\n- vehicle_category（例如 VAN）与 vehicle_brand、vehicle_model 分别填写，不能把大类当作具体车型。\n- 无法确定就填 null，不能猜测或补全。\n- 一条原文可有多笔订单。\n\n只输出 JSON：{\"records\":[{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_category\":string|null,\"vehicle_brand\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}]}`;
 
 function confidence(value: unknown): VehicleVision["confidence"] {
   return value === "HIGH" || value === "MEDIUM" || value === "LOW" ? value : "UNKNOWN";
@@ -73,7 +73,7 @@ function fleetText(value: unknown, provider: FleetTextVision["provider"], note: 
   return { records: rows.slice(0, 20).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const row = item as Record<string, unknown>;
-    return [{ order_number: text(row, "order_number"), driver_name: text(row, "driver_name"), driver_phone: text(row, "driver_phone"), license_plate: text(row, "license_plate"), vehicle_category: text(row, "vehicle_category"), vehicle_model: text(row, "vehicle_model"), confidence: confidence(row.confidence) }];
+    return [{ order_number: text(row, "order_number"), driver_name: text(row, "driver_name"), driver_phone: text(row, "driver_phone"), license_plate: text(row, "license_plate"), vehicle_brand: text(row, "vehicle_brand"), vehicle_category: text(row, "vehicle_category"), vehicle_model: text(row, "vehicle_model"), confidence: confidence(row.confidence) }];
   }), provider, note };
 }
 
@@ -104,7 +104,7 @@ export async function recognizeFleetReplyText(rawText: string, candidateOrderNum
 }
 
 export async function recognizeFleetScreenshot(imageUrl: string): Promise<ScreenshotVision> {
-  if (!isAiVisionRealCallsEnabled()) return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: "AI 实际调用尚未启用；请人工录入。" };
+  if (!isAiVisionRealCallsEnabled()) return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_brand: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: "AI 实际调用尚未启用；请人工录入。" };
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   try {
     if (!key) throw new Error("GLM_NOT_CONFIGURED");
@@ -118,7 +118,7 @@ export async function recognizeFleetScreenshot(imageUrl: string): Promise<Screen
     try {
       const content: QwenContent = [{ type: "text", text: screenshotPrompt }, { type: "image_url", image_url: { url: imageUrl } }];
       return screenshot(await qwenJson<Record<string, unknown>>([{ role: "user", content }], AI_MODELS.vehicleVision.fallback.model, { timeoutMs: AI_MODELS.vehicleVision.fallback.timeoutMs }), "QWEN", `GLM 不可用，已使用 Qwen 备用：${reason instanceof Error ? reason.message : "UNKNOWN"}`);
-    } catch (fallbackError) { return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: unavailableScreenshotNote(reason, fallbackError) }; }
+    } catch (fallbackError) { return { order_number: null, driver_name: null, driver_phone: null, license_plate: null, vehicle_brand: null, vehicle_model: null, confidence: "UNKNOWN", provider: "NONE", note: unavailableScreenshotNote(reason, fallbackError) }; }
   }
 }
 

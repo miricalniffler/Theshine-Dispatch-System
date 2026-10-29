@@ -18,12 +18,21 @@ test("i’way 回传保留完整泰文车牌，只整理多余空格", () => {
   expect(normalizeLicensePlateForReturn("61981")).toBe("61981");
 });
 
-test("Yaris 回传时使用完整的 Toyota Yaris ATIV 车型名称", () => {
+test("车型目录会将唯一型号统一为完整品牌加型号名称", () => {
   expect(normalizeVehicleModel("Yaris")).toBe("Toyota Yaris ATIV");
   expect(normalizeVehicleModel("Toyota Yaris ATIV")).toBe("Toyota Yaris ATIV");
+  expect(normalizeVehicleModel("City")).toBe("Honda City");
+  expect(normalizeVehicleModel("Xpander")).toBe("Mitsubishi Xpander");
+  expect(normalizeVehicleModel("Carnival")).toBe("Kia Carnival");
 });
 
 test("Hiace 回传和人工保存时使用完整的 Toyota HiAce 车型名称", () => {
   expect(normalizeVehicleModel("Hiace")).toBe("Toyota HiAce");
   expect(normalizeVehicleModel("Toyota Hiace")).toBe("Toyota HiAce");
+});
+
+test("识别到的品牌可参与车型目录匹配，未知或矛盾信息不会编造", () => {
+  expect(normalizeVehicleModel("V Class", undefined, "Mercedes")).toBe("Mercedes-Benz V-Class");
+  expect(normalizeVehicleModel("City", undefined, "Toyota")).toBe("City");
+  expect(normalizeVehicleModel("Mystery Shuttle")).toBe("Mystery Shuttle");
 });
