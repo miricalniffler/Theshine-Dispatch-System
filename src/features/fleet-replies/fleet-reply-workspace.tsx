@@ -114,6 +114,17 @@ export function FleetReplyWorkspace() {
     return [!form.orderId ? "对应订单" : "", !form.driverName.trim() ? "司机姓名" : "", !form.driverPhone.trim() ? "司机电话" : "", !form.vehicleModel.trim() ? "车型" : "", !form.licensePlate.trim() ? "车牌" : ""].filter(Boolean);
   }
   function isComplete(form: Editable) { return missingFields(form).length === 0; }
+  function isReliablyMatched(record: ReplyRecord, form: Editable, candidateOrders: CandidateOrder[]) {
+    const matchedNumber = record.order_match.platform_order_number?.replace(/\D/g, "");
+    if (!matchedNumber || !form.orderId) return false;
+    const exactOrders = candidateOrders.filter((order) => order.orderNo.replace(/\D/g, "") === matchedNumber);
+    // A unique exact order number is more reliable than the AI's general
+    // confidence score for the whole reply.  Keep high-confidence inferred
+    // matches too; lower-confidence non-exact matches remain for review.
+    return exactOrders.length === 1
+      ? exactOrders[0].id === form.orderId
+      : record.order_match.confidence === "high";
+  }
   function missingReturnFields(item: ReturnWorkItem) {
     const driver = item.driver;
     return [!driver?.confirmedDriverName ? "司机姓名" : "", !driver?.normalizedDriverPhone ? "司机电话" : "", !driver?.confirmedVehicleModel ? "车型" : "", !driver?.licensePlate ? "车牌" : ""].filter(Boolean);
@@ -212,7 +223,7 @@ export function FleetReplyWorkspace() {
       // 随后仍可点击“修改回传资料”更正；不完整或匹配不确定的结果才需要人工处理。
       const ready = nextForms.filter((form, index) => {
         const record = analysed.data.result.records[index] as ReplyRecord | undefined;
-        return Boolean(record && record.order_match.confidence === "high" && isComplete(form));
+        return Boolean(record && isReliablyMatched(record, form, candidateOrders) && isComplete(form));
       });
       const autoSave = ready.length ? await saveAndGenerate(created.data.id, ready, analysed.data.extractionId) : null;
       const needsEdit = ready.length !== nextForms.length || Boolean(autoSave?.errors.length);

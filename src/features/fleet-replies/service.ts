@@ -301,6 +301,14 @@ async function applyVehicleHistory(records: ReplyRecord[]) {
   }
 }
 
+function normalizeRecognizedVehicleModels(records: ReplyRecord[]) {
+  const rules = loadRules();
+  for (const record of records) {
+    const model = normalizeVehicleModel(record.vehicle_model.value, rules);
+    if (model) record.vehicle_model = field(model, record.vehicle_model.evidence);
+  }
+}
+
 async function applyScreenshotImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
   if (!images.length) return;
   const scans = await Promise.all(images.slice(0, 4).map((image) => recognizeFleetScreenshot(image.storagePath)));
@@ -372,6 +380,9 @@ export async function analyzeFleetReply(replyId: string) {
     else await applyVehicleImages(result.records, reply.images, orders);
   }
   await applyVehicleHistory(result.records);
+  // Apply only the approved aliases (for example Hiace → Toyota HiAce) before
+  // displaying a result. Unknown models remain exactly as entered/recognized.
+  normalizeRecognizedVehicleModels(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
   const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: result.recognition?.label ?? "规则降级", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "glm-5.3-flash → qwen3.7-plus", promptVersion: `fleet-reply-v5-${parserProfile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });

@@ -129,6 +129,9 @@ export function normalizeVehicleModel(vehicle: string | null | undefined, rules:
   // 车队常把品牌写在后面（例如 “Commuter Toyota”），或简称为
   // “All New V9”。这些不是 AI 推测，而是已确认的车型别名。
   if (/\ball\s+new\s+v9\b/i.test(normalizedKey)) return "Toyota HiAce All New V9";
+  // HiAce is a Toyota model.  Fleet replies often omit the brand, but this is
+  // an approved, unambiguous model alias rather than a guess.
+  if (/^(?:toyota\s+)?hiace$/i.test(normalizedKey)) return "Toyota HiAce";
   // 泰国车队常只写 Yaris；这里使用运营已确认的完整回传名称，避免
   // iWay 文本缺少 Toyota / ATIV 信息。
   if (/\b(?:toyota\s+)?yaris(?:\s+ativ)?\b/i.test(normalizedKey)) return "Toyota Yaris ATIV";

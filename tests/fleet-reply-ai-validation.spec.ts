@@ -22,3 +22,8 @@ test("Yaris 回传时使用完整的 Toyota Yaris ATIV 车型名称", () => {
   expect(normalizeVehicleModel("Yaris")).toBe("Toyota Yaris ATIV");
   expect(normalizeVehicleModel("Toyota Yaris ATIV")).toBe("Toyota Yaris ATIV");
 });
+
+test("Hiace 回传和人工保存时使用完整的 Toyota HiAce 车型名称", () => {
+  expect(normalizeVehicleModel("Hiace")).toBe("Toyota HiAce");
+  expect(normalizeVehicleModel("Toyota Hiace")).toBe("Toyota HiAce");
+});
