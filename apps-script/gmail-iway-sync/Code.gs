@@ -147,8 +147,9 @@ function requireConfig_(props) {
 function isStructuredNewOrder_(text) {
   return /Ride number\s*[:：]/i.test(text)
     && /Vehicle class\s*[:：]/i.test(text)
-    && /Itinerary\s*[:：]/i.test(text)
-    && /Clients\s*[:：]/i.test(text);
+    && ((/Itinerary\s*[:：]/i.test(text) && /Clients\s*[:：]/i.test(text))
+      || (/Transfer\s*[:：]/i.test(text) && /Passengers\s*[:：]/i.test(text)
+        && /Pick-up date\s*[:：]/i.test(text) && /Local pick-up time\s*[:：]/i.test(text)));
 }
 
 function isTrustedSender_(from) {
