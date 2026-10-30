@@ -5,6 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 const publicPaths = ["/login", "/diagnostics/mobile", "/diagnostics/app", "/service-worker.js", "/api/access/login", "/api/access/logout"];
 
 export async function proxy(request: NextRequest) {
+  // This server-to-server POST authenticates its own dedicated bearer token.
+  // Redirecting it to the team login preserves POST and produces a 405 there.
+  // Keep GET/status and every other method behind the team-login guard.
+  if (request.method === "POST" && request.nextUrl.pathname === "/api/import-sync/gmail-iway") {
+    return NextResponse.next();
+  }
   if (publicPaths.some((path) => request.nextUrl.pathname.startsWith(path))) {
     return NextResponse.next();
   }
