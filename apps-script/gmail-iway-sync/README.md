@@ -33,6 +33,7 @@
 
 Production 必须使用**不同的**地址、令牌和目标环境值：
 
+- `IWAY_GMAIL_INGEST_URL=https://dispatch.theshinetrip.com/api/import-sync/gmail-iway`；这是稳定的 Production 域名，不能使用每次部署都会变化的 Preview 地址；
 - Production 的 `IWAY_GMAIL_INGEST_TOKEN` 与 Preview 完全不同；
 - Production 的 `IWAY_GMAIL_TARGET_ENVIRONMENT=production`；
 - Apps Script 的 `IWAY_GMAIL_TARGET_ENVIRONMENT=production`；

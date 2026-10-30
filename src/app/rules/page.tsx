@@ -46,7 +46,9 @@ function GmailSyncState() {
   }, []);
   const run = status?.latestRun;
   const label = !status ? "正在读取状态…" : !status.configured ? "Gmail 同步待启用" : run?.status === "FAILED" ? "上次同步失败" : run?.status === "RUNNING" ? "同步进行中" : run?.status === "SUCCEEDED" ? "上次同步成功" : "尚未同步";
-  const detail = error || (!status ? "" : !status.configured ? "等待 Gmail 授权及安全启用；现有飞书 / Mac 同步不受影响。" : run?.status === "FAILED" ? (run.errorMessage || "请检查 Gmail 同步执行记录。") : run?.status === "SUCCEEDED" ? `新增 ${run.createdCount} · 已存在或未导入 ${run.skippedCount}` : "Google Apps Script 会按计划检查可信 iWay 新订单。取消和修改邮件不会自动处理。");
+  const at = run?.completedAt || run?.startedAt;
+  const time = at ? new Date(at).toLocaleString("zh-CN") : "—";
+  const detail = error || (!status ? "" : !status.configured ? "等待 Gmail 授权及安全启用；现有飞书 / Mac 同步不受影响。" : run?.status === "FAILED" ? `最近尝试：${time} · ${run.errorMessage || "请检查 Gmail 同步执行记录。"}` : run?.status === "SUCCEEDED" ? `最近成功：${time} · 新增 ${run.createdCount} · 已存在或未导入 ${run.skippedCount}` : "服务器已准备好，正在等待 Google Apps Script 的首次检查。取消和修改邮件不会自动处理。");
   return <section id="gmail-sync" className="sync-status-card" aria-label="Gmail iWay 新订单同步状态"><div><p>Gmail 云端 iWay 新订单同步</p><h2>{label}</h2><span>{detail}</span></div><span>独立于飞书本机助手 · 仅导入新订单</span></section>;
 }
 

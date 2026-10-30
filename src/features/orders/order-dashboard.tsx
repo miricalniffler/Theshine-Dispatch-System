@@ -12,6 +12,7 @@ import "./orders-table-layout.css";
 
 const exceptionLabels = { MISSING_CUSTOMER_PHONE: "缺少客人电话", AIRPORT_GUIDE_MISSING: "缺少机场指引", AIRPORT_UNRESOLVED: "机场无法确定", CUSTOMER_REPLY_REVIEW: "客人回复待查看", CUSTOMER_ORDER_DISCREPANCY: "客人说订单有误", UNUSUAL_LUGGAGE: "行李偏多", VEHICLE_CAPACITY_RISK: "车型承载风险", VEHICLE_CAPACITY_RULE_MISSING: "缺车型承载规则", DRIVER_NOTIFICATION_INCOMPLETE: "司机通知资料不完整" };
 type SyncRun = { status: "REQUESTED" | "RUNNING" | "SUCCEEDED" | "FAILED"; startedAt?: string; completedAt?: string | null; createdCount: number; updatedCount: number; cancelledCount: number; skippedCount: number; errorMessage?: string | null };
+type GmailSyncStatus = { configured: boolean; latestRun?: Pick<SyncRun, "status" | "startedAt" | "completedAt" | "createdCount" | "skippedCount" | "errorMessage"> | null };
 function today() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()); }
 function displayToday() { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Bangkok", year: "numeric", month: "long", day: "numeric" }).format(new Date()); }
 function displaySyncFailure(message: string) {
@@ -19,6 +20,21 @@ function displaySyncFailure(message: string) {
     return "飞书邮箱授权已失效，暂时无法同步。请在安装同步助手的电脑上重新登录飞书后再试。";
   }
   return message || "飞书同步暂时失败，请稍后再试；已有订单不会受影响。";
+}
+function displaySyncTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "medium" }).format(date);
+}
+function gmailSyncSummary(status: GmailSyncStatus | null) {
+  if (!status) return "Gmail 云端同步状态读取中…";
+  if (!status.configured) return "Gmail 云端同步尚未启用。";
+  const run = status.latestRun;
+  if (!run) return "Gmail 服务端已准备好，正在等待 Google Apps Script 的首次检查。";
+  const when = displaySyncTime(run.completedAt || run.startedAt);
+  if (run.status === "FAILED") return `Gmail 最近同步失败（${when}）：${run.errorMessage || "请检查 Google Apps Script 执行记录。"}`;
+  if (run.status === "RUNNING") return `Gmail 正在同步（开始于 ${when}）。`;
+  return `Gmail 最近同步成功（${when}）：新增 ${run.createdCount} 笔，已存在或未导入 ${run.skippedCount} 笔。`;
 }
 function missingDriverFields(order: Order) {
   const driver = order.driverDetail;
@@ -60,6 +76,7 @@ export function OrderDashboard() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [syncingMail, setSyncingMail] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const [gmailSync, setGmailSync] = useState<GmailSyncStatus | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const query = useMemo(() => { const params = new URLSearchParams(); Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); }); return params.toString(); }, [filters]);
   useEffect(() => {
@@ -75,6 +92,14 @@ export function OrderDashboard() {
       }).finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [query, refreshVersion]);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/import-sync/gmail-iway", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => { if (active) setGmailSync(payload.data || null); })
+      .catch(() => { if (active) setGmailSync({ configured: false }); });
+    return () => { active = false; };
+  }, []);
   async function syncMailAndRefresh() {
     setSyncingMail(true);
     setSyncMessage("正在从飞书读取订单…");
@@ -117,7 +142,7 @@ export function OrderDashboard() {
   const allSelected = orders.length > 0 && selected.length === orders.length;
   const toggleOne = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   return <main className="v3-page">
-    <header className="v3-top"><div><h1>订单工作台</h1><p>{displayToday()} · 默认今天至未来 7 日</p><small className="v3-sync-state">订单仅在首次打开、筛选变更或你手动刷新时更新{lastRefreshedAt ? ` · 最后刷新 ${lastRefreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}{syncMessage ? ` · ${syncMessage}` : ""}</small></div><div className="v3-top-actions"><a className="v3-secondary" href="/import">手动录入订单</a><a className="v3-secondary" href="/rules#gmail-sync">查看 Gmail 云端同步</a><button className="v3-secondary" type="button" onClick={syncMailAndRefresh} disabled={loading || syncingMail}>{syncingMail ? "正在同步飞书（本机）…" : "同步飞书（本机）并刷新"}</button></div></header>
+    <header className="v3-top"><div><h1>订单工作台</h1><p>{displayToday()} · 默认今天至未来 7 日</p><small className="v3-sync-state">订单仅在首次打开、筛选变更或你手动刷新时更新{lastRefreshedAt ? ` · 最后刷新 ${lastRefreshedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}{syncMessage ? ` · ${syncMessage}` : ""}</small><small className="v3-gmail-sync-state">{gmailSyncSummary(gmailSync)}</small></div><div className="v3-top-actions"><a className="v3-secondary" href="/import">手动录入订单</a><a className="v3-secondary" href="/rules#gmail-sync">查看 Gmail 云端同步</a><button className="v3-secondary" type="button" onClick={syncMailAndRefresh} disabled={loading || syncingMail}>{syncingMail ? "正在同步飞书（本机）…" : "同步飞书（本机）并刷新"}</button></div></header>
     <section className="v3-metrics" aria-label="订单概览">
       <Metric value={summary?.waitingFleetReply} label="等待车队回复"/><Metric value={summary?.incompleteDriver} label="司机资料需补充"/><Metric value={summary?.readyIwayReturn} label="可回传 i’way"/><Metric value={summary?.exceptions} label="异常订单"/>
     </section>
