@@ -126,29 +126,65 @@ function vehicleKey(value: string) {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").trim();
 }
 
+export type VehicleModelResolution = {
+  value: string | null;
+  needsManualReview: boolean;
+  reviewReason?: string;
+};
+
 /**
- * Returns a catalogued, complete brand + model name only when the model alias
- * identifies one vehicle (or a supplied brand resolves the ambiguity).
- * Otherwise it deliberately preserves the original wording.
+ * Combines only evidence the source already supplied. The vehicle catalogue
+ * may standardize a known complete brand/model pair, but is never a whitelist
+ * and must not invent a missing brand for an otherwise model-only value.
  */
-export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules(), recognizedBrand?: string | null) {
-  if (!vehicle) return null;
-  const trimmed = vehicle.trim();
-  const modelKey = vehicleKey(trimmed);
-  const brandKey = recognizedBrand ? vehicleKey(recognizedBrand) : "";
-  const candidates = rules.transforms.vehicle_models.filter((entry) => {
-    const modelAliases = [entry.canonical_name, ...entry.model_aliases, ...(entry.aliases ?? [])].map(vehicleKey);
-    return modelAliases.includes(modelKey);
-  });
+export function resolveVehicleModel(
+  vehicle: string | null | undefined,
+  recognizedBrand?: string | null,
+  rules: RulesConfig = loadRules(),
+): VehicleModelResolution {
+  if (!vehicle?.trim()) return { value: null, needsManualReview: false };
+
+  const model = vehicle.trim().replace(/\s+/g, " ");
+  const brand = recognizedBrand?.trim().replace(/\s+/g, " ") || null;
+  const modelKey = vehicleKey(model);
+  const brandKey = brand ? vehicleKey(brand) : "";
+  const candidates = rules.transforms.vehicle_models.filter((entry) =>
+    [entry.canonical_name, ...entry.model_aliases, ...(entry.aliases ?? [])]
+      .map(vehicleKey)
+      .includes(modelKey),
+  );
   const brandMatches = (entry: RulesConfig["transforms"]["vehicle_models"][number]) =>
     [entry.brand, ...(entry.brand_aliases ?? [])].map(vehicleKey).includes(brandKey);
-  const byBrand = brandKey ? candidates.filter(brandMatches) : [];
-  // When AI explicitly supplied a brand, do not silently replace it with a
-  // different catalog brand.  A conflicting or ambiguous pair stays original
-  // for an operator to review.
-  if (brandKey) return byBrand.length === 1 ? byBrand[0].canonical_name : trimmed;
-  if (candidates.length === 1) return candidates[0].canonical_name;
-  return rules.transforms.vehicle_aliases[trimmed.toLocaleLowerCase().replace(/\s+/g, " ")] ?? trimmed;
+  const modelBrand = candidates.length === 1 ? candidates[0] : null;
+
+  if (brand && modelBrand && !brandMatches(modelBrand)) {
+    return { value: model, needsManualReview: true, reviewReason: "AI 识别的品牌与车型信息冲突，请人工确认" };
+  }
+
+  if (brand) {
+    const matchingCandidate = candidates.filter(brandMatches);
+    if (matchingCandidate.length === 1) {
+      return { value: matchingCandidate[0].canonical_name, needsManualReview: false };
+    }
+    // The model already contains the AI-supplied brand (for example “BYD
+    // Sealion 7”), so preserve it rather than duplicating the prefix.
+    if (modelKey.includes(brandKey)) return { value: model, needsManualReview: false };
+    // A new model outside the catalogue is still valid when the same AI result
+    // explicitly supplied both fields. Do not make catalogue membership a gate.
+    return { value: `${brand} ${model}`, needsManualReview: false };
+  }
+
+  // A complete known name can receive harmless capitalization normalization;
+  // a model-only value remains exactly as received and needs operator review.
+  if (modelBrand && vehicleKey(modelBrand.canonical_name) === modelKey) {
+    return { value: modelBrand.canonical_name, needsManualReview: false };
+  }
+  return { value: model, needsManualReview: true, reviewReason: "AI 只识别到车型，缺少可确认的品牌，请人工确认" };
+}
+
+/** Kept for callers that only need a display/save string, never an inferred brand. */
+export function normalizeVehicleModel(vehicle: string | null | undefined, rules: RulesConfig = loadRules(), recognizedBrand?: string | null) {
+  return resolveVehicleModel(vehicle, recognizedBrand, rules).value;
 }
 
 export function formatServiceDateLabel(serviceDate: string, locale: "zh" | "en" = "zh") {

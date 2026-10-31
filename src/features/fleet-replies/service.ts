@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
-import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel } from "@/lib/rules/engine";
+import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, resolveVehicleModel } from "@/lib/rules/engine";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
 import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
@@ -16,6 +16,8 @@ type ReplyRecord = {
   driver_phone: Field;
   license_plate: Field;
   vehicle_category: Field;
+  vehicle_brand: Field;
+  vehicle_model_raw: Field;
   vehicle_model: Field;
   image_source_index: number | null;
   needs_review: boolean;
@@ -36,6 +38,17 @@ function bangkokTomorrow() {
 }
 function hasThai(value: string | null) { return Boolean(value && /[\u0E00-\u0E7F]/.test(value)); }
 function field(value: string | null | undefined, evidence: string): Field { return { value: value?.trim() || null, evidence }; }
+
+function applyRecognizedVehicle(target: ReplyRecord, brand: string | null, model: string | null, evidence: string) {
+  if (brand) target.vehicle_brand = field(brand, evidence);
+  if (model) target.vehicle_model_raw = field(model, evidence);
+  const resolved = resolveVehicleModel(model, brand, loadRules());
+  if (resolved.value) target.vehicle_model = field(resolved.value, evidence);
+  if (resolved.needsManualReview && resolved.reviewReason) {
+    target.needs_review = true;
+    if (!target.review_reasons.includes(resolved.reviewReason)) target.review_reasons.push(resolved.reviewReason);
+  }
+}
 
 async function candidateOrdersFor(reply: { dispatchBatchId: string | null; candidateOrderIds: string | null }) {
   const ids = parseIds(reply.candidateOrderIds);
@@ -176,7 +189,7 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
     if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
     if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
-    if (item.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(item.vehicle_model, loadRules(), item.vehicle_brand), `${result.recognition.label} 识别`);
+    if (item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`);
   }
 }
 
@@ -217,6 +230,8 @@ function parseBangkokRecords(text: string, orders: CandidateOrder[]): Analysis {
       driver_phone: field(readPhone(driverReply), "从订单末尾的车队回复区读取"),
       license_plate: field(readPlate(driverReply), "从订单末尾的车队回复区读取"),
       vehicle_category: field(null, ""),
+      vehicle_brand: field(null, ""),
+      vehicle_model_raw: field(readVehicleModel(driverReply, false), "按车队 Type/Model 标注读取；无标注时使用对应车辆图片"),
       vehicle_model: field(readVehicleModel(driverReply, false), "按车队 Type/Model 标注读取；无标注时使用对应车辆图片"),
       image_source_index: null,
       needs_review: !exact,
@@ -261,6 +276,8 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
       driver_phone: field(phone, "订单号行中的泰国电话"),
       license_plate: field(plate, "订单号行末车牌数字"),
       vehicle_category: field(null, ""),
+      vehicle_brand: field(null, ""),
+      vehicle_model_raw: field(model, "订单号行中的具体车型"),
       vehicle_model: field(model, "订单号行中的具体车型"),
       image_source_index: null,
       needs_review: !exact,
@@ -301,14 +318,6 @@ async function applyVehicleHistory(records: ReplyRecord[]) {
   }
 }
 
-function normalizeRecognizedVehicleModels(records: ReplyRecord[]) {
-  const rules = loadRules();
-  for (const record of records) {
-    const model = normalizeVehicleModel(record.vehicle_model.value, rules);
-    if (model) record.vehicle_model = field(model, record.vehicle_model.evidence);
-  }
-}
-
 async function applyScreenshotImages(records: ReplyRecord[], images: { storagePath: string }[], orders: CandidateOrder[]) {
   if (!images.length) return;
   const scans = await Promise.all(images.slice(0, 4).map((image) => recognizeFleetScreenshot(image.storagePath)));
@@ -321,7 +330,7 @@ async function applyScreenshotImages(records: ReplyRecord[], images: { storagePa
     if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
     if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
     if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
-    if (!target.vehicle_model.value && scan.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(scan.vehicle_model, loadRules(), scan.vehicle_brand), `来自截图 ${index + 1}`);
+    if (!target.vehicle_model.value && scan.vehicle_model) applyRecognizedVehicle(target, scan.vehicle_brand, scan.vehicle_model, `来自截图 ${index + 1}`);
     target.image_source_index = index + 1;
   });
 }
@@ -347,7 +356,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     target.image_source_index = imageIndex + 1;
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
-    if (!target.vehicle_model.value && visual.vehicle_model) target.vehicle_model = field(normalizeVehicleModel(visual.vehicle_model, loadRules(), visual.vehicle_brand), `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_model.value && visual.vehicle_model) applyRecognizedVehicle(target, visual.vehicle_brand, visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
     if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }
@@ -380,9 +389,6 @@ export async function analyzeFleetReply(replyId: string) {
     else await applyVehicleImages(result.records, reply.images, orders);
   }
   await applyVehicleHistory(result.records);
-  // Apply only the approved aliases (for example Hiace → Toyota HiAce) before
-  // displaying a result. Unknown models remain exactly as entered/recognized.
-  normalizeRecognizedVehicleModels(result.records);
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
   const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: result.recognition?.label ?? "规则降级", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "glm-5.3-flash → qwen3.7-plus", promptVersion: `fleet-reply-v5-${parserProfile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });

@@ -1,5 +1,5 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-10-31.1"
+rules_version: "2026-10-31.2"
 timezone: "Asia/Bangkok"
 
 templates:
@@ -89,9 +89,6 @@ transforms:
     - brand: Toyota
       canonical_name: "Toyota Camry"
       model_aliases: ["camry"]
-    - brand: Toyota
-      canonical_name: "Toyota Innova"
-      model_aliases: ["innova", "inova"]
     - brand: Toyota
       canonical_name: "Toyota Fortuner"
       model_aliases: ["fortuner"]

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import "@/features/iway/iway.css";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
-type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
+type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_brand: { value: string | null; evidence: string }; vehicle_model_raw: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
 type Result = { records: ReplyRecord[]; unmatched_items: { source_type: string; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
 type Editable = { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory: string; vehicleModel: string };
 type ReturnWorkItem = { order: CandidateOrder & { serviceDate: string; pickupTime: string; status: string }; driver: { confirmedDriverName: string | null; normalizedDriverPhone: string | null; confirmedVehicleCategory: string | null; confirmedVehicleModel: string | null; licensePlate: string | null } | null };
@@ -115,6 +115,7 @@ export function FleetReplyWorkspace() {
   }
   function isComplete(form: Editable) { return missingFields(form).length === 0; }
   function isReliablyMatched(record: ReplyRecord, form: Editable, candidateOrders: CandidateOrder[]) {
+    if (record.needs_review) return false;
     const matchedNumber = record.order_match.platform_order_number?.replace(/\D/g, "");
     if (!matchedNumber || !form.orderId) return false;
     const exactOrders = candidateOrders.filter((order) => order.orderNo.replace(/\D/g, "") === matchedNumber);
@@ -304,7 +305,7 @@ export function FleetReplyWorkspace() {
           <label>车辆类别<input value={forms[index]?.vehicleCategory ?? ""} onChange={(event) => setForm(index, "vehicleCategory", event.target.value)} placeholder="例如 VAN" /></label>
           <label>具体车型<input value={forms[index]?.vehicleModel ?? ""} onChange={(event) => setForm(index, "vehicleModel", event.target.value)} /></label>
         </div>
-        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.image_source_index ? `；关联车辆图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
+        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.vehicle_brand.value ? `；AI 品牌：${record.vehicle_brand.value}` : ""}{record.vehicle_model_raw.value && record.vehicle_model_raw.value !== record.vehicle_model.value ? `；AI 型号原文：${record.vehicle_model_raw.value}` : ""}{record.image_source_index ? `；关联车辆图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
       </article>)}
       {result.unmatched_items.length > 0 && <div className="unmatched-block"><h3>待补充信息</h3>{result.unmatched_items.map((item) => <p key={`${item.source_type}-${item.source_id}`}>{item.reason || "AI 无法判断归属，请补充订单号。"}</p>)}</div>}
       <div className="preview-actions"><button type="button" className="confirm-action" onClick={saveAssigned} disabled={working}>{working ? "正在生成…" : "保存修改并重新生成回传"}</button><button type="button" className="secondary-action" onClick={cancelEditing} disabled={working}>取消修改</button></div></>}

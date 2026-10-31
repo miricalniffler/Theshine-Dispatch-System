@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { sanitizeAiDriverName, sanitizeAiPlate } from "../src/features/fleet-replies/service";
-import { normalizeLicensePlateForReturn, normalizeVehicleModel } from "../src/lib/rules/engine";
-import { driverDetailForDisplay } from "../src/features/orders/driver-detail-display";
+import { normalizeLicensePlateForReturn, normalizeVehicleModel, resolveVehicleModel } from "../src/lib/rules/engine";
 
 test("AI 结构化结果不允许把车牌或电话标签写入司机姓名", () => {
   expect(sanitizeAiDriverName("Mr.Krachit")).toBe("Mr.Krachit");
@@ -19,44 +18,50 @@ test("i’way 回传保留完整泰文车牌，只整理多余空格", () => {
   expect(normalizeLicensePlateForReturn("61981")).toBe("61981");
 });
 
-test("车型目录会将唯一型号统一为完整品牌加型号名称", () => {
-  expect(normalizeVehicleModel("Yaris")).toBe("Toyota Yaris ATIV");
-  expect(normalizeVehicleModel("Toyota Yaris ATIV")).toBe("Toyota Yaris ATIV");
-  expect(normalizeVehicleModel("City")).toBe("Honda City");
-  expect(normalizeVehicleModel("Xpander")).toBe("Mitsubishi Xpander");
-  expect(normalizeVehicleModel("Carnival")).toBe("Kia Carnival");
-});
-
-test("Hiace 回传和人工保存时使用完整的 Toyota HiAce 车型名称", () => {
-  expect(normalizeVehicleModel("Hiace")).toBe("Toyota HiAce");
-  expect(normalizeVehicleModel("Toyota Hiace")).toBe("Toyota HiAce");
-});
-
-test("AI、人工录入和 iWay 回传共用目录，统一补足 Toyota 车型名称", () => {
-  expect(normalizeVehicleModel("INOVA")).toBe("Toyota Innova");
-  expect(normalizeVehicleModel("HiAce")).toBe("Toyota HiAce");
-  expect(normalizeVehicleModel("Fortuner")).toBe("Toyota Fortuner");
-  expect(normalizeVehicleModel("Camry")).toBe("Toyota Camry");
-});
-
-test("订单列表和订单详情在读取历史车型时规范化，但不写回旧记录", () => {
-  const savedDetail = {
-    confirmedDriverName: "AIM",
-    normalizedDriverPhone: "0638701934",
-    confirmedVehicleModel: "INOVA",
-    confirmedVehicleType: "Minivan",
-    confirmedLicensePlate: "7280",
-  };
-
-  expect(driverDetailForDisplay(savedDetail)).toEqual({
-    ...savedDetail,
-    confirmedVehicleModel: "Toyota Innova",
+test("AI 提供品牌和未收录的新车型时，完整品牌加型号会被直接保留", () => {
+  expect(resolveVehicleModel("Sealion 7", "BYD")).toMatchObject({
+    value: "BYD Sealion 7",
+    needsManualReview: false,
   });
-  expect(savedDetail.confirmedVehicleModel).toBe("INOVA");
+  expect(resolveVehicleModel("INOVA", "Toyota")).toMatchObject({
+    value: "Toyota INOVA",
+    needsManualReview: false,
+  });
 });
 
-test("识别到的品牌可参与车型目录匹配，未知或矛盾信息不会编造", () => {
-  expect(normalizeVehicleModel("V Class", undefined, "Mercedes")).toBe("Mercedes-Benz V-Class");
-  expect(normalizeVehicleModel("City", undefined, "Toyota")).toBe("City");
-  expect(normalizeVehicleModel("Mystery Shuttle")).toBe("Mystery Shuttle");
+test("目录只做已知完整品牌车型的保守格式校验，不为缺失品牌补全", () => {
+  expect(resolveVehicleModel("toyota camry", "Toyota")).toMatchObject({
+    value: "Toyota Camry",
+    needsManualReview: false,
+  });
+  expect(resolveVehicleModel("Camry")).toMatchObject({
+    value: "Camry",
+    needsManualReview: true,
+  });
+  expect(normalizeVehicleModel("INOVA")).toBe("INOVA");
+});
+
+test("AI 品牌缺失或冲突时保留原文并要求人工确认", () => {
+  expect(resolveVehicleModel("Fortuner")).toMatchObject({
+    value: "Fortuner",
+    needsManualReview: true,
+  });
+  expect(resolveVehicleModel("Toyota Camry", "Honda")).toMatchObject({
+    value: "Toyota Camry",
+    needsManualReview: true,
+  });
+});
+
+test("泰文和人工输入的完整车型原文在保存前规范化时不被截断或猜测", () => {
+  expect(resolveVehicleModel("อินโนวา", "Toyota")).toMatchObject({
+    value: "Toyota อินโนวา",
+    needsManualReview: false,
+  });
+  expect(normalizeVehicleModel("Lexus LM 350h")).toBe("Lexus LM 350h");
+});
+
+test("已存历史车型不会在读取时被目录补写或降级", () => {
+  expect(normalizeVehicleModel("Toyota Innova")).toBe("Toyota Innova");
+  expect(normalizeVehicleModel("INOVA")).toBe("INOVA");
+  expect(normalizeVehicleModel("BYD Sealion 7")).toBe("BYD Sealion 7");
 });
