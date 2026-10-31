@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import type { Order, OrderFilters } from "./types";
 import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
+import { loadRules } from "@/lib/rules/load-rules";
+import { driverDetailForDisplay } from "./driver-detail-display";
 
 export async function findPersistedOrder(id: string) {
   return db.order.findUnique({ where: { id }, include: { driverDetail: true, activityLogs: { orderBy: { createdAt: "asc" } } } });
@@ -65,6 +67,7 @@ function bangkokDateRange(filters: OrderFilters) {
 }
 
 export async function listSqliteOrders(filters: OrderFilters = {}) {
+  const rules = loadRules();
   const keyword = filters.keyword?.trim();
   // A direct search is also a recovery path for older orders, so it must not
   // be hidden behind the default upcoming-date window.
@@ -101,6 +104,18 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
       let cancelReason: string | null = null;
       try { const value = JSON.parse(cancellation?.metadata ?? "{}"); cancelReason = typeof value.reason === "string" ? value.reason : null; } catch { /* legacy audit metadata */ }
       const latestNote = latestNotes.get(row.id);
-      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail: row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate, reassignmentCount: row.driverVehicleAssignments.length } : null };
+      const driverDetail = row.driverDetail
+        ? driverDetailForDisplay(
+            {
+              confirmedDriverName: row.driverDetail.confirmedDriverName,
+              normalizedDriverPhone: row.driverDetail.normalizedDriverPhone,
+              confirmedVehicleModel: row.driverDetail.confirmedVehicleModel,
+              licensePlate: row.driverDetail.licensePlate,
+              reassignmentCount: row.driverVehicleAssignments.length,
+            },
+            rules,
+          )
+        : null;
+      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail };
     });
 }
