@@ -24,7 +24,7 @@ type ReplyRecord = {
   review_reasons: string[];
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
-type VisualResult = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null };
+type VisualResult = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN" };
 type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
@@ -39,7 +39,7 @@ function bangkokTomorrow() {
 function hasThai(value: string | null) { return Boolean(value && /[\u0E00-\u0E7F]/.test(value)); }
 function field(value: string | null | undefined, evidence: string): Field { return { value: value?.trim() || null, evidence }; }
 
-function applyRecognizedVehicle(target: ReplyRecord, brand: string | null, model: string | null, evidence: string) {
+function applyRecognizedVehicle(target: ReplyRecord, brand: string | null, model: string | null, evidence: string, confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN") {
   if (brand) target.vehicle_brand = field(brand, evidence);
   if (model) target.vehicle_model_raw = field(model, evidence);
   const resolved = resolveVehicleModel(model, brand, loadRules());
@@ -47,6 +47,11 @@ function applyRecognizedVehicle(target: ReplyRecord, brand: string | null, model
   if (resolved.needsManualReview && resolved.reviewReason) {
     target.needs_review = true;
     if (!target.review_reasons.includes(resolved.reviewReason)) target.review_reasons.push(resolved.reviewReason);
+  }
+  if (confidence !== "HIGH") {
+    target.needs_review = true;
+    const reason = "AI 车型识别置信度不足，请人工确认";
+    if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
   }
 }
 
@@ -189,7 +194,7 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
     if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
     if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
-    if (item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`);
+    if (item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`, item.confidence);
   }
 }
 
@@ -330,7 +335,7 @@ async function applyScreenshotImages(records: ReplyRecord[], images: { storagePa
     if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
     if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
     if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
-    if (!target.vehicle_model.value && scan.vehicle_model) applyRecognizedVehicle(target, scan.vehicle_brand, scan.vehicle_model, `来自截图 ${index + 1}`);
+    if (!target.vehicle_model.value && scan.vehicle_model) applyRecognizedVehicle(target, scan.vehicle_brand, scan.vehicle_model, `来自截图 ${index + 1}`, scan.confidence);
     target.image_source_index = index + 1;
   });
 }
@@ -356,7 +361,7 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
     target.image_source_index = imageIndex + 1;
     if (!target.license_plate.value && visual.license_plate) target.license_plate = field(visual.license_plate, `来自车辆图片 ${imageIndex + 1}`);
     // 车队文字已经给出具体车型时优先采用文字；图片只作为核对来源。
-    if (!target.vehicle_model.value && visual.vehicle_model) applyRecognizedVehicle(target, visual.vehicle_brand, visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`);
+    if (!target.vehicle_model.value && visual.vehicle_model) applyRecognizedVehicle(target, visual.vehicle_brand, visual.vehicle_model, `来自车辆图片 ${imageIndex + 1}`, visual.confidence);
     if (!target.vehicle_category.value && visual.vehicle_category) target.vehicle_category = field(visual.vehicle_category, `来自车辆图片 ${imageIndex + 1}`);
   });
 }
@@ -403,11 +408,24 @@ export async function getFleetReply(replyId: string) {
   return { id: reply.id, rawText: reply.rawText, images: reply.images.map(({ id, originalFilename, mimeType }) => ({ id, originalFilename, mimeType })), orders, extraction: extraction ? { id: extraction.id, status: extraction.status, message: extraction.errorMessage, result: extraction.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null } : null, confirmations: reply.confirmations };
 }
 
-export async function confirmFleetReply(replyId: string, input: { extractionId?: string; records: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string }[] }) {
+type SavedAnalysisRecord = { order_match?: { platform_order_number?: string | null }; needs_review?: boolean };
+
+export function requiresManualVehicleConfirmation(record: SavedAnalysisRecord | undefined) {
+  return record?.needs_review === true;
+}
+
+export async function confirmFleetReply(replyId: string, input: { extractionId?: string; records: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string; vehicleManualConfirmed?: boolean }[] }) {
   const reply = await db.fleetReply.findUnique({ where: { id: replyId } });
   if (!reply) throw new Error("REPLY_NOT_FOUND");
   const candidates = await candidateOrdersFor(reply);
   const allowed = new Set(candidates.map((order) => order.id));
+  const orderNoById = new Map(candidates.map((order) => [order.id, order.orderNo]));
+  const extraction = input.extractionId ? await db.aiExtraction.findFirst({ where: { id: input.extractionId, fleetReplyId: replyId }, select: { validatedResultJson: true } }) : null;
+  let analysisRecords: SavedAnalysisRecord[] = [];
+  try {
+    const parsed = extraction?.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null;
+    analysisRecords = Array.isArray(parsed?.records) ? parsed.records : [];
+  } catch { analysisRecords = []; }
   const rules = loadRules();
   const accepted: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; rawLicensePlate: string; vehicleCategory?: string; vehicleModel: string }[] = [];
   const errors: { orderId: string; message: string }[] = [];
@@ -415,6 +433,11 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
     const current = await db.order.findUnique({ where: { id: record.orderId }, select: { status: true } });
     if (current?.status === "CANCELLED") { errors.push({ orderId: record.orderId, message: "订单已取消，不能写入司机资料。" }); continue; }
+    const matchedAnalysis = analysisRecords.find((item) => normalizedOrderNo(item.order_match?.platform_order_number ?? "") === normalizedOrderNo(orderNoById.get(record.orderId) ?? ""));
+    if (requiresManualVehicleConfirmation(matchedAnalysis) && !record.vehicleManualConfirmed) {
+      errors.push({ orderId: record.orderId, message: "AI 车型存在品牌缺失或冲突；请先人工核对车型并勾选确认后再保存。" });
+      continue;
+    }
     const phone = normalizeThailandPhone(record.driverPhone, rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [

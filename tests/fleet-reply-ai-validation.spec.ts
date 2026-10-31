@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { sanitizeAiDriverName, sanitizeAiPlate } from "../src/features/fleet-replies/service";
+import { requiresManualVehicleConfirmation, sanitizeAiDriverName, sanitizeAiPlate } from "../src/features/fleet-replies/service";
 import { normalizeLicensePlateForReturn, normalizeVehicleModel, resolveVehicleModel } from "../src/lib/rules/engine";
 
 test("AI 结构化结果不允许把车牌或电话标签写入司机姓名", () => {
@@ -64,4 +64,10 @@ test("已存历史车型不会在读取时被目录补写或降级", () => {
   expect(normalizeVehicleModel("Toyota Innova")).toBe("Toyota Innova");
   expect(normalizeVehicleModel("INOVA")).toBe("INOVA");
   expect(normalizeVehicleModel("BYD Sealion 7")).toBe("BYD Sealion 7");
+});
+
+test("服务端会要求明确人工确认 AI 标记为待复核的车型", () => {
+  expect(requiresManualVehicleConfirmation({ needs_review: true })).toBe(true);
+  expect(requiresManualVehicleConfirmation({ needs_review: false })).toBe(false);
+  expect(requiresManualVehicleConfirmation(undefined)).toBe(false);
 });
