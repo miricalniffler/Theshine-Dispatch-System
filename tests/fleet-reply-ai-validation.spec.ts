@@ -68,6 +68,10 @@ test("已存历史车型不会在读取时被目录补写或降级", () => {
 
 test("服务端会要求明确人工确认 AI 标记为待复核的车型", () => {
   expect(requiresManualVehicleConfirmation({ needs_review: true })).toBe(true);
-  expect(requiresManualVehicleConfirmation({ needs_review: false })).toBe(false);
-  expect(requiresManualVehicleConfirmation(undefined)).toBe(false);
+  expect(requiresManualVehicleConfirmation({ needs_review: false, vehicle_model: { value: "BYD Sealion 7" } })).toBe(false);
+  expect(requiresManualVehicleConfirmation(undefined)).toBe(true);
 });
+
+ test("目录外型号含其他明确品牌前缀时不自动拼接冲突品牌", () => {
+ expect(resolveVehicleModel("Honda Shuttle", "Toyota").needsManualReview).toBe(true);
+ });

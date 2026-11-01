@@ -394,6 +394,15 @@ export async function analyzeFleetReply(replyId: string) {
     else await applyVehicleImages(result.records, reply.images, orders);
   }
   await applyVehicleHistory(result.records);
+  // Rule fallback and historical plate reuse must obey the same brand gate as
+  // AI results. Never auto-save an unverified model-only fallback.
+  for (const record of result.records) {
+    const vehicle = resolveVehicleModel(record.vehicle_model.value, record.vehicle_brand.value, loadRules());
+    if (vehicle.needsManualReview) {
+      record.needs_review = true;
+      if (vehicle.reviewReason && !record.review_reasons.includes(vehicle.reviewReason)) record.review_reasons.push(vehicle.reviewReason);
+    }
+  }
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。
   const autoWritten = 0;
   const extraction = await db.aiExtraction.create({ data: { fleetReplyId: reply.id, provider: result.recognition?.label ?? "规则降级", modelName: reply.images.length ? "glm-5.3-flash → qwen3.7-plus" : "glm-5.3-flash → qwen3.7-plus", promptVersion: `fleet-reply-v5-${parserProfile.toLowerCase()}`, rawModelJson: JSON.stringify(result), validatedResultJson: JSON.stringify(result), status: "SUCCEEDED" } });
@@ -408,10 +417,11 @@ export async function getFleetReply(replyId: string) {
   return { id: reply.id, rawText: reply.rawText, images: reply.images.map(({ id, originalFilename, mimeType }) => ({ id, originalFilename, mimeType })), orders, extraction: extraction ? { id: extraction.id, status: extraction.status, message: extraction.errorMessage, result: extraction.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null } : null, confirmations: reply.confirmations };
 }
 
-type SavedAnalysisRecord = { order_match?: { platform_order_number?: string | null }; needs_review?: boolean };
+type SavedAnalysisRecord = { order_match?: { platform_order_number?: string | null }; needs_review?: boolean; vehicle_model?: { value?: string | null } };
 
-export function requiresManualVehicleConfirmation(record: SavedAnalysisRecord | undefined) {
-  return record?.needs_review === true;
+export function requiresManualVehicleConfirmation(record: SavedAnalysisRecord | undefined, proposedVehicle?: string) {
+  if (!record || record.needs_review !== false || !record.vehicle_model?.value) return true;
+  return proposedVehicle !== undefined && proposedVehicle.trim() !== record.vehicle_model.value.trim();
 }
 
 export async function confirmFleetReply(replyId: string, input: { extractionId?: string; records: { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory?: string; vehicleModel: string; vehicleManualConfirmed?: boolean }[] }) {
@@ -420,7 +430,8 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   const candidates = await candidateOrdersFor(reply);
   const allowed = new Set(candidates.map((order) => order.id));
   const orderNoById = new Map(candidates.map((order) => [order.id, order.orderNo]));
-  const extraction = input.extractionId ? await db.aiExtraction.findFirst({ where: { id: input.extractionId, fleetReplyId: replyId }, select: { validatedResultJson: true } }) : null;
+  const extraction = await db.aiExtraction.findFirst({ where: { fleetReplyId: replyId, status: "SUCCEEDED" }, orderBy: { createdAt: "desc" }, select: { id: true, validatedResultJson: true } });
+  if (input.extractionId && input.extractionId !== extraction?.id) return { valid: false, errors: [{ orderId: "", message: "分析记录不存在、已过期或不属于当前回复，请重新分析。" }], confirmed: 0 };
   let analysisRecords: SavedAnalysisRecord[] = [];
   try {
     const parsed = extraction?.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null;
@@ -433,8 +444,9 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     if (!allowed.has(record.orderId)) { errors.push({ orderId: record.orderId, message: "订单不属于当天候选范围，不能写入。" }); continue; }
     const current = await db.order.findUnique({ where: { id: record.orderId }, select: { status: true } });
     if (current?.status === "CANCELLED") { errors.push({ orderId: record.orderId, message: "订单已取消，不能写入司机资料。" }); continue; }
-    const matchedAnalysis = analysisRecords.find((item) => normalizedOrderNo(item.order_match?.platform_order_number ?? "") === normalizedOrderNo(orderNoById.get(record.orderId) ?? ""));
-    if (requiresManualVehicleConfirmation(matchedAnalysis) && !record.vehicleManualConfirmed) {
+    const matchedAnalyses = analysisRecords.filter((item) => normalizedOrderNo(item.order_match?.platform_order_number ?? "") === normalizedOrderNo(orderNoById.get(record.orderId) ?? ""));
+    const matchedAnalysis = matchedAnalyses.length === 1 ? matchedAnalyses[0] : undefined;
+    if (requiresManualVehicleConfirmation(matchedAnalysis, record.vehicleModel) && record.vehicleManualConfirmed !== true) {
       errors.push({ orderId: record.orderId, message: "AI 车型存在品牌缺失或冲突；请先人工核对车型并勾选确认后再保存。" });
       continue;
     }
@@ -457,7 +469,7 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
   if (errors.length) return { valid: false, errors, confirmed: 0 };
   for (const record of accepted) await saveDriverDetails(record.orderId, { rawReply: reply.rawText, confirmedDriverName: record.driverName, rawDriverPhone: record.driverPhone, confirmedVehicleCategory: record.vehicleCategory ?? null, confirmedVehicleModel: record.vehicleModel, licensePlate: record.licensePlate, rawLicensePlate: record.rawLicensePlate });
   await db.$transaction(async (tx) => {
-    await tx.driverDetailConfirmation.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, fleetReplyId: replyId, extractionId: input.extractionId || null, finalDriverName: record.driverName, finalPhone: record.driverPhone, finalPlate: record.licensePlate, finalVehicleModel: record.vehicleModel, confirmedBy: "运营人员", rulesVersion: rules.rules_version })) });
+    await tx.driverDetailConfirmation.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, fleetReplyId: replyId, extractionId: extraction?.id || null, finalDriverName: record.driverName, finalPhone: record.driverPhone, finalPlate: record.licensePlate, finalVehicleModel: record.vehicleModel, confirmedBy: "运营人员", rulesVersion: rules.rules_version })) });
     await tx.activityLog.createMany({ data: accepted.map((record) => ({ orderId: record.orderId, action: "确认车队回传资料", actor: "运营人员", metadata: `车队回复：${replyId}；规则版本：${rules.rules_version}` })) });
   });
   return { valid: true, errors: [], confirmed: accepted.length };

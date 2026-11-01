@@ -162,6 +162,10 @@ export function resolveVehicleModel(
   }
 
   if (brand) {
+    const explicitOtherBrand = rules.transforms.vehicle_models.find(entry =>
+      [entry.brand, ...(entry.brand_aliases ?? [])].some(name => model.toLocaleLowerCase().startsWith(`${name.toLocaleLowerCase()} `))
+      && !brandMatches(entry));
+    if (explicitOtherBrand) return { value: model, needsManualReview: true, reviewReason: "AI 识别的品牌与车型前缀冲突，请人工确认" };
     const matchingCandidate = candidates.filter(brandMatches);
     if (matchingCandidate.length === 1) {
       return { value: matchingCandidate[0].canonical_name, needsManualReview: false };

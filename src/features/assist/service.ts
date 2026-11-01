@@ -89,6 +89,6 @@ export async function identifyVehicleFromImage(imageUrl: string): Promise<Review
   const result = await recognizeVehicleImage(imageUrl);
   if (!result.vehicle_model) return { status: "MANUAL_REVIEW_REQUIRED", provider: result.provider === "NONE" ? "人工复核" : result.provider, message: result.note };
   const vehicle = resolveVehicleModel(result.vehicle_model, result.vehicle_brand);
-  if (vehicle.needsManualReview) return { status: "MANUAL_REVIEW_REQUIRED", provider: result.provider, message: vehicle.reviewReason ?? result.note, value: vehicle.value ?? undefined };
+  if (vehicle.needsManualReview || result.confidence !== "HIGH") return { status: "MANUAL_REVIEW_REQUIRED", provider: result.provider, message: vehicle.reviewReason ?? "车辆识别置信度不足，请人工核对品牌及车型。", value: vehicle.value ?? undefined };
   return { status: "SUGGESTION_READY", provider: result.provider, message: result.note, value: vehicle.value ?? undefined, confidence: result.confidence === "HIGH" ? 0.9 : result.confidence === "MEDIUM" ? 0.6 : result.confidence === "LOW" ? 0.3 : undefined };
 }

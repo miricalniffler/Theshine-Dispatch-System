@@ -239,7 +239,7 @@ export function FleetReplyWorkspace() {
   }
 
   function setForm(index: number, key: keyof Editable, value: string | boolean) {
-    setForms((current) => current.map((form, position) => position === index ? { ...form, [key]: value } : form));
+    setForms((current) => current.map((form, position) => position === index ? { ...form, [key]: value, ...(key === "vehicleModel" || key === "orderId" ? { vehicleManualConfirmed: false } : {}) } : form));
   }
 
   function toggleReturnOrder(orderId: string) {
@@ -304,7 +304,7 @@ export function FleetReplyWorkspace() {
           <label>车牌号<input value={forms[index]?.licensePlate ?? ""} onChange={(event) => setForm(index, "licensePlate", event.target.value)} /></label>
           <label>车辆类别<input value={forms[index]?.vehicleCategory ?? ""} onChange={(event) => setForm(index, "vehicleCategory", event.target.value)} placeholder="例如 VAN" /></label>
           <label>具体车型<input value={forms[index]?.vehicleModel ?? ""} onChange={(event) => setForm(index, "vehicleModel", event.target.value)} /></label>
-          {record.needs_review && <label><input type="checkbox" checked={forms[index]?.vehicleManualConfirmed ?? false} onChange={(event) => setForm(index, "vehicleManualConfirmed", event.target.checked)} />我已人工核对车型及品牌</label>}
+          {(record.needs_review || forms[index]?.vehicleModel.trim() !== (record.vehicle_model.value ?? "").trim() || orders.find(order => order.id === forms[index]?.orderId)?.orderNo.replace(/\D/g, "") !== record.order_match.platform_order_number?.replace(/\D/g, "")) && <label><input type="checkbox" checked={forms[index]?.vehicleManualConfirmed ?? false} onChange={(event) => setForm(index, "vehicleManualConfirmed", event.target.checked)} />我已人工核对车型及品牌</label>}
         </div>
         <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.vehicle_brand.value ? `；AI 品牌：${record.vehicle_brand.value}` : ""}{record.vehicle_model_raw.value && record.vehicle_model_raw.value !== record.vehicle_model.value ? `；AI 型号原文：${record.vehicle_model_raw.value}` : ""}{record.image_source_index ? `；关联车辆图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
       </article>)}
