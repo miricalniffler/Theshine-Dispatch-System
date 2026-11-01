@@ -586,6 +586,7 @@ model VehicleModelStandard {
   capacityCombinations VehicleCapacityCombination[]
   gradeRules           PlatformVehicleGradeRule[]
   aliases              VehicleModelStandardAlias[]
+  reviewAudits         VehicleStandardAudit[]
 
   @@index([internalGrade, countryScopeKey])
   @@index([normalizedName])
@@ -683,6 +684,33 @@ model AiVehicleCandidate {
   candidates      Json
   provider        String
   status          String
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewAction    String?
+  reviewNote      String?
+  resolvedName    String?
+  appliedOrderId  String?
+  vehicleStandardId String?
   createdAt       DateTime  @default(now())
   expiresAt       DateTime?
+
+  @@index([status, createdAt])
+  @@index([appliedOrderId])
+}
+
+// This is deliberately separate from the candidate itself: an AI suggestion
+// can be rejected or used for one order without ever becoming a standard.
+model VehicleStandardAudit {
+  id                String               @id @default(cuid())
+  vehicleStandardId String
+  aiCandidateId     String?
+  action            String
+  actor             String
+  note              String?
+  snapshot          Json
+  createdAt         DateTime             @default(now())
+  vehicleStandard   VehicleModelStandard @relation(fields: [vehicleStandardId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleStandardId, createdAt])
+  @@index([aiCandidateId])
 }

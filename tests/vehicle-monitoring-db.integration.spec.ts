@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { db } from "../src/lib/db";
 import { getIwayVehicleGate, reassessOrder, releaseOrderVehicle } from "../src/features/vehicle-monitoring/assessment-service";
 import { confirmIwayReturn, createIwayPreview, saveDriverDetails, saveIwayCopy } from "../src/features/iway/service";
+import { reviewAiVehicleCandidate } from "../src/features/vehicle-monitoring/ai-candidates";
 
 // This suite is opt-in. It runs only against the disposable Neon branch
 // created for PR #44; it must never be pointed at a shared or production DB.
@@ -11,6 +12,8 @@ const orderNo = `PR44-${Date.now()}`;
 let orderId = "";
 let standardId = "";
 let batchId = "";
+let candidateId = "";
+let aiStandardId = "";
 
 test.describe("vehicle monitoring on an isolated PostgreSQL database", () => {
   test.skip(!enabled, "requires the disposable PR #44 Neon branch");
@@ -43,6 +46,14 @@ test.describe("vehicle monitoring on an isolated PostgreSQL database", () => {
     await db.driverDetail.deleteMany({ where: { orderId } });
     await db.activityLog.deleteMany({ where: { orderId } });
     await db.order.deleteMany({ where: { id: orderId } });
+    if (aiStandardId) {
+      await db.vehicleStandardAudit.deleteMany({ where: { vehicleStandardId: aiStandardId } });
+      await db.platformVehicleGradeRule.deleteMany({ where: { vehicleStandardId: aiStandardId } });
+      await db.vehicleCapacityCombination.deleteMany({ where: { vehicleStandardId: aiStandardId } });
+      await db.vehicleModelStandardAlias.deleteMany({ where: { vehicleStandardId: aiStandardId } });
+      await db.vehicleModelStandard.deleteMany({ where: { id: aiStandardId } });
+    }
+    if (candidateId) await db.aiVehicleCandidate.deleteMany({ where: { id: candidateId } });
     await db.platformVehicleGradeRule.deleteMany({ where: { vehicleStandardId: standardId } });
     await db.vehicleCapacityCombination.deleteMany({ where: { vehicleStandardId: standardId } });
     await db.vehicleModelStandardAlias.deleteMany({ where: { vehicleStandardId: standardId } });
@@ -69,5 +80,22 @@ test.describe("vehicle monitoring on an isolated PostgreSQL database", () => {
     await db.order.update({ where: { id: orderId }, data: { luggage: 5 } });
     expect((await getIwayVehicleGate(orderId)).allowed).toBe(false);
     await expect(confirmIwayReturn(batchId)).rejects.toThrow("IWAY_PREVIEW_STALE");
+  });
+
+  test("real DB: reviewed AI candidate needs human evidence and does not infer an iWay grade", async () => {
+    const candidate = await db.aiVehicleCandidate.create({ data: {
+      cacheKey: `${key}-candidate`, requestSnapshot: { isolated: true }, provider: "test",
+      status: "PENDING_REVIEW", candidates: { fullName: "Toyota Test Cruiser", confidence: 0.51, note: "test candidate" },
+    } });
+    candidateId = candidate.id;
+    const result = await reviewAiVehicleCandidate(candidate.id, {
+      action: "SAVE_STANDARD", resolvedName: "Toyota Test Cruiser", actor: "隔离验收",
+      standard: { countryScopeKey: "TH", countryScopeLabel: "泰国", internalGrade: "人工核对 SUV", configurationLabel: "7 座标准配置", maxPassengers: 5, maxStandardLuggage: 3, capacityEvidence: "隔离验收车队确认记录", downwardCompatible: true },
+    });
+    aiStandardId = result.standard!.id;
+    expect(result.candidate.status).toBe("STANDARD_CONFIRMED");
+    expect(await db.vehicleStandardAudit.count({ where: { vehicleStandardId: aiStandardId, aiCandidateId: candidate.id } })).toBe(1);
+    expect(await db.vehicleCapacityCombination.findFirst({ where: { vehicleStandardId: aiStandardId, passengers: 5, standardLuggage: 3, isConfirmed: true } })).toBeTruthy();
+    expect(await db.platformVehicleGradeRule.count({ where: { vehicleStandardId: aiStandardId } })).toBe(0);
   });
 });
