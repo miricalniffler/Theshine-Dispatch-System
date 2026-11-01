@@ -5,8 +5,9 @@ export type LifecycleNotice = { kind: "cancel" | "amend" | "review"; orderNumber
 const digits = (value: string) => value.replace(/[\s\u00a0\u202f]/g, "");
 export function classifyLifecycleNotice(subject: string, text: string): LifecycleNotice | null {
   const s = subject.trim();
+  text = text.replace(/\r\n?/g, "\n");
   const match = s.match(/^(CANCELLATION of|AMENDMENT to) the transfer #([\d\s\u00a0\u202f]+)\s*\(i[’']way\)$/i);
-  const bodyIds = [...text.matchAll(/(?:^|\n)[ \t]*Ride number\s*[:：][ \t]*\n?[ \t]*([\d \t\u00a0\u202f]+)(?=\r?\n|$)/gi)].map(m => digits(m[1]));
+  const bodyIds = [...text.matchAll(/(?:^|\n)[ \t]*Ride number\s*[:：]\s*([\d \t\u00a0\u202f]+)(?=\r?\n|$)/gi)].map(m => digits(m[1]));
   const subjectId = match ? digits(match[2]) : null;
   const unique = [...new Set(bodyIds)];
   const orderNumber = subjectId && /^\d{5,12}$/.test(subjectId) && unique.length === 1 && unique[0] === subjectId ? subjectId : null;

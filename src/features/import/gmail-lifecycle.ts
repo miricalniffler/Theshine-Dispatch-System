@@ -28,14 +28,16 @@ function differences(order: Order, message: GmailIwayMessage): MailReview["diffe
 }
 
 /** The caller already checked sender, timestamp and the original activation waterline. */
-export async function ingestLifecycle(message: GmailIwayMessage): Promise<"cancelled" | "cancelledReview" | "review" | "skipped"> {
+export async function ingestLifecycle(message: GmailIwayMessage, retryPending = false): Promise<"cancelled" | "cancelledReview" | "review" | "skipped"> {
   const notice = classifyLifecycleNotice(message.subject, message.text)!;
   return db.$transaction(async tx => {
     // Serializes creation, state transitions and replay checks for this exact
     // platform number across concurrent HTTP retries without adding a schema.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`gmail-iway:${notice.orderNumber ?? message.id}`}))`;
     const known = await tx.importedSourceMessage.findUnique({ where: { connector_externalId: { connector, externalId: message.id } } });
-    if (known) return "skipped";
+    if (known && (!retryPending || known.action !== "LIFECYCLE_REVIEW_PENDING")) return "skipped";
+    // Re-parsing must never acknowledge a pending fleet notification.
+    if (known && JSON.parse(known.sourceText).review?.reason === "CANCELLED_NOTIFY_FLEET") return "review";
     const order = notice.orderNumber ? await tx.order.findUnique({ where: { platformOrderNumber: notice.orderNumber }, include: { driverDetail: true } }) : null;
     if (order) await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${order.id} FOR UPDATE`;
     const current = order ? await tx.order.findUniqueOrThrow({ where: { id: order.id }, include: { driverDetail: true } }) : null;
@@ -62,7 +64,11 @@ export async function ingestLifecycle(message: GmailIwayMessage): Promise<"cance
     else if (latest) reason = "OLDER_THAN_PROCESSED_MAIL";
     else if (current.status === "COMPLETED") reason = "COMPLETED_ORDER_REQUIRES_REVIEW";
     const review: MailReview = { reason, orderNumber: notice.orderNumber, kind: notice.kind, differences: current && notice.kind === "amend" ? differences(current, message) : [], fields: lifecycleFields(message.fields) };
-    await tx.importedSourceMessage.create({ data: { connector, externalId: message.id, action: (result === "review" || result === "cancelledReview") ? "LIFECYCLE_REVIEW_PENDING" : result === "cancelled" ? "ORDER_CANCELLED" : "LIFECYCLE_SKIPPED", sourceText: JSON.stringify({ review, message }), orderId: current?.id, receivedAt: new Date(message.receivedAt) } });
+    const data = { connector, externalId: message.id, action: (result === "review" || result === "cancelledReview") ? "LIFECYCLE_REVIEW_PENDING" : result === "cancelled" ? "ORDER_CANCELLED" : "LIFECYCLE_SKIPPED", sourceText: JSON.stringify({ review, message }), orderId: current?.id, receivedAt: new Date(message.receivedAt) };
+    if (known) {
+      await tx.importedSourceMessage.update({ where: { id: known.id }, data });
+      await tx.activityLog.create({ data: { orderId: current?.id, action: "Gmail 待办重新识别", actor: "运营人员", metadata: JSON.stringify({ messageId: message.id, previousReason: JSON.parse(known.sourceText).review?.reason, result }) } });
+    } else await tx.importedSourceMessage.create({ data });
     if (current && (result === "review" || result === "cancelledReview")) await tx.activityLog.create({ data: { orderId: current.id, action: "Gmail 邮件待人工确认", actor: "Gmail 同步", metadata: JSON.stringify({ messageId: message.id, reason, fields: review.differences.map(d=>d.field) }) } });
     return result;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });

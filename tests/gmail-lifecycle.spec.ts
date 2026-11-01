@@ -9,6 +9,7 @@ test.describe.configure({ mode: "serial" });
 const cancel = { id:"cancel-1", sender:"i'way <booking@iwayex.com>", subject:"CANCELLATION of the transfer #1 150 642 (i’way)", receivedAt:"2026-11-01T00:23:00Z", text:`Cancellation of transfer service order\nCustomer: TEST\nCANCELLATION\nDear partners, please cancel the following transfer.\nATTENTION: all the other orders stay valid.\nRide number:\n1150642\nCity:\nBangkok` };
 const amend = { ...cancel, id:"amend-1", subject:"AMENDMENT to the transfer #1 150 642 (i’way)", text:"Dear partners, we send you an amendment of the following transfer\nRide number:\n1150642\nCity:\nBangkok" };
 test("实际取消主题、正文与精确订单号必须同时一致",()=>{
+  expect(classifyLifecycleNotice(cancel.subject,cancel.text.replace("Ride number:\n1150642", "Ride number:\r\n \r\n1150642"))).toMatchObject({kind:"cancel",orderNumber:"1150642"});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text)).toMatchObject({kind:"cancel",orderNumber:"1150642"});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text.replace("1150642","1150643"))).toMatchObject({kind:"review",orderNumber:null});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text+"\nRide number: 972145")).toMatchObject({kind:"review"});
@@ -44,4 +45,15 @@ for(const [status,latest] of [["COMPLETED",false],["DISPATCHED",true]] as const)
 test("修改只创建差异待办，绝不覆盖或重新开启已取消订单",async()=>{
  const f=fake("CANCELLED");const original=db.$transaction;(db as any).$transaction=async(fn:any)=>fn(f.tx);
  try{expect(await ingestLifecycle(amend)).toBe("review");expect(f.updates).toHaveLength(0);expect(f.order.status).toBe("CANCELLED");}finally{(db as any).$transaction=original;}
+});
+test("待办重识别复用原邮件审计记录，不删除去重键", async()=>{
+ const f=fake("READY_TO_DISPATCH");const original=db.$transaction;
+ f.tx.importedSourceMessage.findUnique=async()=>({id:"audit-1",action:"LIFECYCLE_REVIEW_PENDING",sourceText:JSON.stringify({review:{reason:"ORDER_NUMBER_MISSING_OR_CONFLICTING"},message:cancel})});
+ let saved:any=null;f.tx.importedSourceMessage.update=async(v:any)=>{saved=v;};(db as any).$transaction=async(fn:any)=>fn(f.tx);
+ try{expect(await ingestLifecycle(cancel,true)).toBe("cancelled");expect(saved.where.id).toBe("audit-1");expect(saved.data.externalId).toBe(cancel.id);expect(f.sources).toHaveLength(0);expect(f.order.status).toBe("CANCELLED");}finally{(db as any).$transaction=original;}
+});
+test("重新识别不能替代已通知车队的人工确认",async()=>{
+ const f=fake("CANCELLED");const original=db.$transaction;
+ f.tx.importedSourceMessage.findUnique=async()=>({id:"audit-1",action:"LIFECYCLE_REVIEW_PENDING",sourceText:JSON.stringify({review:{reason:"CANCELLED_NOTIFY_FLEET"}})});(db as any).$transaction=async(fn:any)=>fn(f.tx);
+ try{expect(await ingestLifecycle(cancel,true)).toBe("review");expect(f.updates).toHaveLength(0);expect(f.sources).toHaveLength(0);}finally{(db as any).$transaction=original;}
 });
