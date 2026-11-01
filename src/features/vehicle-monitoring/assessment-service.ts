@@ -9,6 +9,14 @@ type OrderForAssessment = {
   luggageSource: string; serviceCountry: string | null; driverDetail: { confirmedVehicleModel: string | null; confirmedVehicleCategory: string | null } | null;
 };
 
+// The existing local/demo repository deliberately runs without PostgreSQL.
+// Vehicle monitoring is additive: it must never make saving a fleet reply or
+// generating an existing iWay preview fail merely because that optional
+// persistence layer is unavailable.
+export function isVehicleMonitoringAvailable() {
+  return Boolean(process.env.DATABASE_URL);
+}
+
 function fingerprint(order: OrderForAssessment) {
   return JSON.stringify({ vehicle: normalizeVehicleKey(order.driverDetail?.confirmedVehicleModel), passengers: order.adults + order.children, luggage: order.luggage, luggageSource: order.luggageSource, country: order.serviceCountry, platformGrade: order.platformVehicleType });
 }
@@ -39,6 +47,7 @@ async function compute(order: OrderForAssessment) {
 }
 
 export async function reassessOrder(orderId: string, trigger: string) {
+  if (!isVehicleMonitoringAvailable()) return null;
   const order = await db.order.findUnique({ where: { id: orderId }, include: { driverDetail: true } });
   if (!order) throw new Error("ORDER_NOT_FOUND");
   const input = order as OrderForAssessment;
@@ -55,13 +64,17 @@ export async function reassessOrder(orderId: string, trigger: string) {
 }
 
 export async function releaseOrderVehicle(orderId: string, reason: string) {
+  if (!isVehicleMonitoringAvailable()) throw new Error("VEHICLE_MONITORING_UNAVAILABLE");
   if (!reason.trim()) throw new Error("OVERRIDE_REASON_REQUIRED");
   const assessment = await reassessOrder(orderId, "OVERRIDE_REQUEST");
+  if (!assessment) throw new Error("VEHICLE_MONITORING_UNAVAILABLE");
   return db.orderVehicleOverride.create({ data: { orderId, reason: reason.trim(), assessmentId: assessment.id, inputSnapshot: assessment.inputSnapshot as Prisma.InputJsonValue } });
 }
 
 export async function getIwayVehicleGate(orderId: string) {
+  if (!isVehicleMonitoringAvailable()) return { allowed: true, warning: null, reason: null };
   const assessment = await reassessOrder(orderId, "IWAY_GATE");
+  if (!assessment) return { allowed: true, warning: null, reason: null };
   const activeOverride = await db.orderVehicleOverride.findFirst({ where: { orderId, isActive: true, assessmentId: assessment.id }, orderBy: { createdAt: "desc" } });
   if (assessment.status === "NON_COMPLIANT" && !activeOverride) return { allowed: false, warning: null, reason: assessment.reason || "车型不符合已确认标准。" };
   if (assessment.status === "REVIEW_REQUIRED") return { allowed: true, warning: assessment.reason || "车型资料待核对。", reason: null };
