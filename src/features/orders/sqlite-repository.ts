@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import type { Order, OrderFilters } from "./types";
 import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
+import { reassessOrder } from "@/features/vehicle-monitoring/assessment-service";
 
 export async function findPersistedOrder(id: string) {
   return db.order.findUnique({ where: { id }, include: { driverDetail: true, activityLogs: { orderBy: { createdAt: "asc" } } } });
@@ -18,7 +19,7 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
   if (existing.status === "CANCELLED") return { kind: "cancelled" as const };
   const pickupDateTime = toBangkokDate(input.pickupDateTime);
   const routedFleet = await canonicalFleetForCity(db, input.city);
-  const values = { platformOrderNumber: input.platformOrderNumber, city: input.city, fleetId: routedFleet.id, pickupDateTime: pickupDateTime.toISOString(), pickupAddress: input.pickupAddress, dropoffAddress: input.dropoffAddress, passengerName: input.passengerName, passengerPhone: input.passengerPhone, flightNumber: input.flightNumber, platformVehicleType: input.platformVehicleType, seatCount: input.seatCount, adults: input.adults, children: input.children, luggage: input.luggage, childSeatLine: input.childSeatLine, meetGreetLine: input.meetGreetLine, otherNotes: input.otherNotes };
+  const values = { platformOrderNumber: input.platformOrderNumber, city: input.city, fleetId: routedFleet.id, pickupDateTime: pickupDateTime.toISOString(), pickupAddress: input.pickupAddress, dropoffAddress: input.dropoffAddress, passengerName: input.passengerName, passengerPhone: input.passengerPhone, flightNumber: input.flightNumber, platformVehicleType: input.platformVehicleType, seatCount: input.seatCount, adults: input.adults, children: input.children, luggage: input.luggage, luggageSource: input.luggageSource, serviceCountry: input.serviceCountry, childSeatLine: input.childSeatLine, meetGreetLine: input.meetGreetLine, otherNotes: input.otherNotes };
   const updatedFields = Object.entries(values).filter(([field, value]) => { const old = existing[field as keyof typeof existing]; return old instanceof Date ? old.toISOString() !== value : old !== value; }).map(([field]) => field);
   const order = await db.$transaction(async (tx) => {
     const fleet = await canonicalFleetForCity(tx, input.city);
@@ -32,6 +33,7 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
     return result;
   });
   if (!order) return { kind: "cancelled" as const };
+  if (updatedFields.some((field) => ["platformVehicleType", "adults", "children", "luggage", "luggageSource", "serviceCountry"].includes(field))) await reassessOrder(id, "ORDER_REQUIREMENTS_CHANGED");
   return { kind: "updated" as const, order, updatedFields };
 }
 
@@ -88,7 +90,7 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
   // The dashboard used to load every historical order and filter it in the
   // browser.  Let PostgreSQL apply the selected conditions before data leaves
   // the server, so the page remains quick as order history grows.
-  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, driverVehicleAssignments: { where: { isCurrent: false }, select: { id: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } }, activityLogs: { where: { action: { in: ["订单已取消", "飞书邮件同步：订单已取消", "Gmail 邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { action: true, metadata: true, createdAt: true } } }, orderBy: { pickupDateTime: "asc" } });
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, vehicleAssessments: { where: { isCurrent: true }, orderBy: { createdAt: "desc" }, take: 1 }, driverVehicleAssignments: { where: { isCurrent: false }, select: { id: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } }, activityLogs: { where: { action: { in: ["订单已取消", "飞书邮件同步：订单已取消", "Gmail 邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { action: true, metadata: true, createdAt: true } } }, orderBy: { pickupDateTime: "asc" } });
   const notes = rows.length ? await db.activityLog.findMany({ where: { orderId: { in: rows.map((row) => row.id) }, action: "新增异常备注" }, orderBy: { createdAt: "desc" }, select: { orderId: true, metadata: true, createdAt: true } }) : [];
   const latestNotes = new Map<string, { note: string; at: Date }>();
   for (const note of notes) {
@@ -102,6 +104,8 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
       try { const value = JSON.parse(cancellation?.metadata ?? "{}"); cancelReason = typeof value.reason === "string" ? value.reason : null; } catch { /* legacy audit metadata */ }
       const latestNote = latestNotes.get(row.id);
       const driverDetail = row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate, reassignmentCount: row.driverVehicleAssignments.length } : null;
-      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail };
+      const assessment = row.vehicleAssessments[0];
+      const result = assessment?.resultSnapshot as { standard?: { model?: string } } | null;
+      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, adults: row.adults, children: row.children, luggage: row.luggage, luggageSource: row.luggageSource as Order["luggageSource"], serviceCountry: row.serviceCountry, vehicleAssessment: assessment ? { status: assessment.status as NonNullable<Order["vehicleAssessment"]>["status"], reason: assessment.reason, recommendedModel: result?.standard?.model ?? null } : null, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail };
     });
 }

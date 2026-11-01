@@ -45,7 +45,7 @@ function passengerCounts(text: string) {
 
 function luggageFor(text: string, passengerCount: number) {
   const stated = pick(text, "(?:Luggage|Number of luggage|Baggage)");
-  return stated ? numberFrom(stated) : passengerCount;
+  return stated ? { count: numberFrom(stated), source: "ACTUAL" } : { count: passengerCount, source: "ESTIMATED" };
 }
 
 function meetGreetFor(text: string) {
@@ -59,6 +59,7 @@ function parseStandardOrder(text: string) {
   const dropoffAddress = addressFrom(pick(text, "Dropoff address"));
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
+  const luggage = luggageFor(text, adults + children);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Order Number|Order ID)")),
     passengerName: pick(text, "Passenger Name"),
@@ -70,7 +71,8 @@ function parseStandardOrder(text: string) {
     flightNumber: pick(text, "Flight Number"),
     adults,
     children,
-    luggage: luggageFor(text, adults + children),
+    luggage: luggage.count,
+    luggageSource: luggage.source,
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
@@ -105,6 +107,7 @@ export function parseIwayLabelledOrder(text: string) {
   const adults = labelledAdults || pax;
   const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
   const timeZoneDetection = detectServiceTimeZone(pickupAddress, dropoffAddress);
+  const luggage = luggageFor(text, adults + children);
   return {
     platformOrderNumber: normaliseOrderNumber(pick(text, "(?:Ride\s*)?(?:Order\s*)?(?:number|no\\.?|id)")),
     passengerName,
@@ -116,7 +119,8 @@ export function parseIwayLabelledOrder(text: string) {
     flightNumber: pick(text, "(?:Flight(?:\\s+number)?|Train(?:\\s+number)?)"),
     adults,
     children,
-    luggage: luggageFor(text, adults + children),
+    luggage: luggage.count,
+    luggageSource: luggage.source,
     meetGreetLine: meetGreetFor(text),
     city: cityDetection.city ?? "",
     cityDetection,
@@ -182,6 +186,7 @@ export function parseCompactIwayOrEsfortyOrder(block: string): ParsedFields | nu
     adults,
     children: 0,
     luggage: adults,
+    luggageSource: "ESTIMATED",
     meetGreetLine: meetIndex >= 0 ? afterVehicle[meetIndex] : "",
     city: cityDetection.city ?? "",
     cityDetection,
