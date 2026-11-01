@@ -15,7 +15,11 @@ export async function POST(request: Request) {
   if (body?.decision === "RETRY" && typeof body.id === "string") {
     const row = await db.importedSourceMessage.findUnique({ where: { id: body.id } });
     if (!row || row.connector !== "gmail-iway" || row.action !== "LIFECYCLE_REVIEW_PENDING") return failure("REVIEW_CHANGED", "待办不存在或已处理。", undefined, 409);
-    try { const result = await ingestLifecycle(JSON.parse(row.sourceText).message, true); return success({ result }); }
+    try {
+      const result = await ingestLifecycle(JSON.parse(row.sourceText).message, true);
+      await db.importSyncRun.create({ data: { connector: "gmail-iway", status: "SUCCEEDED", completedAt: new Date(), cancelledCount: result === "cancelled" || result === "cancelledReview" ? 1 : 0, updatedCount: result === "review" || result === "cancelledReview" ? 1 : 0, skippedCount: result === "skipped" ? 1 : 0 } });
+      return success({ result });
+    }
     catch { return failure("RETRY_FAILED", "重新识别失败，请稍后重试。", undefined, 502); }
   }
   if (!body || typeof body.id !== "string" || !["REVIEWED", "DISMISSED", "FLEET_NOTIFIED"].includes(body.decision) || typeof body.note !== "string" || !body.note.trim() || body.note.length > 1000) return failure("INVALID_REVIEW", "请填写人工处理结果（最多1000字）。", undefined, 422);

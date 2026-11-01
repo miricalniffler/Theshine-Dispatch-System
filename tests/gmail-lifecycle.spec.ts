@@ -9,6 +9,7 @@ test.describe.configure({ mode: "serial" });
 const cancel = { id:"cancel-1", sender:"i'way <booking@iwayex.com>", subject:"CANCELLATION of the transfer #1 150 642 (i’way)", receivedAt:"2026-11-01T00:23:00Z", text:`Cancellation of transfer service order\nCustomer: TEST\nCANCELLATION\nDear partners, please cancel the following transfer.\nATTENTION: all the other orders stay valid.\nRide number:\n1150642\nCity:\nBangkok` };
 const amend = { ...cancel, id:"amend-1", subject:"AMENDMENT to the transfer #1 150 642 (i’way)", text:"Dear partners, we send you an amendment of the following transfer\nRide number:\n1150642\nCity:\nBangkok" };
 test("实际取消主题、正文与精确订单号必须同时一致",()=>{
+  expect(classifyLifecycleNotice(cancel.subject,cancel.text.replace("\nRide number:\n1150642", "Ride number:\r\n \r\n1150642"))).toMatchObject({kind:"cancel",orderNumber:"1150642"});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text.replace("Ride number:\n1150642", "Ride number:\r\n \r\n1150642"))).toMatchObject({kind:"cancel",orderNumber:"1150642"});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text)).toMatchObject({kind:"cancel",orderNumber:"1150642"});
   expect(classifyLifecycleNotice(cancel.subject,cancel.text.replace("1150642","1150643"))).toMatchObject({kind:"review",orderNumber:null});
