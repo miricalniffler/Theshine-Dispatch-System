@@ -1,13 +1,15 @@
+import { classifyLifecycleNotice, type MailField } from "./iway-lifecycle-parser";
+import { ingestLifecycle } from "./gmail-lifecycle";
 import { db } from "@/lib/db";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { isIwayNewRideEmail, parseIwayNewRide } from "./iway-new-ride-parser";
 import { zonedLocalDateTimeToUtc } from "./service-timezone";
 
-export type GmailIwayMessage = { id: string; sender: string; subject: string; receivedAt: string; text: string };
-export type GmailIwaySummary = { created: number; skipped: number; rejected: number; processedIds: string[] };
+export type GmailIwayMessage = { id: string; sender: string; subject: string; receivedAt: string; text: string; fields?: MailField[] };
+export type GmailIwaySummary = { created: number; cancelled: number; review: number; skipped: number; rejected: number; processedIds: string[] };
 
 const connector = "gmail-iway";
-const defaultSenders = ["control@iwayex.com", "noreply@iway.ru"];
+const defaultSenders = ["control@iwayex.com", "noreply@iway.ru", "booking@iwayex.com"];
 
 function senderAddress(value: string) {
   return (value.match(/<([^>]+)>/)?.[1] || value).trim().toLowerCase();
@@ -62,14 +64,24 @@ export function classifyGmailIwayMessage(message: GmailIwayMessage, enabledAt = 
 }
 
 /**
- * Safely imports only verified iWay New ride messages. Cancellation and
- * amendment-shaped emails are intentionally outside this path.
+ * Imports new rides and routes verified lifecycle notices through a separate
+ * transactional handler. Amendments never overwrite business fields.
  */
 export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Promise<GmailIwaySummary> {
   const run = await db.importSyncRun.create({ data: { connector, status: "RUNNING" } });
-  const summary: GmailIwaySummary = { created: 0, skipped: 0, rejected: 0, processedIds: [] };
+  const summary: GmailIwaySummary = { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0, processedIds: [] };
   try {
     for (const message of messages) {
+      const notice = classifyLifecycleNotice(message.subject, message.text);
+      if (notice) {
+        const date = validReceivedAt(message.receivedAt);
+        const waterline = validReceivedAt(process.env.IWAY_GMAIL_ENABLED_AT || "");
+        if (!trustedSenders().includes(senderAddress(message.sender)) || !date || !waterline || date <= waterline) { summary.rejected++; continue; }
+        const result = await ingestLifecycle(message);
+        if (result === "cancelledReview") { summary.cancelled++; summary.review++; } else summary[result]++;
+        summary.processedIds.push(message.id);
+        continue;
+      }
       const classification = classifyGmailIwayMessage(message);
       if (!classification.accepted) {
         // A trusted, structured mail with missing/ambiguous order fields is a
@@ -91,6 +103,7 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
       }
       const { receivedAt, parsed } = classification;
       const result: "created" | "skipped" | "rejected" = await db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`gmail-iway:${parsed.platformOrderNumber}`}))`;
         const known = await tx.importedSourceMessage.findUnique({ where: { connector_externalId: { connector, externalId: message.id } } });
         if (known) return "skipped" as const;
         // Store a protected audit record for a structurally valid iWay mail
@@ -100,6 +113,11 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
         const existing = await tx.order.findUnique({ where: { platformOrderNumber: parsed.platformOrderNumber } });
         const sourceMessage = await tx.importedSourceMessage.create({ data: { connector, externalId: message.id, action: existing ? "NEW_ORDER_SKIPPED_EXISTING" : "NEW_ORDER_IMPORTED", sourceText: message.text, orderId: existing?.id, receivedAt } });
         if (existing) return "skipped" as const;
+        const pendingCancellation = await tx.importedSourceMessage.findFirst({ where: { connector, action: "LIFECYCLE_REVIEW_PENDING", sourceText: { contains: `"orderNumber":"${parsed.platformOrderNumber}"` } } });
+        if (pendingCancellation) {
+          await tx.importedSourceMessage.update({ where: { id: sourceMessage.id }, data: { action: "NEW_ORDER_BLOCKED_LIFECYCLE_REVIEW" } });
+          return "rejected" as const;
+        }
         const fleet = await canonicalFleetForCity(tx, parsed.city);
         const pickupDateTime = zonedLocalDateTimeToUtc(parsed.pickupDateTime, parsed.serviceTimeZone);
         if (!pickupDateTime) throw new Error("GMAIL_ORDER_TIME_ZONE_CONVERSION_FAILED");
@@ -130,13 +148,13 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
       summary[result] += 1;
       summary.processedIds.push(message.id);
     }
-    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created, skippedCount: summary.skipped + summary.rejected } });
+    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created, cancelledCount: summary.cancelled, updatedCount: summary.review, skippedCount: summary.skipped + summary.rejected } });
     return summary;
   } catch (error) {
     // Do not store raw email content in an error message. The raw source is
     // retained only on the idempotent message record for a successfully
     // imported/known message.
-    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "FAILED", completedAt: new Date(), errorMessage: error instanceof Error ? error.message.slice(0, 300) : "Gmail 导入失败" } });
+    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "FAILED", completedAt: new Date(), errorMessage: "Gmail 订单同步失败，请检查受保护的执行记录并重试。" } });
     throw error;
   }
 }

@@ -8,6 +8,7 @@ const messageSchema = z.object({
   sender: z.string().trim().min(3).max(320),
   subject: z.string().trim().min(1).max(500),
   receivedAt: z.string().datetime({ offset: true }),
+  fields: z.array(z.object({ label: z.string().max(100), current: z.string().max(20000), previous: z.array(z.string().max(20000)).max(40) })).max(40).optional(),
   text: z.string().trim().min(1).max(60_000),
 });
 const requestSchema = z.object({
@@ -39,5 +40,5 @@ export async function POST(request: Request) {
     return failure("GMAIL_SYNC_WRONG_TARGET", "Gmail 同步目标环境不匹配，已拒绝导入。", undefined, 409);
   }
   try { return success(await ingestGmailIwayMessages(parsed.data.messages)); }
-  catch { return failure("GMAIL_SYNC_FAILED", "Gmail 新订单导入失败；请稍后重试。", undefined, 502); }
+  catch { return failure("GMAIL_SYNC_FAILED", "Gmail 订单同步失败；请稍后重试。", undefined, 502); }
 }

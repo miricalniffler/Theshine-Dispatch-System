@@ -23,7 +23,7 @@ Flight number/train number: none
 Departure time: 23.10.2026 02:00`,
 };
 
-test("Gmail 桥接只提交新订单，使用水位线和服务端认证", () => {
+test("Gmail 桥接提交订单及生命周期通知，保留水位线和服务端认证", () => {
   const source = readFileSync(resolve(process.cwd(), "apps-script/gmail-iway-sync/Code.gs"), "utf8");
   expect(source).toContain("everyMinutes(1)");
   expect(source).toContain("IWAY_GMAIL_ENABLED_AT");
@@ -38,11 +38,11 @@ test("Gmail 桥接只提交新订单，使用水位线和服务端认证", () =>
   expect(source).toContain("SCAN_OVERLAP_THREADS");
   expect(source).toContain("isTrustedSender_");
   expect(source).toContain("Authorization: 'Bearer '");
-  expect(source).toContain("cancel(?:led|lation)?");
+  expect(source).toContain("CANCELLATION|AMENDMENT");
   expect(source).not.toContain("GmailApp.sendEmail");
 });
 
-test("导入接口不接收任意来源，也不会处理取消或修改订单", () => {
+test("导入接口验证来源并隔离生命周期处理", () => {
   const source = readFileSync(resolve(process.cwd(), "src/features/import/gmail-iway-sync.ts"), "utf8");
   const route = readFileSync(resolve(process.cwd(), "src/app/api/import-sync/gmail-iway/route.ts"), "utf8");
   expect(source).toContain("IWAY_GMAIL_INGEST_TOKEN");
@@ -51,7 +51,7 @@ test("导入接口不接收任意来源，也不会处理取消或修改订单",
   expect(source).toContain("NEW_ORDER_SKIPPED_EXISTING");
   expect(source).toContain("isTrustedGmailNewOrder");
   expect(source).not.toContain('status: "CANCELLED"');
-  expect(source).not.toContain("order.update");
+  expect(source).toContain("ingestLifecycle");
 });
 
 test("云端导入只接受可信、启用后且可确定城市与时区的新订单", () => {
