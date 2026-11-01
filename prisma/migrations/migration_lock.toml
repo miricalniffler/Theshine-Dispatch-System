@@ -1,0 +1,3 @@
+# This file is required by Prisma to identify the migration provider when
+# validating or deploying the checked-in migration history.
+provider = "postgresql"
