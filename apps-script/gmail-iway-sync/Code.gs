@@ -6,7 +6,7 @@
  * only; never paste them into this source file.
  */
 
-var IWAY_SENDERS = ['control@iwayex.com', 'noreply@iway.ru'];
+var IWAY_SENDERS = ['control@iwayex.com', 'noreply@iway.ru', 'booking@iwayex.com'];
 var THREAD_PAGE_SIZE = 50;
 var MESSAGE_BATCH_SIZE = 20;
 var SCAN_OVERLAP_THREADS = 10;
@@ -88,18 +88,18 @@ function collectNewOrderMessages_(enabledAt, seen, props) {
         if (seen[id] || message.getDate().getTime() <= enabledAt.getTime()) return;
         if (!isTrustedSender_(message.getFrom())) return;
         var subject = message.getSubject() || '';
-        // Only new-order notices reach the server. Cancellation, amendment,
-        // and arbitrary email are deliberately not submitted by this bridge.
-        if (!/^(?:transfer\s+service\s+order|new\s+ride\s*#)/i.test(subject)) return;
-        if (/\b(?:cancel(?:led|lation)?|void|amendment|modified?|change(?:d)?)\b/i.test(subject)) return;
+        var lifecycle = /^(?:CANCELLATION|AMENDMENT)\b/i.test(subject);
+        var newOrder = /^(?:transfer\s+service\s+order|new\s+ride\s*#)/i.test(subject);
+        if (!lifecycle && !newOrder) return;
         var text = message.getPlainBody();
-        if (!isStructuredNewOrder_(text)) return;
+        if (!lifecycle && !isStructuredNewOrder_(text)) return;
         byId[id] = {
           id: id,
           sender: message.getFrom(),
           subject: subject,
           receivedAt: message.getDate().toISOString(),
           text: text,
+          fields: lifecycle ? extractLifecycleFields_(message.getBody()) : [],
         };
     });
   });
@@ -156,4 +156,33 @@ function isTrustedSender_(from) {
   var match = String(from || '').match(/<([^>]+)>/);
   var address = (match ? match[1] : from || '').trim().toLowerCase();
   return IWAY_SENDERS.indexOf(address) !== -1;
+}
+
+// Parse the actual table cells, dropping struck-through previous values from
+// current text. No HTML or remote resources are sent to/rendered by the UI.
+function extractLifecycleFields_(html) {
+  var labels = /^(?:Ride number|City|Pick-up date|Local pick-up time|Vehicle class|Pax|Transfer|Flight number|Greeting sign|Additional remarks|i[’']way notes|Additional services|Passengers):?$/i;
+  var cells = String(html || '').match(/<td\b[^>]*>[\s\S]*?<\/td>/gi) || [];
+  var result = [];
+  for (var i = 0; i < cells.length - 1; i++) {
+    var label = htmlText_(cells[i]);
+    if (!labels.test(label)) continue;
+    var value = cells[i + 1];
+    var previous = [];
+    var current = value.replace(/<(s|strike|del)\b[^>]*>([\s\S]*?)<\/\1>/gi, function (_, tag, old) {
+      previous.push(htmlText_(old)); return '';
+    });
+    // CSS deletion markers cannot be safely removed by this small parser.
+    // Leave this field unavailable, forcing human review rather than guessing.
+    if (/text-decoration[^;"']*line-through/i.test(current)) continue;
+    result.push({ label: label.replace(/:$/, ''), current: htmlText_(current), previous: previous });
+  }
+  return result;
+}
+function htmlText_(html) {
+  return String(html).replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>|<\/p>|<\/div>/gi, '\n').replace(/<[^>]*>/g, '')
+    .replace(/&#(x[0-9a-f]+|\d+);/gi, function (_, n) { return String.fromCharCode(n[0].toLowerCase() === 'x' ? parseInt(n.slice(1), 16) : Number(n)); })
+    .replace(/&rArr;/g, '⇒').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }

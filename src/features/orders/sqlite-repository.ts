@@ -88,7 +88,7 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
   // The dashboard used to load every historical order and filter it in the
   // browser.  Let PostgreSQL apply the selected conditions before data leaves
   // the server, so the page remains quick as order history grows.
-  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, driverVehicleAssignments: { where: { isCurrent: false }, select: { id: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } }, activityLogs: { where: { action: { in: ["订单已取消", "飞书邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { action: true, metadata: true, createdAt: true } } }, orderBy: { pickupDateTime: "asc" } });
+  const rows = await db.order.findMany({ where, include: { fleet: true, driverDetail: true, driverVehicleAssignments: { where: { isCurrent: false }, select: { id: true } }, customerCommunicationExceptions: { where: { status: "OPEN" }, select: { exceptionType: true } }, activityLogs: { where: { action: { in: ["订单已取消", "飞书邮件同步：订单已取消", "Gmail 邮件同步：订单已取消"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { action: true, metadata: true, createdAt: true } } }, orderBy: { pickupDateTime: "asc" } });
   const notes = rows.length ? await db.activityLog.findMany({ where: { orderId: { in: rows.map((row) => row.id) }, action: "新增异常备注" }, orderBy: { createdAt: "desc" }, select: { orderId: true, metadata: true, createdAt: true } }) : [];
   const latestNotes = new Map<string, { note: string; at: Date }>();
   for (const note of notes) {
