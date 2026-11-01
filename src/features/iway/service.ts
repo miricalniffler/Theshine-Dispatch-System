@@ -47,16 +47,15 @@ function toOrder(row: PersistedOrder & { fleet?: { name: string } | null }): Ord
 }
 
 function toDriverDetails(row: DriverDetail, reassignmentCount = 0): DriverDetails {
-  // 旧数据也按当前规则展示，避免历史上保存的简称（如 All New V9）
-  // 在回传时漏掉品牌与车型前缀。
-  const rules = loadRules();
   return {
     orderId: row.orderId,
     rawReply: row.rawReply ?? "",
     confirmedDriverName: row.confirmedDriverName,
     rawDriverPhone: row.rawDriverPhone,
     normalizedDriverPhone: row.normalizedDriverPhone,
-    confirmedVehicleModel: normalizeVehicleModel(row.confirmedVehicleModel, rules),
+    // Preview and iWay output use the stored, operator-confirmed value. They
+    // never call AI or infer a brand while rendering a historical record.
+    confirmedVehicleModel: row.confirmedVehicleModel,
     confirmedVehicleCategory: row.confirmedVehicleCategory,
     licensePlate: normalizeLicensePlateForReturn(row.licensePlate),
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
