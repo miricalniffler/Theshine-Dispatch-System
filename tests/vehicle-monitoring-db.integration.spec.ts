@@ -9,6 +9,7 @@ import { reviewAiVehicleCandidate } from "../src/features/vehicle-monitoring/ai-
 const enabled = process.env.RUN_VEHICLE_MONITORING_DB_INTEGRATION === "1";
 const key = `pr44-db-${Date.now()}`;
 const orderNo = `PR44-${Date.now()}`;
+const testVehicleModel = `Toyota Isolated ${Date.now()}`;
 let orderId = "";
 let standardId = "";
 let batchId = "";
@@ -20,18 +21,18 @@ test.describe("vehicle monitoring on an isolated PostgreSQL database", () => {
 
   test.beforeAll(async () => {
     const standard = await db.vehicleModelStandard.create({ data: {
-      sourceKey: key, internalGrade: "测试 7 座", configurationLabel: "独立验收专用", representativeModels: ["Toyota Isolated Test SUV"],
+      sourceKey: key, internalGrade: "测试 7 座", configurationLabel: "独立验收专用", representativeModels: [testVehicleModel],
       maxPassengers: 6, maxStandardLuggage: 4, countryScopeKey: "TH", countryScopeLabel: "泰国", source: "PR44 integration test", originalRecord: { isolated: true }, isConfirmed: true,
     } });
     standardId = standard.id;
-    await db.vehicleModelStandardAlias.create({ data: { vehicleStandardId: standardId, displayName: "Toyota Isolated Test SUV", normalizedName: "toyota isolated test suv" } });
+    await db.vehicleModelStandardAlias.create({ data: { vehicleStandardId: standardId, displayName: testVehicleModel, normalizedName: testVehicleModel.toLocaleLowerCase("en-US") } });
     await db.vehicleCapacityCombination.create({ data: { vehicleStandardId: standardId, passengers: 6, standardLuggage: 4, outcome: "SUPPORTED", downwardCompatible: true, source: "PR44 integration test", isConfirmed: true } });
     await db.platformVehicleGradeRule.create({ data: { platform: "IWAY", platformGrade: "Comfort", countryScopeKey: "TH", countryScopeLabel: "泰国", vehicleStandardId: standardId, outcome: "SUPPORTED", source: "PR44 integration test", isConfirmed: true } });
     const order = await db.order.create({ data: {
       platformOrderNumber: orderNo, city: "Bangkok", serviceDate: "2026-12-20", pickupDateTime: new Date("2026-12-20T02:00:00.000Z"), pickupAddress: "Test airport", dropoffAddress: "Test hotel", passengerName: "PR44 Test", passengerPhone: "+66000000000", platformVehicleType: "Comfort", adults: 6, children: 0, luggage: 2, luggageSource: "ACTUAL", serviceCountry: "TH", status: "DISPATCHED",
     } });
     orderId = order.id;
-    await saveDriverDetails(orderId, { rawReply: "isolated integration test", confirmedDriverName: "PR44 Driver", rawDriverPhone: "0812345678", confirmedVehicleModel: "Toyota Isolated Test SUV", confirmedVehicleCategory: "SUV", licensePlate: "ทดสอบ 44", skipArchiveHistory: true });
+    await saveDriverDetails(orderId, { rawReply: "isolated integration test", confirmedDriverName: "PR44 Driver", rawDriverPhone: "0812345678", confirmedVehicleModel: testVehicleModel, confirmedVehicleCategory: "SUV", licensePlate: "ทดสอบ 44", skipArchiveHistory: true });
   });
 
   test.afterAll(async () => {
