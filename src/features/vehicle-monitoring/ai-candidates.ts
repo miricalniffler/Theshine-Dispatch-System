@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { identifyVehicleFromImage } from "@/features/assist/service";
 import { saveDriverDetails } from "@/features/iway/service";
 import { reassessOrder } from "./assessment-service";
+import { COUNTRY_SCOPES } from "./regions";
 import { normalizeVehicleKey } from "./standards-service";
 
 type CandidateSnapshot = { fullName?: string; confidence?: number | null; note?: string | null; matchedStandardId?: string | null };
@@ -44,6 +45,7 @@ async function saveLongTermStandard(candidate: Awaited<ReturnType<typeof db.aiVe
   const spec = input.standard;
   if (!spec) throw new Error("STANDARD_DETAILS_REQUIRED");
   const countryScopeKey = required(spec.countryScopeKey, "STANDARD_COUNTRY_REQUIRED");
+  if (!(countryScopeKey in COUNTRY_SCOPES)) throw new Error("STANDARD_COUNTRY_SCOPE_INVALID");
   const internalGrade = required(spec.internalGrade, "STANDARD_INTERNAL_GRADE_REQUIRED");
   const configurationLabel = required(spec.configurationLabel, "STANDARD_CONFIGURATION_REQUIRED");
   const capacityEvidence = required(spec.capacityEvidence, "STANDARD_CAPACITY_EVIDENCE_REQUIRED");
