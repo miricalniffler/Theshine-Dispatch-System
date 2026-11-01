@@ -17,6 +17,8 @@ export const orderEditSchema = z.object({
   adults: z.coerce.number().int().min(0).max(99),
   children: z.coerce.number().int().min(0).max(99),
   luggage: z.coerce.number().int().min(0).max(99),
+  luggageSource: z.enum(["ACTUAL", "ESTIMATED", "UNKNOWN"]).default("UNKNOWN"),
+  serviceCountry: z.string().trim().max(2).optional().nullable().transform((value) => value ? value.toUpperCase() : null),
   childSeatLine: optionalText(300),
   meetGreetLine: optionalText(300),
   otherNotes: optionalText(1000),

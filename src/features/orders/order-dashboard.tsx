@@ -52,7 +52,8 @@ function DriverVehicle({ order }: { order: Order }) {
   const driver = order.driverDetail;
   if (!driver) return <span className="v3-driver-waiting">等待车队回复</span>;
   if (missing.length) return <span className="v3-driver-missing">⚠ 缺{missing.join("、")}</span>;
-  return <><span className="v3-primary-line">{driver.confirmedDriverName}{(driver.reassignmentCount ?? 0) > 0 && <em className="v3-reassigned-badge">已换车</em>}</span><small>{driver.confirmedVehicleModel} · {driver.licensePlate}</small></>;
+  const audit = order.vehicleAssessment;
+  return <><span className="v3-primary-line">{driver.confirmedDriverName}{(driver.reassignmentCount ?? 0) > 0 && <em className="v3-reassigned-badge">已换车</em>}</span><small>{driver.confirmedVehicleModel} · {driver.licensePlate}</small>{audit && <small title={audit.reason || ""}>车型审核：{audit.status === "COMPLIANT" ? "符合" : audit.status === "NON_COMPLIANT" ? "不符合" : "待核对"} · {(order.adults ?? 0) + (order.children ?? 0)} 人 / {order.luggage ?? 0} 件</small>}</>;
 }
 function summaryFor(orders: Order[]): DashboardSummary {
   return {

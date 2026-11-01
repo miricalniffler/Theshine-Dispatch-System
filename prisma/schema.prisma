@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -25,6 +25,13 @@ model Order {
   adults              Int      @default(0)
   children            Int      @default(0)
   luggage             Int      @default(0)
+  // `0` in historical imports did not always mean the guest had no luggage.
+  // Keep this nullable provenance separate from the count so that the audit
+  // engine can report uncertainty instead of treating old data as confirmed.
+  luggageSource       String   @default("UNKNOWN")
+  // Country is intentionally nullable for existing orders.  It is only used
+  // for a vehicle assessment after an operator or import has supplied it.
+  serviceCountry      String?
   childSeatLine       String?
   meetGreetLine       String?
   otherNotes          String?
@@ -33,23 +40,25 @@ model Order {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  fleet         Fleet?                 @relation(fields: [fleetId], references: [id])
-  driverDetail  DriverDetail?
-  driverVehicleAssignments OrderDriverVehicleAssignment[]
-  dispatchLinks DispatchBatchOrder[]
-  iwayLinks     IwayReturnBatchOrder[]
-  activityLogs  ActivityLog[]
-  driverConfirmations DriverDetailConfirmation[]
-  customerNotifications CustomerNotification[]
-  customerInboundMessages CustomerInboundMessage[]
+  fleet                           Fleet?                           @relation(fields: [fleetId], references: [id])
+  driverDetail                    DriverDetail?
+  driverVehicleAssignments        OrderDriverVehicleAssignment[]
+  dispatchLinks                   DispatchBatchOrder[]
+  iwayLinks                       IwayReturnBatchOrder[]
+  activityLogs                    ActivityLog[]
+  driverConfirmations             DriverDetailConfirmation[]
+  customerNotifications           CustomerNotification[]
+  customerInboundMessages         CustomerInboundMessage[]
   customerCommunicationExceptions CustomerCommunicationException[]
-  customerConfirmationStatus String?
-  customerConfirmedAt DateTime?
-  customerLargeLuggageCount Int?
-  customerCarryOnCount Int?
-  customerStrollerCount Int?
-  customerBulkyItems String?
-  customerLuggageUpdatedAt DateTime?
+  vehicleAssessments              OrderVehicleAssessment[]
+  vehicleOverrides                OrderVehicleOverride[]
+  customerConfirmationStatus      String?
+  customerConfirmedAt             DateTime?
+  customerLargeLuggageCount       Int?
+  customerCarryOnCount            Int?
+  customerStrollerCount           Int?
+  customerBulkyItems              String?
+  customerLuggageUpdatedAt        DateTime?
 
   @@index([serviceDate, city, fleetId])
   @@index([status, pickupDateTime])
@@ -65,33 +74,33 @@ model Fleet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders Order[]
+  orders          Order[]
   dispatchBatches DispatchBatch[]
 
   @@unique([name, city])
 }
 
 model DriverDetail {
-  id                    String    @id @default(cuid())
-  orderId               String    @unique
-  confirmedDriverName   String?
-  rawDriverPhone        String?
-  normalizedDriverPhone String?
-  confirmedVehicleModel String?
+  id                       String    @id @default(cuid())
+  orderId                  String    @unique
+  confirmedDriverName      String?
+  rawDriverPhone           String?
+  normalizedDriverPhone    String?
+  confirmedVehicleModel    String?
   confirmedVehicleCategory String?
-  licensePlate          String?
-  driverProfileId       String?
-  vehicleProfileId      String?
-  thaiDriverName        String?
-  driverNameSource      String    @default("MANUAL")
-  iwayDriverName        String?
-  rawReply              String?
-  confirmedAt           DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  licensePlate             String?
+  driverProfileId          String?
+  vehicleProfileId         String?
+  thaiDriverName           String?
+  driverNameSource         String    @default("MANUAL")
+  iwayDriverName           String?
+  rawReply                 String?
+  confirmedAt              DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  driverProfile DriverProfile? @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driverProfile  DriverProfile?  @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
   vehicleProfile VehicleProfile? @relation(fields: [vehicleProfileId], references: [id], onDelete: SetNull)
 
   @@index([driverProfileId])
@@ -109,15 +118,15 @@ model DriverProfile {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  mergedInto           DriverProfile? @relation("DriverProfileMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
-  mergedProfiles       DriverProfile[] @relation("DriverProfileMerge")
-  phones               DriverPhone[]
-  details              DriverDetail[]
-  assignments          OrderDriverVehicleAssignment[]
-  nameHistory          DriverNameHistory[]
-  temporaryNames       TemporaryDriverName[]
-  mergeSources         DriverProfileMerge[] @relation("MergeSource")
-  mergeTargets         DriverProfileMerge[] @relation("MergeTarget")
+  mergedInto     DriverProfile?                 @relation("DriverProfileMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedProfiles DriverProfile[]                @relation("DriverProfileMerge")
+  phones         DriverPhone[]
+  details        DriverDetail[]
+  assignments    OrderDriverVehicleAssignment[]
+  nameHistory    DriverNameHistory[]
+  temporaryNames TemporaryDriverName[]
+  mergeSources   DriverProfileMerge[]           @relation("MergeSource")
+  mergeTargets   DriverProfileMerge[]           @relation("MergeTarget")
 
   @@index([displayName])
   @@index([mergedIntoId])
@@ -151,12 +160,12 @@ model DriverNameHistory {
 }
 
 model TemporaryDriverName {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   driverProfileId String
-  orderId         String   @unique
+  orderId         String    @unique
   generatedName   String
-  generation      Int      @default(1)
-  createdAt       DateTime @default(now())
+  generation      Int       @default(1)
+  createdAt       DateTime  @default(now())
   regeneratedAt   DateTime?
 
   driverProfile DriverProfile @relation(fields: [driverProfileId], references: [id], onDelete: Restrict)
@@ -177,28 +186,28 @@ model VehicleProfile {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  details      DriverDetail[]
-  assignments  OrderDriverVehicleAssignment[]
+  details     DriverDetail[]
+  assignments OrderDriverVehicleAssignment[]
 
   @@index([vehicleModel])
 }
 
 // 每次确认或改写司机/车辆资料都保留一条搭配记录；旧记录只关闭，不删除。
 model OrderDriverVehicleAssignment {
-  id               String   @id @default(cuid())
-  orderId          String
-  driverProfileId  String?
-  vehicleProfileId String?
+  id                String    @id @default(cuid())
+  orderId           String
+  driverProfileId   String?
+  vehicleProfileId  String?
   driverNameForIway String?
-  driverNameSource String   @default("MANUAL")
-  orderStatus      String
-  isCurrent        Boolean  @default(true)
-  assignedAt       DateTime @default(now())
-  endedAt          DateTime?
-  endReason        String?
+  driverNameSource  String    @default("MANUAL")
+  orderStatus       String
+  isCurrent         Boolean   @default(true)
+  assignedAt        DateTime  @default(now())
+  endedAt           DateTime?
+  endReason         String?
 
-  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  driverProfile  DriverProfile? @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driverProfile  DriverProfile?  @relation(fields: [driverProfileId], references: [id], onDelete: SetNull)
   vehicleProfile VehicleProfile? @relation(fields: [vehicleProfileId], references: [id], onDelete: SetNull)
 
   @@index([orderId, isCurrent])
@@ -207,12 +216,12 @@ model OrderDriverVehicleAssignment {
 }
 
 model DriverProfileMerge {
-  id                 String   @id @default(cuid())
-  sourceProfileId    String
-  targetProfileId    String
-  operator           String?
-  summary            String
-  createdAt          DateTime @default(now())
+  id              String   @id @default(cuid())
+  sourceProfileId String
+  targetProfileId String
+  operator        String?
+  summary         String
+  createdAt       DateTime @default(now())
 
   sourceProfile DriverProfile @relation("MergeSource", fields: [sourceProfileId], references: [id], onDelete: Restrict)
   targetProfile DriverProfile @relation("MergeTarget", fields: [targetProfileId], references: [id], onDelete: Restrict)
@@ -232,23 +241,23 @@ model DispatchBatch {
   confirmedAt     DateTime?
   createdAt       DateTime  @default(now())
 
-  orders DispatchBatchOrder[]
+  orders       DispatchBatchOrder[]
   fleetReplies FleetReply[]
-  fleet Fleet @relation(fields: [fleetId], references: [id])
+  fleet        Fleet                @relation(fields: [fleetId], references: [id])
 
   @@index([serviceDate, city, fleetId])
 }
 
 model FleetReply {
-  id              String    @id @default(cuid())
-  dispatchBatchId String?
+  id                String   @id @default(cuid())
+  dispatchBatchId   String?
   candidateOrderIds String?
-  rawText         String
-  createdBy       String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  rawText           String
+  createdBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  dispatchBatch DispatchBatch? @relation(fields: [dispatchBatchId], references: [id], onDelete: SetNull)
+  dispatchBatch DispatchBatch?             @relation(fields: [dispatchBatchId], references: [id], onDelete: SetNull)
   images        FleetReplyImage[]
   extractions   AiExtraction[]
   confirmations DriverDetailConfirmation[]
@@ -287,20 +296,20 @@ model AiExtraction {
 }
 
 model DriverDetailConfirmation {
-  id                  String   @id @default(cuid())
-  orderId             String
-  fleetReplyId        String
-  extractionId        String?
-  finalDriverName     String
-  finalPhone          String
-  finalPlate          String
-  finalVehicleModel   String
-  confirmedBy         String?
-  confirmedAt         DateTime @default(now())
-  rulesVersion        String
+  id                String   @id @default(cuid())
+  orderId           String
+  fleetReplyId      String
+  extractionId      String?
+  finalDriverName   String
+  finalPhone        String
+  finalPlate        String
+  finalVehicleModel String
+  confirmedBy       String?
+  confirmedAt       DateTime @default(now())
+  rulesVersion      String
 
-  order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  fleetReply FleetReply  @relation(fields: [fleetReplyId], references: [id], onDelete: Cascade)
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fleetReply FleetReply @relation(fields: [fleetReplyId], references: [id], onDelete: Cascade)
 
   @@index([orderId, confirmedAt])
   @@index([fleetReplyId])
@@ -330,12 +339,12 @@ model IwayReturnBatch {
 }
 
 model IwayReturnBatchOrder {
-  iwayReturnBatchId String
-  orderId           String
-  driverNameSnapshot String?
+  iwayReturnBatchId        String
+  orderId                  String
+  driverNameSnapshot       String?
   driverNameSourceSnapshot String?
-  iwayReturnBatch   IwayReturnBatch @relation(fields: [iwayReturnBatchId], references: [id], onDelete: Cascade)
-  order             Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  iwayReturnBatch          IwayReturnBatch @relation(fields: [iwayReturnBatchId], references: [id], onDelete: Cascade)
+  order                    Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@id([iwayReturnBatchId, orderId])
 }
@@ -406,16 +415,16 @@ model ImportedSourceMessage {
 // 一条 AirportGuide 就是一份可保留的指引版本。新版本启用时，旧版本保留但停用，
 // 使后续通知快照不会依赖会被改写的当前文案。
 model AirportGuide {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   airportName   String
   iataCode      String?
   terminal      String?
   matchKey      String
   guideText     String
-  isActive      Boolean  @default(true)
+  isActive      Boolean   @default(true)
   deactivatedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   aliases AirportGuideAlias[]
   images  AirportGuideImage[]
@@ -457,35 +466,35 @@ model AirportGuideImage {
 }
 
 model RegionNotificationSetting {
-  id                          String   @id @default(cuid())
-  region                      String   @unique
-  customerWhatsAppEnabled     Boolean  @default(false)
-  createdAt                   DateTime @default(now())
-  updatedAt                   DateTime @updatedAt
+  id                      String   @id @default(cuid())
+  region                  String   @unique
+  customerWhatsAppEnabled Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }
 
 // 本阶段只建立 outbox/历史快照，不接入任何 WhatsApp 发送行为。
 // JSON 快照为后续入站回复、行李识别和司机资料更新比较保留扩展空间。
 model CustomerNotification {
-  id                    String   @id @default(cuid())
+  id                    String    @id @default(cuid())
   orderId               String
   notificationType      String
   recipientPhone        String
-  status                String   @default("PENDING")
-  idempotencyKey        String   @unique
+  status                String    @default("PENDING")
+  idempotencyKey        String    @unique
   contentSnapshot       Json?
   templateSnapshot      Json?
   driverVehicleSnapshot Json?
   airportGuideSnapshot  Json?
-  providerMessageId     String?  @unique
-  attemptCount          Int      @default(0)
+  providerMessageId     String?   @unique
+  attemptCount          Int       @default(0)
   lastError             String?
   sentAt                DateTime?
   failedAt              DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order           Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   inboundMessages CustomerInboundMessage[]
 
   @@index([orderId, notificationType, createdAt])
@@ -515,16 +524,16 @@ model CustomerInboundMessage {
 
 // 只有确实需要运营人员处理的客户沟通问题才出现在订单首页。
 model CustomerCommunicationException {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   orderId        String
   exceptionType  String
-  severity       String   @default("WARNING")
-  status         String   @default("OPEN")
-  idempotencyKey String   @unique
+  severity       String    @default("WARNING")
+  status         String    @default("OPEN")
+  idempotencyKey String    @unique
   details        Json?
   resolvedAt     DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -535,16 +544,173 @@ model CustomerCommunicationException {
 // 初始不预置任何车型容量，避免系统凭空猜测车队承载能力。
 // 运营人员可按已确认的真实车型资料维护这些阈值。
 model VehicleCapacityRule {
-  id                    String   @id @default(cuid())
-  vehicleModel          String   @unique
-  normalizedVehicleModel String  @unique
-  maxPassengers         Int?
-  normalLargeLuggage    Int?
-  warningLargeLuggage   Int?
-  note                  String?
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                     String   @id @default(cuid())
+  vehicleModel           String   @unique
+  normalizedVehicleModel String   @unique
+  maxPassengers          Int?
+  normalLargeLuggage     Int?
+  warningLargeLuggage    Int?
+  note                   String?
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@index([isActive, normalizedVehicleModel])
+}
+
+model VehicleModelStandard {
+  id                   String                       @id @default(cuid())
+  // A standard is an operational configuration, not merely a physical car.
+  // The same representative car may appear in several country/grade rows.
+  sourceKey            String                       @unique
+  internalGrade        String
+  configurationLabel   String?
+  representativeModels Json
+  normalizedName       String?
+  brand                String?
+  model                String?
+  vehicleCategory      String?
+  totalSeats           Int?
+  maxPassengers        Int
+  maxStandardLuggage   Int
+  countryScopeKey      String                       @default("GLOBAL")
+  countryScopeLabel    String?
+  luxury               Boolean?
+  source               String
+  sourceReference      String?
+  originalRecord       Json
+  isConfirmed          Boolean                      @default(false)
+  version              Int                          @default(1)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  capacityCombinations VehicleCapacityCombination[]
+  gradeRules           PlatformVehicleGradeRule[]
+  aliases              VehicleModelStandardAlias[]
+  reviewAudits         VehicleStandardAudit[]
+
+  @@index([internalGrade, countryScopeKey])
+  @@index([normalizedName])
+}
+
+// Only explicitly listed representatives are aliases.  This deliberately
+// does not turn an "equivalent vehicle" label into permission for every
+// similar-looking model.
+model VehicleModelStandardAlias {
+  id                String               @id @default(cuid())
+  vehicleStandardId String
+  displayName       String
+  normalizedName    String
+  createdAt         DateTime             @default(now())
+  vehicleStandard   VehicleModelStandard @relation(fields: [vehicleStandardId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleStandardId, normalizedName])
+  @@index([normalizedName])
+}
+
+model VehicleCapacityCombination {
+  id                 String               @id @default(cuid())
+  vehicleStandardId  String
+  passengers         Int
+  standardLuggage    Int
+  outcome            String
+  downwardCompatible Boolean              @default(false)
+  source             String
+  sourceReference    String?
+  isConfirmed        Boolean              @default(false)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  vehicleStandard    VehicleModelStandard @relation(fields: [vehicleStandardId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleStandardId, passengers, standardLuggage])
+}
+
+model PlatformVehicleGradeRule {
+  id                String               @id @default(cuid())
+  platform          String
+  // Uses the same exact scope keys as VehicleModelStandard (GLOBAL, TH,
+  // EUROPE, ...); it is intentionally not populated from internal grades.
+  countryScopeKey   String
+  countryScopeLabel String?
+  platformGrade     String
+  vehicleStandardId String
+  outcome           String
+  source            String
+  isConfirmed       Boolean              @default(false)
+  version           Int                  @default(1)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  vehicleStandard   VehicleModelStandard @relation(fields: [vehicleStandardId], references: [id], onDelete: Cascade)
+
+  @@index([platform, countryScopeKey, platformGrade])
+}
+
+model OrderVehicleAssessment {
+  id              String    @id @default(cuid())
+  orderId         String
+  status          String
+  reason          String?
+  inputSnapshot   Json
+  resultSnapshot  Json
+  standardVersion String?
+  fingerprint     String
+  trigger         String
+  isCurrent       Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  invalidatedAt   DateTime?
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, isCurrent])
+  @@index([fingerprint])
+}
+
+model OrderVehicleOverride {
+  id            String    @id @default(cuid())
+  orderId       String
+  reason        String
+  inputSnapshot Json
+  assessmentId  String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  invalidatedAt DateTime?
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, isActive])
+}
+
+model AiVehicleCandidate {
+  id              String    @id @default(cuid())
+  cacheKey        String    @unique
+  requestSnapshot Json
+  candidates      Json
+  provider        String
+  status          String
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewAction    String?
+  reviewNote      String?
+  resolvedName    String?
+  appliedOrderId  String?
+  vehicleStandardId String?
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime?
+
+  @@index([status, createdAt])
+  @@index([appliedOrderId])
+}
+
+// This is deliberately separate from the candidate itself: an AI suggestion
+// can be rejected or used for one order without ever becoming a standard.
+model VehicleStandardAudit {
+  id                String               @id @default(cuid())
+  vehicleStandardId String
+  aiCandidateId     String?
+  action            String
+  actor             String
+  note              String?
+  snapshot          Json
+  createdAt         DateTime             @default(now())
+  vehicleStandard   VehicleModelStandard @relation(fields: [vehicleStandardId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleStandardId, createdAt])
+  @@index([aiCandidateId])
 }

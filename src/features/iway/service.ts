@@ -5,6 +5,7 @@ import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThaila
 import { loadRules } from "@/lib/rules/load-rules";
 import { prepareDriverNotificationForOrder } from "@/features/customer-notifications/service";
 import { archiveDriverVehicle, isTemporaryName } from "@/features/archives/service";
+import { getIwayVehicleGate, reassessOrder } from "@/features/vehicle-monitoring/assessment-service";
 
 export type DriverDetails = {
   orderId: string;
@@ -182,23 +183,27 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     }
     return tx.driverDetail.findUniqueOrThrow({ where: { id: saved.id } });
   });
+  // Saving source driver/vehicle information is deliberately independent from
+  // return eligibility. A non-compliant vehicle must remain auditable.
+  await reassessOrder(orderId, input.changeType === "REASSIGNMENT" ? "VEHICLE_REASSIGNMENT" : "DRIVER_DETAILS_SAVED");
   return { driver: toDriverDetails(driver), valid: check.valid, missingFields: fieldLabels(check.missingFields), ruleVersion: rules.rules_version };
 }
 
-export type IwayPreview = { valid: boolean; errors: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string; temporaryDriverNames?: { orderId: string; orderNo: string; name: string }[] };
+export type IwayPreview = { valid: boolean; errors: string[]; warnings: string[]; text?: string; orderCount: number; serviceDate?: string; ruleVersion: string; temporaryDriverNames?: { orderId: string; orderNo: string; name: string }[] };
 
 /** A copied return batch is a draft. Any change to the rendered text makes it stale. */
 export function isIwayPreviewCurrent(snapshot: string, current: Pick<IwayPreview, "valid" | "text">) {
   return current.valid && Boolean(current.text) && current.text === snapshot;
 }
 
-function buildIwayPreview(orderIds: string[], selected: OrderWithDriver[], rules = loadRules()): IwayPreview {
+async function buildIwayPreview(orderIds: string[], selected: OrderWithDriver[], rules = loadRules()): Promise<IwayPreview> {
   const errors: string[] = [];
+  const warnings: string[] = [];
   if (!selected.length) errors.push("请至少选择一张订单。");
   if (selected.length !== orderIds.length) errors.push("有订单不存在。");
   const dates = new Set(selected.map((order) => order.serviceDate));
   if (dates.size > 1) errors.push("i’way 回传只能合并同一服务日的订单。");
-  selected.forEach((row) => {
+  for (const row of selected) {
     const order = toOrder(row);
     const driver = row.driverDetail ? toDriverDetails(row.driverDetail) : null;
     // COMPLETED orders may need a corrected, manually sent i'way reply after
@@ -207,13 +212,16 @@ function buildIwayPreview(orderIds: string[], selected: OrderWithDriver[], rules
     if (order.status !== "DRIVER_CONFIRMED" && order.status !== "RETURNED" && order.status !== "COMPLETED") errors.push(`${order.orderNo} 尚未确认完整司机资料。`);
     const check = validateRequiredFields(iwayContext(order, driver), "before_iway_return", rules);
     if (!check.valid) errors.push(`${order.orderNo} 缺少：${fieldLabels(check.missingFields).join("、")}`);
-  });
-  if (errors.length) return { valid: false, errors, orderCount: selected.length, ruleVersion: rules.rules_version };
+    const vehicleGate = await getIwayVehicleGate(row.id);
+    if (!vehicleGate.allowed) errors.push(`${order.orderNo} 车型回传被拦截：${vehicleGate.reason}`);
+    else if (vehicleGate.warning) warnings.push(`${order.orderNo}：${vehicleGate.warning}`);
+  }
+  if (errors.length) return { valid: false, errors, warnings, orderCount: selected.length, ruleVersion: rules.rules_version };
   const serviceDate = selected[0].serviceDate;
   const bodies = selected.map((row) => renderTemplate(rules.templates.iway_return.body, iwayContext(toOrder(row), row.driverDetail ? toDriverDetails(row.driverDetail) : null)));
   const text = [renderTemplate(rules.templates.iway_return.header, { service_date_label_en: formatServiceDateLabel(serviceDate, "en") }), ...bodies, rules.templates.iway_return.footer].join("\n\n");
   const temporaryDriverNames = selected.flatMap((row) => row.driverDetail && isTemporaryName(row.driverDetail.driverNameSource) && row.driverDetail.iwayDriverName ? [{ orderId: row.id, orderNo: row.platformOrderNumber, name: row.driverDetail.iwayDriverName }] : []);
-  return { valid: true, errors: [], text, orderCount: selected.length, serviceDate, ruleVersion: rules.rules_version, temporaryDriverNames };
+  return { valid: true, errors: [], warnings, text, orderCount: selected.length, serviceDate, ruleVersion: rules.rules_version, temporaryDriverNames };
 }
 
 export async function createIwayPreview(orderIds: string[]): Promise<IwayPreview> {
@@ -254,7 +262,7 @@ export async function confirmIwayReturn(batchId: string) {
       include: { driverDetail: true, fleet: true },
       orderBy: { pickupDateTime: "asc" },
     });
-    const latest = buildIwayPreview(orderIds, rows);
+    const latest = await buildIwayPreview(orderIds, rows);
     if (!isIwayPreviewCurrent(batch.contentSnapshot, latest)) {
       throw new Error("IWAY_PREVIEW_STALE:订单在确认期间已变化或已取消，请重新生成并复制回传内容。");
     }

@@ -12,6 +12,12 @@ export type Order = {
   passengerPhone: string;
   route: string;
   vehicleType: string;
+  adults?: number;
+  children?: number;
+  luggage?: number;
+  luggageSource?: "ACTUAL" | "ESTIMATED" | "UNKNOWN";
+  serviceCountry?: string | null;
+  vehicleAssessment?: { status: "COMPLIANT" | "REVIEW_REQUIRED" | "NON_COMPLIANT"; reason: string | null; recommendedModel?: string | null } | null;
   status: OrderStatus;
   cancelReason?: string | null;
   cancelledAt?: string | null;
