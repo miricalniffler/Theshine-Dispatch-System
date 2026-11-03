@@ -7,14 +7,13 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 export const canonicalFleets = {
   "曼谷": { name: "曼谷车队", city: "曼谷" },
   "苏梅": { name: "苏梅车队", city: "苏梅" },
+  "吉隆坡": { name: "吉隆坡车队", city: "吉隆坡" },
 } as const;
 
 export type SupportedFleetCity = keyof typeof canonicalFleets;
 type FleetDb = PrismaClient | Prisma.TransactionClient;
 
-export function isSupportedFleetCity(value: string): value is SupportedFleetCity {
-  return value === "曼谷" || value === "苏梅";
-}
+export function isSupportedFleetCity(value: string): value is SupportedFleetCity { return value in canonicalFleets; }
 
 export async function canonicalFleetForCity(database: FleetDb, city: string) {
   if (!isSupportedFleetCity(city)) throw new Error(`UNSUPPORTED_FLEET_CITY:${city}`);

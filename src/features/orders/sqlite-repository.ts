@@ -1,7 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { Order, OrderFilters } from "./types";
-import { toBangkokDate, type OrderEditInput } from "./order-edit-validation";
+import { type OrderEditInput } from "./order-edit-validation";
+import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
+import { zonedLocalDateTimeToUtc } from "@/features/import/service-timezone";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 
 export async function findPersistedOrder(id: string) {
@@ -16,7 +18,9 @@ export async function updatePersistedOrder(id: string, input: OrderEditInput) {
   const existing = await db.order.findUnique({ where: { id } });
   if (!existing) return { kind: "not-found" as const };
   if (existing.status === "CANCELLED") return { kind: "cancelled" as const };
-  const pickupDateTime = toBangkokDate(input.pickupDateTime);
+  const timeZone = serviceTimeZoneForCity(input.city);
+  const pickupDateTime = timeZone ? zonedLocalDateTimeToUtc(input.pickupDateTime, timeZone) : null;
+  if (!pickupDateTime) throw new Error("INVALID_PICKUP_TIME");
   const routedFleet = await canonicalFleetForCity(db, input.city);
   const values = { platformOrderNumber: input.platformOrderNumber, city: input.city, fleetId: routedFleet.id, pickupDateTime: pickupDateTime.toISOString(), pickupAddress: input.pickupAddress, dropoffAddress: input.dropoffAddress, passengerName: input.passengerName, passengerPhone: input.passengerPhone, flightNumber: input.flightNumber, platformVehicleType: input.platformVehicleType, seatCount: input.seatCount, adults: input.adults, children: input.children, luggage: input.luggage, childSeatLine: input.childSeatLine, meetGreetLine: input.meetGreetLine, otherNotes: input.otherNotes };
   const updatedFields = Object.entries(values).filter(([field, value]) => { const old = existing[field as keyof typeof existing]; return old instanceof Date ? old.toISOString() !== value : old !== value; }).map(([field]) => field);
@@ -102,6 +106,6 @@ export async function listSqliteOrders(filters: OrderFilters = {}) {
       try { const value = JSON.parse(cancellation?.metadata ?? "{}"); cancelReason = typeof value.reason === "string" ? value.reason : null; } catch { /* legacy audit metadata */ }
       const latestNote = latestNotes.get(row.id);
       const driverDetail = row.driverDetail ? { confirmedDriverName: row.driverDetail.confirmedDriverName, normalizedDriverPhone: row.driverDetail.normalizedDriverPhone, confirmedVehicleModel: row.driverDetail.confirmedVehicleModel, licensePlate: row.driverDetail.licensePlate, reassignmentCount: row.driverVehicleAssignments.length } : null;
-      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail };
+      return { id: row.id, orderNo: row.platformOrderNumber, serviceDate: row.serviceDate, pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: serviceTimeZoneForCity(row.city) ?? "Asia/Bangkok" }), city: row.city as Order["city"], fleetName: row.fleet?.name ?? "待选择", passengerName: row.passengerName, passengerPhone: row.passengerPhone, route: `${row.pickupAddress} → ${row.dropoffAddress}`, vehicleType: row.platformVehicleType, status: row.status as Order["status"], cancelReason, cancelledAt: cancellation?.createdAt.toISOString() ?? null, restoreBlockedReason: cancellation?.action === "飞书邮件同步：订单已取消" ? "此订单由飞书同步取消，需先在外部平台核实恢复状态。" : null, latestExceptionNote: latestNote?.note ?? null, latestExceptionAt: latestNote?.at.toISOString() ?? null, exceptions: row.customerCommunicationExceptions.map((item) => item.exceptionType), createdAt: row.createdAt.toISOString(), driverDetail };
     });
 }

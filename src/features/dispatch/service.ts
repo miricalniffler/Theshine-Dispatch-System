@@ -1,6 +1,7 @@
 import { loadRules } from "@/lib/rules/load-rules";
 import { defaultLuggageCount, formatInternationalPhone, formatMeetGreetLine, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { db } from "@/lib/db";
+import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 
 type DispatchOrder = {
   id: string;
@@ -47,6 +48,7 @@ function contentFor(order: DispatchOrder, rules = loadRules()) {
     pickup_date: order.serviceDate,
     pickup_time: order.pickupTime,
     pickup_datetime: `${order.serviceDate} ${order.pickupTime}`,
+    service_timezone: serviceTimeZoneForCity(order.city) ?? "Asia/Bangkok",
     pickup_address: safeAddress(order.pickupAddress),
     dropoff_address: safeAddress(order.dropoffAddress),
     platform_vehicle_type: order.vehicleType,
@@ -95,7 +97,7 @@ async function selectedDispatchOrders(orderIds: string[]) {
     id: row.id,
     orderNo: row.platformOrderNumber,
     serviceDate: row.serviceDate,
-    pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }),
+    pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: serviceTimeZoneForCity(row.city) ?? "Asia/Bangkok" }),
     city: row.city,
     fleetName: row.fleet?.name ?? "待选择",
     passengerName: row.passengerName,

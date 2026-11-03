@@ -6,7 +6,7 @@ export type Order = {
   orderNo: string;
   serviceDate: string;
   pickupTime: string;
-  city: "曼谷" | "苏梅";
+  city: "曼谷" | "苏梅" | "吉隆坡";
   fleetName: string;
   passengerName: string;
   passengerPhone: string;
