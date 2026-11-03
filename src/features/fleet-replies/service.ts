@@ -469,8 +469,13 @@ export async function analyzeFleetReply(replyId: string) {
   // as an independent order reply.
   if (reply.images.length) {
     const packageVision = await recognizeFleetPackage(reply.rawText, reply.images.map((image) => image.storagePath), orders.map((order) => order.orderNo));
-    if (!applyFleetPackage(result.records, packageVision, orders)) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "资料包图片识别尚未开启；原始资料已保存为草稿，可人工补充。" });
-    else result.recognition = { provider: packageVision.provider === "NONE" ? "RULES" : packageVision.provider, label: packageVision.provider === "GLM" ? "AI：GLM 联合资料包" : "AI：Qwen 联合资料包", note: packageVision.note };
+    if (!applyFleetPackage(result.records, packageVision, orders)) {
+      const disabled = !isAiVisionRealCallsEnabled();
+      result.recognition = { provider: "RULES", label: disabled ? "AI 未开启" : "AI 服务暂不可用", note: packageVision.note };
+      result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: disabled
+        ? "资料包图片识别尚未开启；原始资料已保存为草稿，可人工补充。"
+        : `资料包图片识别未完成：${packageVision.note}。原始资料已保存为草稿，可人工补充。` });
+    } else result.recognition = { provider: packageVision.provider === "GLM" ? "GLM" : "QWEN", label: packageVision.provider === "GLM" ? "AI：GLM 联合资料包" : "AI：Qwen 联合资料包", note: packageVision.note };
   }
   await translateThaiNames(result.records);
   await applyVehicleHistory(result.records);
