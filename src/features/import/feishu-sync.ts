@@ -2,6 +2,8 @@ import { db } from "@/lib/db";
 import { pullConnectorMessages, type ImportedMessage } from "./connectors";
 import { canonicalFleetForCity } from "@/features/fleets/canonical-fleets";
 import { detectDispatchCity } from "@/lib/city/detect-city";
+import { isIwayNewRideEmail, parseIwayNewRide } from "./iway-new-ride-parser";
+import { zonedLocalDateTimeToUtc } from "./service-timezone";
 
 export type SyncSummary = { runId: string; created: number; updated: number; cancelled: number; skipped: number };
 
@@ -36,10 +38,12 @@ function orderNumber(message: ImportedMessage) {
   return pick(message.text, "(?:Order Number|Order ID)") || message.subject?.match(/#(\d+)/)?.[1] || "";
 }
 
-function dateTime(value: string) {
+function dateTime(value: string, timeZone: string) {
   const match = value.match(/(\d{4}-\d{2}-\d{2})[^0-9]*(\d{2}:\d{2})?/);
   if (!match) return null;
-  return { serviceDate: match[1], time: match[2] ?? "00:00", date: new Date(`${match[1]}T${match[2] ?? "00:00"}:00+07:00`) };
+  const time = match[2] ?? "00:00";
+  const date = zonedLocalDateTimeToUtc(`${match[1]}T${time}`, timeZone);
+  return date ? { serviceDate: match[1], time, date } : null;
 }
 
 function receivedAt(value: string | undefined) {
@@ -65,7 +69,11 @@ async function recordMessage(message: ImportedMessage, orderId?: string) {
 async function applyMessage(message: ImportedMessage): Promise<"created" | "updated" | "cancelled" | "skipped"> {
   const externalId = message.id.trim();
   if (!externalId || await db.importedSourceMessage.findUnique({ where: { connector_externalId: { connector: "feishu-mail", externalId } } })) return "skipped";
-  const platformOrderNumber = orderNumber(message);
+  // A configured cloud bridge can deliver the same structured i'way New ride
+  // body as Gmail. Reuse that parser so its KL fields are not rejected by the
+  // older label-only Feishu reader.
+  const structured = isIwayNewRideEmail(message.text) ? parseIwayNewRide(message.text, { referenceDate: receivedAt(message.receivedAt) ?? undefined }) : null;
+  const platformOrderNumber = structured?.platformOrderNumber || orderNumber(message);
   if (!platformOrderNumber) { await recordMessage(message); return "skipped"; }
   const existing = await db.order.findUnique({ where: { platformOrderNumber } });
   if (message.action === "cancel") {
@@ -82,19 +90,21 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
     await recordMessage(message, existing.id);
     return cancelled ? "cancelled" : "skipped";
   }
-  const pickup = dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"));
-  const passengerName = pick(message.text, "Passenger Name");
-  const passengerPhone = phoneFrom(pick(message.text, "(?:Passenger Phone Number|Phone)"));
-  const pickupAddress = addressFrom(pick(message.text, "Pickup address"));
-  const dropoffAddress = addressFrom(pick(message.text, "Dropoff address"));
-  const platformVehicleType = pick(message.text, "Vehicle Type");
-  if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
-  const cityDetection = detectDispatchCity(pickupAddress, dropoffAddress);
+  const passengerName = structured?.passengerName || pick(message.text, "Passenger Name");
+  const passengerPhone = structured?.passengerPhone || phoneFrom(pick(message.text, "(?:Passenger Phone Number|Phone)"));
+  const pickupAddress = structured?.pickupAddress || addressFrom(pick(message.text, "Pickup address"));
+  const dropoffAddress = structured?.dropoffAddress || addressFrom(pick(message.text, "Dropoff address"));
+  const platformVehicleType = structured?.platformVehicleType || pick(message.text, "Vehicle Type");
+  const cityDetection = structured?.cityDetection ?? detectDispatchCity(pickupAddress, dropoffAddress);
   const city = cityDetection.city;
-  const adults = numberFrom(pick(message.text, "(?:Adults|Number of passengers)"));
-  const children = numberFrom(pick(message.text, "Children"));
+  const pickup = structured?.pickupDateTime
+    ? dateTime(structured.pickupDateTime.replace("T", " "), structured.serviceTimeZone || (city === "吉隆坡" ? "Asia/Kuala_Lumpur" : "Asia/Bangkok"))
+    : dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"), city === "吉隆坡" ? "Asia/Kuala_Lumpur" : "Asia/Bangkok");
+  if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
+  const adults = structured?.adults ?? numberFrom(pick(message.text, "(?:Adults|Number of passengers)"));
+  const children = structured?.children ?? numberFrom(pick(message.text, "Children"));
   const statedLuggage = pick(message.text, "(?:Luggage|Number of luggage|Baggage)");
-  const data = { serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: pick(message.text, "Flight Number") || null, adults, children, luggage: statedLuggage ? numberFrom(statedLuggage) : adults + children, meetGreetLine: meetGreetFor(message.text), rawSource: message.text };
+  const data = { serviceDate: pickup.serviceDate, pickupDateTime: pickup.date, passengerName, passengerPhone, pickupAddress, dropoffAddress, platformVehicleType, flightNumber: structured?.flightNumber || pick(message.text, "Flight Number") || null, adults, children, luggage: structured?.luggage ?? (statedLuggage ? numberFrom(statedLuggage) : adults + children), meetGreetLine: structured?.meetGreetLine || meetGreetFor(message.text), rawSource: message.text };
   if (existing) {
     const updated = await db.$transaction(async (tx) => {
       // An externally cancelled order requires an explicit external restore

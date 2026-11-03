@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+import { cityFromIwayOrder, serviceTimeZoneForLocalSync } from "./iway-local-sync-city.mjs";
 
 // LaunchAgent runs unattended. Without a database connection timeout, a
 // transient Supabase network stall can leave its single process alive forever,
@@ -91,22 +92,16 @@ function serviceDate(value) {
   return month ? `${match[3]}-${String(month).padStart(2, "0")}-${match[2].padStart(2, "0")}` : "";
 }
 
-function cityFromOrder(iwayCity, pickupAddress, dropoffAddress) {
-  // i'way 的 City 偶尔填的是错误的行政城市。苏梅的接/送地址比这行字段
-  // 更接近实际派车地点，因此只要任一地址明确出现苏梅，就优先归到苏梅。
-  const route = `${pickupAddress} ${dropoffAddress}`.toLowerCase();
-  if (/\b(?:koh\s+samui|ko\s+samui|samui|chaweng|lamai|bophut|bo\s+phut|surat\s+thani|usm)\b/i.test(route)) return "苏梅";
-  if (/^(?:koh\s+samui|ko\s+samui|samui)$/i.test(iwayCity)) return "苏梅";
-  if (/^bangkok$/i.test(iwayCity)) return "曼谷";
-  return null;
-}
-
 function platformVehicleLabel(vehicleClass) {
   const category = normalizedText(vehicleClass).split("(")[0].trim();
   // Model cars 只是该等级可用的示例车，不是订单要求的车型。C 是 i'way
   // 的 COMFORT 等级代码，应转换为平台车型名称后再显示/派单。
   if (/^C$/i.test(category)) return "COMFORT";
   return category;
+}
+
+function isOrderAlreadyCreated(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
 }
 
 function parseOrder(message, meta) {
@@ -132,7 +127,7 @@ function parseOrder(message, meta) {
   const phoneBlock = capture(text, /Phone:\s*(.*?)\s+Please send us a confirmation/i);
   const phones = phonesFrom(phoneBlock);
   const additionalRemarks = capture(text, /Additional remarks:\s*(.*?)\s+i[’']way notes:/i);
-  const city = cityFromOrder(iwayCity, pickupAddress, dropoffAddress);
+  const city = cityFromIwayOrder(iwayCity, pickupAddress, dropoffAddress);
   const children = Number(capture(text, /Children:\s*(\d+)/i)) || 0;
   const statedAdults = Number(capture(text, /Adults:\s*(\d+)/i)) || 0;
   const adults = statedAdults || Math.max(0, pax - children);
@@ -141,7 +136,9 @@ function parseOrder(message, meta) {
     orderNo,
     city,
     serviceDate: date,
-    pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00+07:00`),
+    // Kuala Lumpur is one hour behind Bangkok. Store an actual instant so the
+    // home-page date window and displayed local pickup time stay correct.
+    pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00${serviceTimeZoneForLocalSync(city) === "Asia/Kuala_Lumpur" ? "+08:00" : "+07:00"}`),
     pickupAddress,
     dropoffAddress,
     passengerName: passengers.at(-1),
@@ -242,7 +239,7 @@ async function main() {
     return;
   }
   const fleets = new Map();
-  for (const city of ["曼谷", "苏梅"]) {
+  for (const city of ["曼谷", "苏梅", "吉隆坡"]) {
     const name = `${city}车队`;
     const fleet = await db.fleet.findUnique({ where: { name_city: { name, city } } });
     if (!fleet) throw new Error(`找不到${name}；为避免创建额外车队，本次新订单未导入。`);
@@ -274,9 +271,17 @@ async function main() {
       otherNotes: item.otherNotes,
       rawSource: item.rawSource,
     };
-    const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
-    await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
-    summary.created.push(item.orderNo);
+    try {
+      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
+      await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
+      summary.created.push(item.orderNo);
+    } catch (error) {
+      // The LaunchAgent and a button-triggered run can overlap. The unique
+      // order number is the final idempotency guard; another successful run
+      // means this one should finish normally without overwriting anything.
+      if (!isOrderAlreadyCreated(error)) throw error;
+      summary.unchanged.push(item.orderNo);
+    }
   }
   // 只标记已成功读懂的邮件。格式异常的邮件仍会在下一次刷新重试，避免
   // 一次解析器故障把订单永久忽略。
