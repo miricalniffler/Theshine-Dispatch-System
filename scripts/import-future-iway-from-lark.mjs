@@ -100,6 +100,10 @@ function platformVehicleLabel(vehicleClass) {
   return category;
 }
 
+function isOrderAlreadyCreated(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
+}
+
 function parseOrder(message, meta) {
   const text = normalizedText(message.body_plain_text);
   const orderNo = capture(text, /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, "");
@@ -267,9 +271,17 @@ async function main() {
       otherNotes: item.otherNotes,
       rawSource: item.rawSource,
     };
-    const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
-    await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
-    summary.created.push(item.orderNo);
+    try {
+      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
+      await db.activityLog.create({ data: { orderId: created.id, action: "从飞书邮箱导入未来订单", actor: "系统导入", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
+      summary.created.push(item.orderNo);
+    } catch (error) {
+      // The LaunchAgent and a button-triggered run can overlap. The unique
+      // order number is the final idempotency guard; another successful run
+      // means this one should finish normally without overwriting anything.
+      if (!isOrderAlreadyCreated(error)) throw error;
+      summary.unchanged.push(item.orderNo);
+    }
   }
   // 只标记已成功读懂的邮件。格式异常的邮件仍会在下一次刷新重试，避免
   // 一次解析器故障把订单永久忽略。
