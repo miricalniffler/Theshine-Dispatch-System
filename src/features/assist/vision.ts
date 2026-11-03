@@ -4,6 +4,11 @@ import { AI_MODELS } from "./model-config";
 export type VehicleVision = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; provider: "GLM" | "QWEN" | "NONE"; note: string };
 export type ScreenshotVisionRecord = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_brand: string | null; vehicle_model: string | null; confirmation_status: "ACCEPTED" | "PENDING_DETAILS" | "DECLINED" | "UNKNOWN"; confidence: VehicleVision["confidence"] };
 export type ScreenshotVision = { records: ScreenshotVisionRecord[]; provider: VehicleVision["provider"]; note: string };
+/** A single operator submission can contain a WhatsApp conversation, an ID
+ * card, a vehicle photo and a payment QR.  Keep the extraction grouped so
+ * the service can associate fields only after it has applied order rules. */
+export type FleetPackageVisionRecord = ScreenshotVisionRecord & { vehicle_category: string | null; vehicle_color: string | null; driver_name_source: "DRIVER_DETAILS" | "EWALLET_PAYEE" | "UNKNOWN"; source_image_indexes: number[] };
+export type FleetPackageVision = { records: FleetPackageVisionRecord[]; provider: VehicleVision["provider"]; note: string };
 export type FleetTextVisionRecord = { order_number: string | null; driver_name: string | null; driver_phone: string | null; license_plate: string | null; vehicle_brand: string | null; vehicle_category: string | null; vehicle_model: string | null; confidence: VehicleVision["confidence"] };
 export type FleetTextVision = { records: FleetTextVisionRecord[]; provider: VehicleVision["provider"]; note: string };
 
@@ -73,6 +78,18 @@ const screenshotPrompt = `读取 WhatsApp 车队聊天截图中明确可见的�
 - 仅填写截图明确可见字段；号码、车牌、品牌与型号要保留原文，无法确认填 null。
 只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_phone":string|null,"license_plate":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"confirmation_status":"ACCEPTED"|"PENDING_DETAILS"|"DECLINED"|"UNKNOWN","confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
 
+const fleetPackagePrompt = `你是吉隆坡机场接送车队资料包的信息抽取助手。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
+
+严格安全规则：
+- 仅当截图或文字中出现精确订单号时才填写 order_number；多笔订单必须分开 records。没有订单号、订单号不在资料包中，或同一订单对应两套司机/车辆资料时保持待核对，不自行关联。
+- WhatsApp 联系人/群成员名字不是司机姓名。电子钱包收款人姓名只能在资料包仅有一笔精确订单、没有其他司机姓名且没有冲突时作为候选；把 driver_name_source 写为 EWALLET_PAYEE。银行卡号、钱包号、二维码内容、交易号绝不能写入任何字段。
+- 司机电话只能来自明确的司机资料；马来西亚号码保留原文（例如 012-345 6789 或 +60 12-345 6789），账户号不可当电话。
+- 车辆照片可填清晰可见的品牌、车牌、颜色；若不能可靠辨别具体型号，vehicle_model 必须为 null，不能猜测。Sedan、SUV、MPV、Van 是类别，不能当车型。
+- On/Confirmed/OK 仅代表接单；Pm detail 表示待司机资料。引用消息用于理解上下文，不能把旧资料当作最新资料。
+- 只记录明确可见的信息，低置信度也要如实标出。不要解释，不要输出额外字段。
+
+只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_name_source":"DRIVER_DETAILS"|"EWALLET_PAYEE"|"UNKNOWN","driver_phone":string|null,"license_plate":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"vehicle_category":string|null,"vehicle_color":string|null,"confirmation_status":"ACCEPTED"|"PENDING_DETAILS"|"DECLINED"|"UNKNOWN","source_image_indexes":number[],"confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
+
 const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。仅从原文提取明确出现的订单号、司机姓名、泰国电话、原始车牌（保留泰文）、车辆类别、车辆品牌和具体车型。\n\n严格规则：\n- Driver/司机字段绝不能包含 Car Plate、Plate Number、Mobile、Phone、Tel、Vehicle、Model 等标签，也不能包含车牌或电话号码。\n- 车牌必须保留原文，例如“ฮพ 5348 กรุงเทพ”，不得只保留数字。\n- vehicle_category（例如 VAN）与 vehicle_brand、vehicle_model 分别填写，不能把大类当作具体车型。\n- 无法确定就填 null，不能猜测或补全。\n- 一条原文可有多笔订单。\n\n只输出 JSON：{\"records\":[{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_category\":string|null,\"vehicle_brand\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}]}`;
 
 function confidence(value: unknown): VehicleVision["confidence"] {
@@ -88,6 +105,38 @@ function fleetText(value: unknown, provider: FleetTextVision["provider"], note: 
     const row = item as Record<string, unknown>;
     return [{ order_number: text(row, "order_number"), driver_name: text(row, "driver_name"), driver_phone: text(row, "driver_phone"), license_plate: text(row, "license_plate"), vehicle_brand: text(row, "vehicle_brand"), vehicle_category: text(row, "vehicle_category"), vehicle_model: text(row, "vehicle_model"), confidence: confidence(row.confidence) }];
   }), provider, note };
+}
+
+function fleetPackage(value: unknown, provider: FleetPackageVision["provider"], note: string): FleetPackageVision {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rows = Array.isArray(raw.records) ? raw.records : [];
+  const text = (row: Record<string, unknown>, key: string) => typeof row[key] === "string" && row[key].trim() ? row[key].trim().slice(0, 160) : null;
+  const source = (value: unknown): FleetPackageVisionRecord["driver_name_source"] => value === "DRIVER_DETAILS" || value === "EWALLET_PAYEE" ? value : "UNKNOWN";
+  const indexes = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((item): item is number => Number.isInteger(item) && item > 0 && item <= 6))] : [];
+  return { records: rows.slice(0, 12).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    return [{ order_number: text(row, "order_number"), driver_name: text(row, "driver_name"), driver_name_source: source(row.driver_name_source), driver_phone: text(row, "driver_phone"), license_plate: text(row, "license_plate"), vehicle_brand: text(row, "vehicle_brand"), vehicle_model: text(row, "vehicle_model"), vehicle_category: text(row, "vehicle_category"), vehicle_color: text(row, "vehicle_color"), confirmation_status: row.confirmation_status === "ACCEPTED" || row.confirmation_status === "PENDING_DETAILS" || row.confirmation_status === "DECLINED" ? row.confirmation_status : "UNKNOWN", source_image_indexes: indexes(row.source_image_indexes), confidence: confidence(row.confidence) }];
+  }), provider, note };
+}
+
+export async function recognizeFleetPackage(rawText: string, imageUrls: string[], candidateOrderNumbers: string[]): Promise<FleetPackageVision> {
+  if (!isAiVisionRealCallsEnabled()) return { records: [], provider: "NONE", note: "AI 实际调用尚未启用；已保存资料包草稿，等待人工补充。" };
+  const content: QwenContent = [{ type: "text", text: `${fleetPackagePrompt}\n\n候选订单号：${candidateOrderNumbers.join("、")}\n\n本次提交原文：\n${rawText.slice(0, 12_000)}` }, ...imageUrls.slice(0, 6).map((url) => ({ type: "image_url" as const, image_url: { url } }))];
+  const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
+  try {
+    if (!key) throw new Error("GLM_NOT_CONFIGURED");
+    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`GLM_${response.status}`);
+    const result = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
+    if (typeof result !== "string") throw new Error("GLM_EMPTY_RESPONSE");
+    return fleetPackage(JSON.parse(result.replace(/^```json\s*|\s*```$/g, "")), "GLM", "AI：GLM 联合识别资料包；仍需按字段核对。");
+  } catch (reason) {
+    try {
+      return fleetPackage(await qwenJson<Record<string, unknown>>([{ role: "user", content }], AI_MODELS.vehicleVision.fallback.model, { timeoutMs: AI_MODELS.vehicleVision.fallback.timeoutMs }), "QWEN", `AI：Qwen 联合识别资料包（GLM ${failureReason(reason, "GLM")}）`);
+    } catch (fallbackError) { return { records: [], provider: "NONE", note: `资料包识别未完成：${unavailableScreenshotNote(reason, fallbackError)}` }; }
+  }
 }
 
 /**

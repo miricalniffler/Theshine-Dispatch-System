@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import "@/features/iway/iway.css";
 
 type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
-type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_brand: { value: string | null; evidence: string }; vehicle_model_raw: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
+type ReplyRecord = { source_index: number; order_match: { platform_order_number: string | null; confidence: string; evidence: string }; driver_name: { value: string | null; evidence: string }; driver_phone: { value: string | null; evidence: string }; license_plate: { value: string | null; evidence: string }; vehicle_category: { value: string | null; evidence: string }; vehicle_brand: { value: string | null; evidence: string }; vehicle_model_raw: { value: string | null; evidence: string }; vehicle_model: { value: string | null; evidence: string }; vehicle_color?: { value: string | null; evidence: string }; image_source_index: number | null; needs_review: boolean; review_reasons: string[] };
 type Result = { records: ReplyRecord[]; unmatched_items: { source_type: string; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
 type Editable = { orderId: string; driverName: string; driverPhone: string; licensePlate: string; vehicleCategory: string; vehicleModel: string; vehicleManualConfirmed: boolean };
 type ReturnWorkItem = { order: CandidateOrder & { serviceDate: string; pickupTime: string; status: string }; driver: { confirmedDriverName: string | null; normalizedDriverPhone: string | null; confirmedVehicleCategory: string | null; confirmedVehicleModel: string | null; licensePlate: string | null } | null };
@@ -92,7 +92,9 @@ export function FleetReplyWorkspace() {
 
   async function selectImages(files: Iterable<File> | null | undefined) {
     if (!files) return;
-    const next = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map(async (file) => {
+    const selected = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    if (images.length + selected.length > 6) { setNotice({ tone: "error", text: "一次资料包最多添加 6 张图片，请分两次提交并在后续页面补充资料。" }); return; }
+    const next = await Promise.all(selected.map(async (file) => {
       const optimized = await fileToDataUrl(file);
       return { ...optimized, filename: file.name || "粘贴的车辆图片" };
     }));
@@ -279,12 +281,12 @@ export function FleetReplyWorkspace() {
 
   return <main className="workflow-page fleet-reply-page">
     <nav className="workflow-nav"><a href="/orders">订单</a><a className="active" href="/driver-details">车队回传</a></nav>
-    <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>识别、核对和 i’way 文本生成在同一页完成。订单号、电话、车牌和回传格式由网站规则处理；AI 可在启用后辅助识别泰文聊天截图、姓名转写和车辆图片，所有结果都可修改后再保存。</p></header>
+    <header className="workflow-header"><p className="workflow-kicker">车队回传</p><h1>车队回复与 i’way 回传</h1><p>一次提交中的文字和图片会作为同一个资料包联合核对。订单号、电话、车牌和回传格式仍由网站规则处理；AI 只辅助提取，资料不完整、冲突或不确定时不会自动回传。</p></header>
     <section className="fleet-reply-source">
       <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
       <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option><option value="KUALA_LUMPUR">吉隆坡车队</option></select></label>
-      <label className="vehicle-upload">添加车辆照片或车队聊天截图<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
+      <label className="vehicle-upload">添加车辆照片、资料卡、电子钱包截图或车队聊天截图（每包最多 6 张）<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
       {images.length > 0 && <div className="reply-image-list" aria-label="已添加车辆图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
     </section>
@@ -306,7 +308,7 @@ export function FleetReplyWorkspace() {
           <label>具体车型<input value={forms[index]?.vehicleModel ?? ""} onChange={(event) => setForm(index, "vehicleModel", event.target.value)} /></label>
           {(record.needs_review || forms[index]?.vehicleModel.trim() !== (record.vehicle_model.value ?? "").trim() || orders.find(order => order.id === forms[index]?.orderId)?.orderNo.replace(/\D/g, "") !== record.order_match.platform_order_number?.replace(/\D/g, "")) && <label><input type="checkbox" checked={forms[index]?.vehicleManualConfirmed ?? false} onChange={(event) => setForm(index, "vehicleManualConfirmed", event.target.checked)} />我已人工核对车型及品牌</label>}
         </div>
-        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.vehicle_brand.value ? `；AI 品牌：${record.vehicle_brand.value}` : ""}{record.vehicle_model_raw.value && record.vehicle_model_raw.value !== record.vehicle_model.value ? `；AI 型号原文：${record.vehicle_model_raw.value}` : ""}{record.image_source_index ? `；关联车辆图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
+        <p className="reply-evidence">车型来源：{record.vehicle_model.evidence || record.vehicle_category.evidence || "原文未提供"}{record.vehicle_brand.value ? `；AI 品牌：${record.vehicle_brand.value}` : ""}{record.vehicle_model_raw.value && record.vehicle_model_raw.value !== record.vehicle_model.value ? `；AI 型号原文：${record.vehicle_model_raw.value}` : ""}{record.vehicle_color?.value ? `；车辆颜色：${record.vehicle_color.value}` : ""}{record.image_source_index ? `；关联资料包图片 ${record.image_source_index}` : ""}{record.needs_review ? `；${record.review_reasons.join("；")}` : ""}</p>
       </article>)}
       {result.unmatched_items.length > 0 && <div className="unmatched-block"><h3>待补充信息</h3>{result.unmatched_items.map((item) => <p key={`${item.source_type}-${item.source_id}`}>{item.reason || "AI 无法判断归属，请补充订单号。"}</p>)}</div>}
       <div className="preview-actions"><button type="button" className="confirm-action" onClick={saveAssigned} disabled={working}>{working ? "正在生成…" : "保存修改并重新生成回传"}</button><button type="button" className="secondary-action" onClick={cancelEditing} disabled={working}>取消修改</button></div></>}
