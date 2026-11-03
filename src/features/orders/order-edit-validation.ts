@@ -4,7 +4,7 @@ const optionalText = (max: number) => z.string().trim().max(max).optional().null
 
 export const orderEditSchema = z.object({
   platformOrderNumber: z.string().trim().min(1, "请填写平台订单号").max(100),
-  city: z.enum(["曼谷", "苏梅"], { message: "请选择服务城市" }),
+  city: z.enum(["曼谷", "苏梅", "吉隆坡"], { message: "请选择服务城市" }),
   fleetId: z.string().trim().min(1).optional().nullable().transform((value) => value || null),
   pickupDateTime: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, "请填写有效的接客日期和时间").refine((value) => !Number.isNaN(new Date(`${value}:00+07:00`).getTime()), "请填写有效的接客日期和时间"),
   pickupAddress: z.string().trim().min(1, "请填写上车地点").max(500),

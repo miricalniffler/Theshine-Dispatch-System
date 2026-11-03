@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import type { DriverDetail, Order as PersistedOrder } from "@prisma/client";
 import type { Order } from "@/features/orders/types";
-import { formatServiceDateLabel, normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { formatServiceDateLabel, normalizeDriverPhone, normalizeLicensePlateForReturn, normalizeVehicleModel, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 import { loadRules } from "@/lib/rules/load-rules";
 import { prepareDriverNotificationForOrder } from "@/features/customer-notifications/service";
 import { archiveDriverVehicle, isTemporaryName } from "@/features/archives/service";
@@ -33,7 +34,7 @@ function toOrder(row: PersistedOrder & { fleet?: { name: string } | null }): Ord
     id: row.id,
     orderNo: row.platformOrderNumber,
     serviceDate: row.serviceDate,
-    pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" }),
+    pickupTime: row.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: serviceTimeZoneForCity(row.city) ?? "Asia/Bangkok" }),
     city: row.city as Order["city"],
     fleetName: row.fleet?.name ?? "待选择",
     passengerName: row.passengerName,
@@ -120,7 +121,7 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
   if (persisted.status === "CANCELLED") throw new Error("ORDER_CANCELLED");
   const order = toOrder(persisted);
   const rules = loadRules();
-  const normalizedDriverPhone = normalizeThailandPhone(input.rawDriverPhone, rules);
+  const normalizedDriverPhone = normalizeDriverPhone(input.rawDriverPhone, persisted.city, rules);
   const record: DriverDetails = {
     orderId,
     rawReply: input.rawReply?.trim() ?? "",

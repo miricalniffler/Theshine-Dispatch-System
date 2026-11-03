@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
-import { normalizeLicensePlateForReturn, normalizeThailandPhone, normalizeVehicleModel, resolveVehicleModel } from "@/lib/rules/engine";
+import { normalizeDriverPhone, normalizeLicensePlateForReturn, normalizeVehicleModel, resolveVehicleModel } from "@/lib/rules/engine";
+import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
 import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
@@ -25,7 +26,7 @@ type ReplyRecord = {
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
 type VisualResult = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN" };
-type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI";
+type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
 function normalizePlate(value: string | null) { return (normalizeLicensePlateForReturn(value) ?? "").replace(/[\s-]/g, "").toLowerCase(); }
@@ -66,7 +67,7 @@ async function candidateOrdersFor(reply: { dispatchBatchId: string | null; candi
   const orders = await db.order.findMany({ where, include: { fleet: true }, orderBy: { pickupDateTime: "asc" } });
   return orders.map((order): CandidateOrder => ({
     id: order.id, orderNo: order.platformOrderNumber, passengerName: order.passengerName,
-    pickup: `${order.serviceDate} ${order.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" })}`,
+    pickup: `${order.serviceDate} ${order.pickupDateTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: serviceTimeZoneForCity(order.city) ?? "Asia/Bangkok" })}`,
     route: `${order.pickupAddress} → ${order.dropoffAddress}`, city: order.city, fleetName: order.fleet?.name ?? "未分配车队",
   }));
 }
@@ -86,7 +87,7 @@ export async function listFleetReplyDates() {
 export async function createFleetReply(input: { dispatchBatchId?: string; orderIds?: string[]; serviceDate?: string; rawText?: string; fleetProfile?: FleetProfile; images?: { dataUrl: string; filename?: string; mimeType?: string }[] }) {
   const rawText = input.rawText?.trim() ?? "";
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate ?? "") ? input.serviceDate! : bangkokTomorrow();
-  const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : undefined;
+  const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : input.fleetProfile === "KUALA_LUMPUR" ? "吉隆坡" : undefined;
   const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["CANCELLED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
   const orderIds = [...new Set([...(input.orderIds ?? []), ...dateOrderIds])];
   if (!rawText && !(input.images?.length)) throw new Error("SOURCE_REQUIRED");
@@ -216,10 +217,10 @@ function autoMatchSingleUnassigned(records: ReplyRecord[], orders: CandidateOrde
 
 function resolveProfile(reply: { createdBy: string | null; rawText: string }, orders: CandidateOrder[]): FleetProfile {
   const requested = reply.createdBy?.split("|")[1] as FleetProfile | undefined;
-  if (requested === "BANGKOK" || requested === "SAMUI") return requested;
+  if (requested === "BANGKOK" || requested === "SAMUI" || requested === "KUALA_LUMPUR") return requested;
   const normalized = normalizedOrderNo(reply.rawText);
   const matchedCities = new Set(orders.filter((order) => normalized.includes(normalizedOrderNo(order.orderNo))).map((order) => order.city));
-  if (matchedCities.size === 1) return [...matchedCities][0].includes("苏梅") ? "SAMUI" : "BANGKOK";
+  if (matchedCities.size === 1) return [...matchedCities][0] === "苏梅" ? "SAMUI" : [...matchedCities][0] === "吉隆坡" ? "KUALA_LUMPUR" : "BANGKOK";
   return "AUTO";
 }
 
@@ -328,15 +329,22 @@ async function applyScreenshotImages(records: ReplyRecord[], images: { storagePa
   const scans = await Promise.all(images.slice(0, 4).map((image) => recognizeFleetScreenshot(image.storagePath)));
   scans.forEach((scan, index) => {
     if (scan.provider === "NONE") return;
-    const exact = scan.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(scan.order_number!)) : undefined;
-    const target = exact ? records.find((record) => record.order_match.platform_order_number === exact.orderNo) ?? records.find((record) => !record.order_match.platform_order_number) : records.length === 1 ? records[0] : undefined;
-    if (!target) return;
-    if (exact) { target.order_match = { platform_order_number: exact.orderNo, confidence: scan.confidence === "HIGH" ? "high" : "medium", evidence: `截图 ${index + 1} 识别到订单号` }; target.needs_review = false; target.review_reasons = []; }
-    if (!target.driver_name.value && scan.driver_name) target.driver_name = field(scan.driver_name, `来自截图 ${index + 1}`);
-    if (!target.driver_phone.value && scan.driver_phone) target.driver_phone = field(scan.driver_phone, `来自截图 ${index + 1}`);
-    if (!target.license_plate.value && scan.license_plate) target.license_plate = field(scan.license_plate, `来自截图 ${index + 1}`);
-    if (!target.vehicle_model.value && scan.vehicle_model) applyRecognizedVehicle(target, scan.vehicle_brand, scan.vehicle_model, `来自截图 ${index + 1}`, scan.confidence);
-    target.image_source_index = index + 1;
+    scan.records.forEach((item) => {
+      const exact = item.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)) : undefined;
+      const target = exact ? records.find((record) => record.order_match.platform_order_number === exact.orderNo) ?? records.find((record) => !record.order_match.platform_order_number) : records.length === 1 ? records[0] : undefined;
+      if (!target) return;
+      if (exact) { target.order_match = { platform_order_number: exact.orderNo, confidence: item.confidence === "HIGH" ? "high" : "medium", evidence: `截图 ${index + 1} 识别到订单号` }; target.needs_review = false; target.review_reasons = []; }
+      const merge = (key: "driver_name" | "driver_phone" | "license_plate", value: string | null) => {
+        if (!value) return;
+        if (!target[key].value) target[key] = field(value, `来自截图 ${index + 1}`);
+        else if (target[key].value !== value) { target.needs_review = true; target.review_reasons.push(`截图 ${index + 1} 的${key}与已有资料冲突，请人工确认`); }
+      };
+      merge("driver_name", item.driver_name); merge("driver_phone", item.driver_phone); merge("license_plate", item.license_plate);
+      if (!target.vehicle_model.value && item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `来自截图 ${index + 1}`, item.confidence);
+      if (item.confirmation_status === "PENDING_DETAILS") { target.needs_review = true; target.review_reasons.push("车队表示稍后提供资料，当前不能视为司机资料完整"); }
+      if (item.confirmation_status === "DECLINED") { target.needs_review = true; target.review_reasons.push("截图显示车队可能无法安排，请人工确认订单状态"); }
+      target.image_source_index = index + 1;
+    });
   });
 }
 
@@ -450,7 +458,8 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
       errors.push({ orderId: record.orderId, message: "AI 车型存在品牌缺失或冲突；请先人工核对车型并勾选确认后再保存。" });
       continue;
     }
-    const phone = normalizeThailandPhone(record.driverPhone, rules);
+    const order = candidates.find((candidate) => candidate.id === record.orderId);
+    const phone = normalizeDriverPhone(record.driverPhone, order?.city ?? "", rules);
     const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
     const missing = [
       !phone ? (record.driverPhone.trim() ? "司机电话格式不正确" : "司机电话") : "",

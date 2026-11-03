@@ -61,7 +61,7 @@ async function copyTextWithFallback(text: string) {
 export function FleetReplyWorkspace() {
   const [rawText, setRawText] = useState("");
   const [images, setImages] = useState<{ dataUrl: string; filename: string; mimeType: string }[]>([]);
-  const [fleetProfile, setFleetProfile] = useState<"AUTO" | "BANGKOK" | "SAMUI">("AUTO");
+  const [fleetProfile, setFleetProfile] = useState<"AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR">("AUTO");
   const [serviceDate, setServiceDate] = useState(bangkokTomorrow);
   const [availableDates, setAvailableDates] = useState<string[]>([bangkokTomorrow()]);
   const [replyId, setReplyId] = useState<string | null>(null);
@@ -283,7 +283,7 @@ export function FleetReplyWorkspace() {
     <section className="fleet-reply-source">
       <label>车队原始回复（完整保留）<textarea value={rawText} autoCapitalize="none" onChange={(event) => setRawText(event.target.value)} onPaste={(event) => { const pastedImages = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (pastedImages.length) void selectImages(pastedImages); }} placeholder="从微信或 WhatsApp 粘贴英文/泰语车队回复；文字和车辆截图可一起粘贴。" /></label>
       <label>匹配订单日期<select value={serviceDate} onChange={(event) => setServiceDate(event.target.value)}>{availableDates.map((date) => <option key={date} value={date}>{date === bangkokTomorrow() ? `明天 · ${date}` : date}</option>)}</select></label>
-      <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option></select></label>
+      <label>车队规则<select value={fleetProfile} onChange={(event) => setFleetProfile(event.target.value as "AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR")}><option value="AUTO">自动判断（判断不出时提示）</option><option value="BANGKOK">曼谷车队</option><option value="SAMUI">苏梅车队</option><option value="KUALA_LUMPUR">吉隆坡车队</option></select></label>
       <label className="vehicle-upload">添加车辆照片或车队聊天截图<input type="file" accept="image/*" multiple onChange={(event) => void selectImages(event.currentTarget.files)} /></label>
       {images.length > 0 && <div className="reply-image-list" aria-label="已添加车辆图片">{images.map((image, index) => <div className="reply-image-item" key={image.dataUrl}><img src={image.dataUrl} alt={image.filename} /><button type="button" className="remove-reply-image" onClick={() => removeImage(index)} aria-label={`删除车辆图片 ${index + 1}`}>删除</button></div>)}</div>}
       <button className="assist-action" type="button" onClick={saveAndAnalyze} disabled={working || (!rawText.trim() && !images.length)}>{working ? "正在处理…" : `整理并匹配 ${serviceDate === bangkokTomorrow() ? "明日" : serviceDate} 订单`}</button>
