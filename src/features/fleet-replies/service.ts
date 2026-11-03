@@ -6,11 +6,11 @@ import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
 import { findConfirmedEnglishDriverNames, isAiNameTransliterationEnabled, transliterateThaiDriverNames } from "@/features/assist/service";
-import { isAiVisionRealCallsEnabled, recognizeFleetReplyText, recognizeFleetScreenshot, recognizeVehicleImage, type FleetTextVision } from "@/features/assist/vision";
+import { isAiVisionRealCallsEnabled, recognizeFleetPackage, recognizeFleetReplyText, recognizeFleetScreenshot, recognizeVehicleImage, type FleetPackageVision, type FleetTextVision } from "@/features/assist/vision";
 
-type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
+export type CandidateOrder = { id: string; orderNo: string; passengerName: string; pickup: string; route: string; city: string; fleetName: string };
 type Field = { value: string | null; evidence: string };
-type ReplyRecord = {
+export type ReplyRecord = {
   source_index: number;
   order_match: { platform_order_number: string | null; confidence: "high" | "medium" | "low"; evidence: string };
   driver_name: Field;
@@ -20,6 +20,7 @@ type ReplyRecord = {
   vehicle_brand: Field;
   vehicle_model_raw: Field;
   vehicle_model: Field;
+  vehicle_color?: Field;
   image_source_index: number | null;
   needs_review: boolean;
   review_reasons: string[];
@@ -91,6 +92,8 @@ export async function createFleetReply(input: { dispatchBatchId?: string; orderI
   const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["CANCELLED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
   const orderIds = [...new Set([...(input.orderIds ?? []), ...dateOrderIds])];
   if (!rawText && !(input.images?.length)) throw new Error("SOURCE_REQUIRED");
+  if ((input.images?.length ?? 0) > 6) throw new Error("IMAGE_PACKAGE_TOO_LARGE");
+  if ((input.images ?? []).some((image) => !image.dataUrl.startsWith("data:image/") || image.dataUrl.length > 8_000_000)) throw new Error("IMAGE_INVALID_OR_TOO_LARGE");
   const profile = input.fleetProfile ?? "AUTO";
   const reply = await db.fleetReply.create({ data: { dispatchBatchId: input.dispatchBatchId || null, candidateOrderIds: orderIds.length ? JSON.stringify(orderIds) : null, rawText, createdBy: `运营人员|${profile}`, images: { create: (input.images ?? []).map((image) => ({ storagePath: image.dataUrl, originalFilename: image.filename || null, mimeType: image.mimeType || "image/*" })) } }, include: { images: true } });
   return { id: reply.id, rawText: reply.rawText, imageCount: reply.images.length };
@@ -374,6 +377,74 @@ async function applyVehicleImages(records: ReplyRecord[], images: { storagePath:
   });
 }
 
+function emptyPackageRecord(sourceIndex: number): ReplyRecord {
+  return { source_index: sourceIndex, order_match: { platform_order_number: null, confidence: "low", evidence: "资料包中未找到可用订单号" }, driver_name: field(null, ""), driver_phone: field(null, ""), license_plate: field(null, ""), vehicle_category: field(null, ""), vehicle_brand: field(null, ""), vehicle_model_raw: field(null, ""), vehicle_model: field(null, ""), image_source_index: null, needs_review: true, review_reasons: ["缺少可匹配的订单号"] };
+}
+
+function addReview(target: ReplyRecord, reason: string) {
+  target.needs_review = true;
+  if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
+}
+
+function sameField(key: "driver_name" | "driver_phone" | "license_plate", left: string, right: string) {
+  if (key === "license_plate") return normalizePlate(left) === normalizePlate(right);
+  if (key === "driver_phone") return left.replace(/\D/g, "") === right.replace(/\D/g, "");
+  return left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase();
+}
+
+/** Merge a whole upload package after, rather than before, the deterministic
+ * order boundary is known.  This deliberately does not save anything. */
+export function applyFleetPackage(records: ReplyRecord[], vision: FleetPackageVision, orders: CandidateOrder[]) {
+  if (vision.provider === "NONE") return false;
+  const exactItems = vision.records.filter((item) => item.order_number && orders.some((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)));
+  const distinctOrders = new Set(exactItems.map((item) => normalizedOrderNo(item.order_number!)));
+  const packageHasOneExactOrder = distinctOrders.size === 1;
+  const driverSignatures = new Set(exactItems.filter((item) => item.driver_name || item.driver_phone || item.license_plate).map((item) => `${item.driver_name?.toLowerCase() ?? ""}|${item.driver_phone?.replace(/\D/g, "") ?? ""}|${normalizePlate(item.license_plate)}`));
+  for (const [index, item] of vision.records.entries()) {
+    const exact = item.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)) : undefined;
+    let target = exact ? records.find((record) => normalizedOrderNo(record.order_match.platform_order_number ?? "") === normalizedOrderNo(exact.orderNo)) ?? records.find((record) => !record.order_match.platform_order_number) : undefined;
+    // A package with exactly one known order may supply the driver details in
+    // another picture without repeating the order number.
+    if (!target && packageHasOneExactOrder) {
+      const only = orders.find((order) => normalizedOrderNo(order.orderNo) === [...distinctOrders][0]);
+      target = only ? records.find((record) => normalizedOrderNo(record.order_match.platform_order_number ?? "") === normalizedOrderNo(only.orderNo)) ?? records.find((record) => !record.order_match.platform_order_number) : undefined;
+      if (!target && only) { target = emptyPackageRecord(100 + index); records.push(target); }
+    }
+    if (!target && exact) { target = emptyPackageRecord(100 + index); records.push(target); }
+    if (!target) continue;
+    const source = item.source_image_indexes.length ? `资料包图片 ${item.source_image_indexes.join("、")}` : "资料包原文";
+    if (exact) {
+      target.order_match = { platform_order_number: exact.orderNo, confidence: item.confidence === "HIGH" ? "high" : "medium", evidence: `${source} 精确识别订单号` };
+      target.review_reasons = target.review_reasons.filter((reason) => reason !== "缺少可匹配的订单号");
+      target.needs_review = target.review_reasons.length > 0;
+    }
+    const merge = (key: "driver_name" | "driver_phone" | "license_plate", value: string | null) => {
+      if (!value) return;
+      if (!target![key].value) target![key] = field(value, `来自${source}`);
+      else if (!sameField(key, target![key].value!, value)) addReview(target!, `${source} 的${key}与同一订单已有资料冲突，请人工确认`);
+    };
+    // A wallet payee is a weak identity clue, never a driver identity on its
+    // own unless this submission has one exact order and no competing name.
+    if (item.driver_name && (item.driver_name_source !== "EWALLET_PAYEE" || (packageHasOneExactOrder && !target.driver_name.value))) merge("driver_name", sanitizeAiDriverName(item.driver_name));
+    if (item.driver_name_source === "EWALLET_PAYEE") addReview(target, "电子钱包收款人仅作为候选司机姓名，请人工核对");
+    merge("driver_phone", item.driver_phone); merge("license_plate", sanitizeAiPlate(item.license_plate));
+    if (!target.vehicle_category.value && item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `来自${source}`);
+    if (!target.vehicle_brand.value && item.vehicle_brand) target.vehicle_brand = field(item.vehicle_brand, `来自${source}`);
+    if (!target.vehicle_model.value && item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `来自${source}`, item.confidence);
+    if (!target.vehicle_color?.value && item.vehicle_color) target.vehicle_color = field(item.vehicle_color, `来自${source}`);
+    if (item.source_image_indexes.length) target.image_source_index = item.source_image_indexes[0] ?? null;
+    if (item.confirmation_status === "PENDING_DETAILS") addReview(target, "车队表示稍后提供资料，当前不能视为司机资料完整");
+    if (item.confirmation_status === "DECLINED") addReview(target, "截图显示车队可能无法安排，请人工确认订单状态");
+    if (item.confidence !== "HIGH") addReview(target, "AI 资料包识别置信度不足，请人工核对");
+  }
+  if (packageHasOneExactOrder && driverSignatures.size > 1) {
+    const order = orders.find((candidate) => normalizedOrderNo(candidate.orderNo) === [...distinctOrders][0]);
+    const target = order && records.find((record) => normalizedOrderNo(record.order_match.platform_order_number ?? "") === normalizedOrderNo(order.orderNo));
+    if (target) addReview(target, "同一资料包出现多套司机或车辆资料，不能自动保存");
+  }
+  return true;
+}
+
 export async function analyzeFleetReply(replyId: string) {
   const reply = await db.fleetReply.findUnique({ where: { id: replyId }, include: { images: true } });
   if (!reply) throw new Error("REPLY_NOT_FOUND");
@@ -390,17 +461,15 @@ export async function analyzeFleetReply(replyId: string) {
   } else {
     result.recognition = { provider: "RULES", label: "AI 未调用", note: "未提供车队文字；仅在有截图时调用图片识别。" };
   }
-  // Image-only replies are chat screenshots. Do not run OCR on normal
-  // text-and-vehicle-photo replies, which keeps paid calls bounded.
-  if (!reply.rawText.trim()) {
-    if (!isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "图片识别尚未开启：请联系管理员仅在测试环境设置 AI_VISION_REAL_CALLS_ENABLED=true，或人工录入。" });
-    else await applyScreenshotImages(result.records, reply.images, orders);
+  // One upload is one package.  A driver card or vehicle photo may omit the
+  // order number while another image supplies it, so never analyse each image
+  // as an independent order reply.
+  if (reply.images.length) {
+    const packageVision = await recognizeFleetPackage(reply.rawText, reply.images.map((image) => image.storagePath), orders.map((order) => order.orderNo));
+    if (!applyFleetPackage(result.records, packageVision, orders)) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "资料包图片识别尚未开启；原始资料已保存为草稿，可人工补充。" });
+    else result.recognition = { provider: packageVision.provider === "NONE" ? "RULES" : packageVision.provider, label: packageVision.provider === "GLM" ? "AI：GLM 联合资料包" : "AI：Qwen 联合资料包", note: packageVision.note };
   }
   await translateThaiNames(result.records);
-  if (reply.rawText.trim()) {
-    if (reply.images.length && !isAiVisionRealCallsEnabled()) result.unmatched_items.push({ source_type: "image", source_id: "ai", reason: "车辆图片识别尚未开启；原始图片已保留，可人工填写车型和车牌。" });
-    else await applyVehicleImages(result.records, reply.images, orders);
-  }
   await applyVehicleHistory(result.records);
   // Rule fallback and historical plate reuse must obey the same brand gate as
   // AI results. Never auto-save an unverified model-only fallback.
