@@ -455,11 +455,14 @@ export async function analyzeFleetReply(replyId: string) {
   // be inferred. The deterministic parser remains a validation/fallback only.
   const parserProfile = profile === "AUTO" ? "BANGKOK" : profile;
   const result = parserProfile === "SAMUI" ? parseSamuiRecords(reply.rawText, orders) : parseBangkokRecords(reply.rawText, orders);
-  if (reply.rawText.trim()) {
+  // A submission with images is analysed by the package model below. Running
+  // the text model first would charge twice and could produce competing field
+  // candidates for the same operator submission.
+  if (reply.rawText.trim() && !reply.images.length) {
     const vision = await recognizeFleetReplyText(reply.rawText, orders.map((order) => order.orderNo));
     mergeAiText(result, vision, orders);
   } else {
-    result.recognition = { provider: "RULES", label: "AI 未调用", note: "未提供车队文字；仅在有截图时调用图片识别。" };
+    result.recognition = { provider: "RULES", label: "AI 未调用", note: reply.images.length ? "将作为一个资料包联合识别。" : "未提供车队文字；仅在有截图时调用图片识别。" };
   }
   // One upload is one package.  A driver card or vehicle photo may omit the
   // order number while another image supplies it, so never analyse each image
