@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { cityFromIwayOrder, serviceTimeZoneForLocalSync } from "./iway-local-sync-city.mjs";
+import { isLocalNewOrderSubject, parseLocalNewRide, localMailOrderNumber } from "./iway-local-new-ride.mjs";
 
 // LaunchAgent runs unattended. Without a database connection timeout, a
 // transient Supabase network stall can leave its single process alive forever,
@@ -105,8 +106,9 @@ function isOrderAlreadyCreated(error) {
 }
 
 function parseOrder(message, meta) {
+  if (/^New ride\b/i.test(meta.subject)) return parseLocalNewRide(message, meta);
   const text = normalizedText(message.body_plain_text);
-  const orderNo = capture(text, /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, "");
+  const orderNo = localMailOrderNumber(text);
   const iwayCity = capture(text, /City:\s*(.*?)\s+Pick-up date:/i);
   const date = serviceDate(capture(text, /Pick-up date:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})/i));
   const pickupTime = capture(text, /Local pick-up time:\s*(\d{1,2}:\d{2})/i);
@@ -191,10 +193,7 @@ async function main() {
   // Amendments and every cancellation-shaped mail are deliberately excluded:
   // they require the stricter event processor and must never change an
   // existing production order through this legacy helper.
-  const candidates = triageMessages.filter((mail) =>
-    /(?:Transfer service order|New ride\s*#)/i.test(mail.subject) &&
-    /i[’']way/i.test(mail.subject),
-  );
+  const candidates = triageMessages.filter((mail) => isLocalNewOrderSubject(mail.subject));
   const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
   // 历史邮件无需每次重新下载正文。新修改邮件会有新的 message_id，仍会被
   // 自动读取并覆盖对应订单；这让后续手动刷新从约一分钟降到只查邮件目录。
@@ -205,10 +204,10 @@ async function main() {
   // Cached mail only suppresses another read when its exact order still
   // exists. Legacy cache entries did not store orderId, so reconcile by the
   // explicit Ride number in the retained source instead of re-reading all mail.
-  const cachedOrderNos = previouslyRead.map((item) => capture(normalizedText(item.sourceText), /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, "")).filter(Boolean);
+  const cachedOrderNos = previouslyRead.map((item) => localMailOrderNumber(normalizedText(item.sourceText))).filter(Boolean);
   const persistedOrders = cachedOrderNos.length ? await db.order.findMany({ where: { platformOrderNumber: { in: cachedOrderNos } }, select: { platformOrderNumber: true } }) : [];
   const persistedNumbers = new Set(persistedOrders.map((order) => order.platformOrderNumber));
-  const knownIds = new Set(previouslyRead.filter((item) => persistedNumbers.has(capture(normalizedText(item.sourceText), /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, ""))).map((item) => item.externalId));
+  const knownIds = new Set(previouslyRead.filter((item) => persistedNumbers.has(localMailOrderNumber(normalizedText(item.sourceText)))).map((item) => item.externalId));
   const pendingCandidates = dryRun ? uniqueCandidates : uniqueCandidates.filter((mail) => !knownIds.has(mail.message_id));
   const details = pendingCandidates.length ? runCli([
     "mail", "+messages", "--as", "user", "--mailbox", mailbox,
@@ -305,7 +304,7 @@ async function main() {
     await db.importedSourceMessage.upsert({ where: { connector_externalId: { connector: "feishu-mail", externalId: message.externalId } }, create: { ...message, orderId: persisted.id }, update: { orderId: persisted.id } });
   }
   if (syncRequestId) {
-    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected } });
+    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: summary.rejected ? "FAILED" : "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected, errorMessage: summary.rejected ? `${summary.rejected} 封新订单邮件解析失败；未确认全部同步成功，请检查本机同步日志。` : null } });
   }
   console.log(JSON.stringify(summary, null, 2));
 }
