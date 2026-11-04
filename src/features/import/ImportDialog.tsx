@@ -1,4 +1,5 @@
 "use client";
+import { isFreshCompletedLocalRun, localFeishuWaitMs } from "@/features/import/local-feishu-wait";
 
 import { useEffect, useState } from "react";
 import "./import-dialog.css";
@@ -55,21 +56,20 @@ export function ImportDialog({ onClose }: { onClose?: () => void }) {
       const payload = await response.json();
       if (!response.ok) { setNote(payload.error?.message || "同步失败"); return; }
       if (payload.data?.localScheduled) {
-        setNote("正在等待本机飞书同步助手的下一轮结果…");
+        setNote("正在等待本机飞书助手的下一轮同步，可能需要数分钟（最多等待 10 分钟）…");
         const requestedAt = Date.now();
-        while (Date.now() - requestedAt < 90_000) {
+        while (Date.now() - requestedAt < localFeishuWaitMs) {
           await new Promise((resolve) => window.setTimeout(resolve, 3_000));
           const statusResponse = await fetch("/api/import-sync/feishu-mail", { cache: "no-store" });
           const statusPayload = await statusResponse.json();
           const run = statusPayload.data?.latestRun as SyncRun | undefined;
-          const completedAt = Date.parse(run?.completedAt || run?.startedAt || "");
-          if (!run || run.status === "RUNNING" || Number.isNaN(completedAt) || completedAt < requestedAt) continue;
+          if (!run || !isFreshCompletedLocalRun(run, requestedAt)) continue;
           setLatestRun(run);
           if (run.status === "FAILED") { setNote(run.errorMessage || "本机飞书同步失败，订单未被刷新。"); return; }
           setNote(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔，取消 ${run.cancelledCount} 笔，跳过 ${run.skippedCount} 笔。`);
           return;
         }
-        setNote("本机同步助手没有在 90 秒内提交结果；未把本次操作当作同步成功。请检查运行同步助手的电脑是否开机、已登录飞书。");
+        setNote("等待已结束，尚未收到本机助手的新完成记录，不能确认同步结果。助手仍会按周期运行，请稍后刷新查看。");
         return;
       }
       if (payload.data?.alreadyRunning) { setNote("已有一轮飞书同步正在进行，请等待完成后查看结果。"); return; }

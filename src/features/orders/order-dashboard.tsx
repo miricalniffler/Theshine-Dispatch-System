@@ -1,4 +1,5 @@
 "use client";
+import { isFreshCompletedLocalRun, localFeishuWaitMs } from "@/features/import/local-feishu-wait";
 import { GmailLifecycleReviews } from "@/features/import/GmailLifecycleReviews";
 
 import Link from "next/link";
@@ -113,21 +114,20 @@ export function OrderDashboard() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "同步请求发送失败");
       if (payload.data?.localScheduled) {
-        setSyncMessage("正在等待本机飞书同步助手的下一轮结果…");
+        setSyncMessage("正在等待本机飞书助手的下一轮同步，可能需要数分钟（最多等待 10 分钟）…");
         const requestedAt = Date.now();
-        while (Date.now() - requestedAt < 90_000) {
+        while (Date.now() - requestedAt < localFeishuWaitMs) {
           await new Promise((resolve) => window.setTimeout(resolve, 3_000));
           const statusResponse = await fetch("/api/import-sync/feishu-mail", { cache: "no-store" });
           const statusPayload = await statusResponse.json();
           const run = statusPayload.data?.latestRun as SyncRun | undefined;
-          const completedAt = Date.parse(run?.completedAt || run?.startedAt || "");
-          if (!run || run.status === "RUNNING" || Number.isNaN(completedAt) || completedAt < requestedAt) continue;
+          if (!run || !isFreshCompletedLocalRun(run, requestedAt)) continue;
           if (run.status === "FAILED") throw new Error(displaySyncFailure(run.errorMessage || ""));
           setRefreshVersion((version) => version + 1);
           setSyncMessage(`飞书同步完成：新增 ${run.createdCount} 笔，更新 ${run.updatedCount} 笔，取消 ${run.cancelledCount} 笔，跳过 ${run.skippedCount} 笔。订单列表已刷新。`);
           return;
         }
-        setSyncMessage("本机同步助手没有在 90 秒内提交结果；订单列表未被当作已同步。请检查运行同步助手的电脑是否开机、已登录飞书。已有订单不会受影响。");
+        setSyncMessage("等待已结束，尚未收到本机助手的新完成记录，不能确认同步结果。助手仍会按周期运行，请稍后刷新查看；已有订单不受影响。");
         return;
       }
       if (payload.data?.alreadyRunning) {
