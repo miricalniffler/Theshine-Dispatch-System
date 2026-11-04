@@ -25,7 +25,13 @@ Departure time: 23.10.2026 02:00`,
 
 test("Gmail 桥接提交订单及生命周期通知，保留水位线和服务端认证", () => {
   const source = readFileSync(resolve(process.cwd(), "apps-script/gmail-iway-sync/Code.gs"), "utf8");
-  expect(source).toContain("everyMinutes(1)");
+  expect(source).toContain("everyHours(1)");
+  expect(source).toContain("configureIwayGmailHourlyTrigger");
+  expect(source).toContain("IWAY_GMAIL_MANUAL_TRIGGER_SECRET");
+  expect(source).toContain("function doPost(e)");
+  expect(source).toContain("function doGet(e)");
+  expect(source).toContain("computeHmacSha256Signature");
+  expect(source).toContain("MANUAL_TRIGGER_REPLAYED");
   expect(source).toContain("IWAY_GMAIL_ENABLED_AT");
   expect(source).toContain("IWAY_GMAIL_INGEST_TOKEN");
   expect(source).toContain("IWAY_GMAIL_TARGET_ENVIRONMENT");

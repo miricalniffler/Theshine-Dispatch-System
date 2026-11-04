@@ -18,15 +18,30 @@ function setupIwayGmailSync() {
   props.setProperty('IWAY_GMAIL_ENABLED_AT', new Date().toISOString());
   props.deleteProperty('IWAY_GMAIL_SEEN');
   props.setProperty('IWAY_GMAIL_SCAN_OFFSET', '0');
+  installIwayGmailHourlyTrigger_();
+}
+
+// Use this when changing an already-running project to the hourly schedule.
+// Unlike setupIwayGmailSync, it never changes the Gmail activation waterline,
+// seen-message cache, or pagination cursor.
+function configureIwayGmailHourlyTrigger() {
+  var props = PropertiesService.getScriptProperties();
+  requireConfig_(props);
+  var enabledAt = new Date(props.getProperty('IWAY_GMAIL_ENABLED_AT'));
+  if (isNaN(enabledAt.getTime())) throw new Error('IWAY_GMAIL_ENABLED_AT 未设置；为保护同步起点，不能自动初始化。');
+  installIwayGmailHourlyTrigger_();
+}
+
+function installIwayGmailHourlyTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'syncIwayGmailOrders') ScriptApp.deleteTrigger(trigger);
   });
-  ScriptApp.newTrigger('syncIwayGmailOrders').timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger('syncIwayGmailOrders').timeBased().everyHours(1).create();
 }
 
 function syncIwayGmailOrders() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return;
+  if (!lock.tryLock(5000)) return { status: 'IN_PROGRESS' };
   try {
     var props = PropertiesService.getScriptProperties();
     requireConfig_(props);
@@ -37,7 +52,7 @@ function syncIwayGmailOrders() {
     var messages = page.messages;
     if (!messages.length) {
       if (page.threadCount) advanceScanOffset_(props, page.threadCount);
-      return;
+      return { status: 'SUCCEEDED', summary: emptySummary_() };
     }
     var headers = { Authorization: 'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') };
     // Preview deployments can keep Vercel SSO enabled. When a Vercel
@@ -67,9 +82,84 @@ function syncIwayGmailOrders() {
     if (processed.length === messages.length && page.remainingEligible === messages.length) {
       advanceScanOffset_(props, page.threadCount);
     }
+    return { status: 'SUCCEEDED', summary: syncSummary_(payload && payload.data) };
   } finally {
     lock.releaseLock();
   }
+}
+
+// This endpoint is intentionally cryptographically authenticated even though
+// Apps Script web apps use a public delivery URL. Only the Vercel server holds
+// the matching secret; browser clients never see it.
+function doPost(e) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    verifyManualTrigger_(props, e, 'sync');
+    return jsonResponse_(syncIwayGmailOrders());
+  } catch (error) {
+    return jsonResponse_({ status: 'FAILED', code: manualTriggerErrorCode_(error) });
+  }
+}
+
+// The dashboard calls this signed probe before enabling the manual button.
+// It validates the deployed script and secrets but never reads Gmail.
+function doGet(e) {
+  try {
+    verifyManualTrigger_(PropertiesService.getScriptProperties(), e, 'status');
+    return jsonResponse_({ status: 'READY' });
+  } catch (error) {
+    return jsonResponse_({ status: 'UNAVAILABLE', code: manualTriggerErrorCode_(error) });
+  }
+}
+
+function emptySummary_() { return { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0 }; }
+
+function syncSummary_(data) {
+  data = data || {};
+  return {
+    created: Number(data.created || 0),
+    cancelled: Number(data.cancelled || 0),
+    review: Number(data.review || 0),
+    skipped: Number(data.skipped || 0),
+    rejected: Number(data.rejected || 0),
+  };
+}
+
+function jsonResponse_(value) {
+  return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function verifyManualTrigger_(props, e, expectedAction) {
+  requireConfig_(props);
+  var secret = props.getProperty('IWAY_GMAIL_MANUAL_TRIGGER_SECRET');
+  if (!secret) throw new Error('MANUAL_TRIGGER_NOT_CONFIGURED');
+  var request;
+  try { request = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : (e && e.parameter || null); }
+  catch (_) { throw new Error('MANUAL_TRIGGER_INVALID_REQUEST'); }
+  if (!request || request.action !== expectedAction || typeof request.issuedAt !== 'string' || typeof request.nonce !== 'string' || typeof request.signature !== 'string') throw new Error('MANUAL_TRIGGER_INVALID_REQUEST');
+  var issuedAt = new Date(request.issuedAt);
+  if (isNaN(issuedAt.getTime()) || Math.abs(Date.now() - issuedAt.getTime()) > 5 * 60 * 1000) throw new Error('MANUAL_TRIGGER_EXPIRED');
+  if (request.nonce.length < 16 || request.nonce.length > 200) throw new Error('MANUAL_TRIGGER_INVALID_REQUEST');
+  var expected = Utilities.base64Encode(Utilities.computeHmacSha256Signature(request.action + '\n' + request.issuedAt + '\n' + request.nonce, secret));
+  if (!safeEquals_(expected, request.signature)) throw new Error('MANUAL_TRIGGER_INVALID_SIGNATURE');
+  var cache = CacheService.getScriptCache();
+  var replayKey = 'manual-trigger:' + request.nonce;
+  if (cache.get(replayKey)) throw new Error('MANUAL_TRIGGER_REPLAYED');
+  cache.put(replayKey, '1', 600);
+}
+
+function safeEquals_(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false;
+  var diff = 0;
+  for (var i = 0; i < left.length; i++) diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return diff === 0;
+}
+
+function manualTriggerErrorCode_(error) {
+  var text = String(error && error.message || error || '');
+  if (/Service invoked too many times|quota|limit exceeded|daily limit/i.test(text)) return 'GMAIL_QUOTA_EXHAUSTED';
+  if (/^MANUAL_TRIGGER_[A-Z_]+$/.test(text)) return text;
+  return 'GMAIL_MANUAL_SYNC_FAILED';
 }
 
 function collectNewOrderMessages_(enabledAt, seen, props) {
