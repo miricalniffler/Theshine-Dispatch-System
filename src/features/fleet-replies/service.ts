@@ -99,10 +99,16 @@ export async function createFleetReply(input: { dispatchBatchId?: string; orderI
   return { id: reply.id, rawText: reply.rawText, imageCount: reply.images.length };
 }
 
-function orderBlocks(text: string) {
-  const matches = [...text.matchAll(/(?:^|\n)\s*order\s*number\s*[:：]\s*([a-z0-9-]+)/gim)];
+const orderHeader = /(?:^|\n)[ \t]*(?:(?:M\d+[ \t]+)?(?:order[ \t]*(?:number|id|no\.?)|ride[ \t]*number)[ \t]*[:：#][ \t]*|(?=\d))(\d{1,2}[ \u00a0]+\d{3}[ \u00a0]+\d{3}|\d{3}[ \u00a0]+\d{3,4}|\d{6,8})(?=[ \t]*(?:\r?$|\n|Passenger|Pickup|Driver))/gim;
+
+export function orderBlocks(text: string) {
+  const matches = [...text.matchAll(orderHeader)];
   if (!matches.length) return [text];
   return matches.map((match, index) => text.slice(match.index, matches[index + 1]?.index ?? text.length));
+}
+
+function exactBlockOrderNumber(block: string) {
+  return [...block.matchAll(orderHeader)][0]?.[1]?.replace(/\s/g, "") ?? null;
 }
 
 function firstMatch(text: string, pattern: RegExp) { return text.match(pattern)?.[1]?.trim() ?? null; }
@@ -207,19 +213,17 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
 }
 
 function autoMatchSingleUnassigned(records: ReplyRecord[], orders: CandidateOrder[], sourceText: string) {
-  const unassigned = records.filter((record) => !record.order_match.platform_order_number);
-  if (unassigned.length !== 1) return;
-  const occupied = new Set(records.map((record) => record.order_match.platform_order_number).filter(Boolean).map((value) => normalizedOrderNo(value!)));
-  const remaining = orders.filter((order) => !occupied.has(normalizedOrderNo(order.orderNo)));
-  const pickupTimes = [...sourceText.matchAll(/pickup\s*time\s*[:：]\s*\d{4}-\d{2}-\d{2}\s+(\d{1,2}:\d{2})/gi)].map((match) => match[1]);
-  const byTime = pickupTimes.length === 1 ? remaining.filter((order) => order.pickup.endsWith(pickupTimes[0].padStart(5, "0"))) : [];
-  const byPassenger = remaining.filter((order) => sourceText.toLowerCase().includes(order.passengerName.toLowerCase()));
-  const matched = byTime.length === 1 ? byTime[0] : byPassenger.length === 1 ? byPassenger[0] : remaining.length === 1 ? remaining[0] : null;
-  if (!matched) return;
-  const evidence = byTime.length === 1 ? "原文接车时间唯一匹配" : byPassenger.length === 1 ? "原文乘客姓名唯一匹配" : "当天仅剩一笔未匹配订单，按唯一剩余订单自动归属";
-  unassigned[0].order_match = { platform_order_number: matched.orderNo, confidence: "high", evidence };
-  unassigned[0].needs_review = false;
-  unassigned[0].review_reasons = [];
+  // Exact order numbers are the only automatic identity evidence. A missing
+  // order must never be replaced with a similar passenger, time or remaining row.
+  const headers = [...sourceText.matchAll(orderHeader)];
+  const numbers = [...new Set(headers.map((match) => normalizedOrderNo(match[1])))];
+  if (numbers.length !== 1 || records.length !== 1 || records[0].order_match.platform_order_number) return;
+  const exact = orders.filter((order) => normalizedOrderNo(order.orderNo) === numbers[0]);
+  if (exact.length !== 1) return;
+  records[0].order_match = { platform_order_number: exact[0].orderNo, confidence: "high", evidence: "原文精确订单号唯一匹配" };
+  records[0].needs_review = false;
+  records[0].review_reasons = [];
+
 }
 
 function resolveProfile(reply: { createdBy: string | null; rawText: string }, orders: CandidateOrder[]): FleetProfile {
@@ -233,7 +237,7 @@ function resolveProfile(reply: { createdBy: string | null; rawText: string }, or
 
 function parseBangkokRecords(text: string, orders: CandidateOrder[]): Analysis {
   const records = orderBlocks(text).map((block, source_index) => {
-    const orderNo = firstMatch(block, /order\s*number\s*[:：]\s*([a-z0-9-]+)/i);
+    const orderNo = exactBlockOrderNumber(block);
     const exact = orderNo ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(orderNo)) : undefined;
     const driverReply = bangkokDriverReplySection(block);
     return {
@@ -401,7 +405,7 @@ function sameField(key: "driver_name" | "driver_phone" | "license_plate", left: 
 export function applyFleetPackage(records: ReplyRecord[], vision: FleetPackageVision, orders: CandidateOrder[]) {
   if (vision.provider === "NONE") return false;
   const exactItems = vision.records.filter((item) => item.order_number && orders.some((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)));
-  const distinctOrders = new Set(exactItems.map((item) => normalizedOrderNo(item.order_number!)));
+  const distinctOrders = new Set([...vision.records.filter((item) => item.order_number).map((item) => normalizedOrderNo(item.order_number!)), ...records.flatMap((record) => record.order_match.platform_order_number ? [normalizedOrderNo(record.order_match.platform_order_number)] : [])]);
   const packageHasOneExactOrder = distinctOrders.size === 1;
   const driverSignatures = new Set(exactItems.filter((item) => item.driver_name || item.driver_phone || item.license_plate).map((item) => `${item.driver_name?.toLowerCase() ?? ""}|${item.driver_phone?.replace(/\D/g, "") ?? ""}|${normalizePlate(item.license_plate)}`));
   for (const [index, item] of vision.records.entries()) {
@@ -409,12 +413,17 @@ export function applyFleetPackage(records: ReplyRecord[], vision: FleetPackageVi
     let target = exact ? records.find((record) => normalizedOrderNo(record.order_match.platform_order_number ?? "") === normalizedOrderNo(exact.orderNo)) ?? records.find((record) => !record.order_match.platform_order_number) : undefined;
     // A package with exactly one known order may supply the driver details in
     // another picture without repeating the order number.
-    if (!target && packageHasOneExactOrder) {
+    if (!target && !item.order_number && packageHasOneExactOrder) {
       const only = orders.find((order) => normalizedOrderNo(order.orderNo) === [...distinctOrders][0]);
       target = only ? records.find((record) => normalizedOrderNo(record.order_match.platform_order_number ?? "") === normalizedOrderNo(only.orderNo)) ?? records.find((record) => !record.order_match.platform_order_number) : undefined;
       if (!target && only) { target = emptyPackageRecord(100 + index); records.push(target); }
     }
     if (!target && exact) { target = emptyPackageRecord(100 + index); records.push(target); }
+    if (!target && (item.driver_name || item.driver_phone || item.license_plate || item.vehicle_model)) {
+      target = emptyPackageRecord(100 + index);
+      addReview(target, "多订单资料缺少明确归属，请人工选择对应订单");
+      records.push(target);
+    }
     if (!target) continue;
     const source = item.source_image_indexes.length ? `资料包图片 ${item.source_image_indexes.join("、")}` : "资料包原文";
     if (exact) {

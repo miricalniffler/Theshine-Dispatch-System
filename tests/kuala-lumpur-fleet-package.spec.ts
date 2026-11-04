@@ -40,5 +40,19 @@ test("同一资料包多套司机资料时不自动放行", () => {
 test("多个订单不会把无订单号的资料自动串到任一订单", () => {
   const records = [record(), record()];
   applyFleetPackage(records, vision([row({ order_number: "1052074" }), row({ order_number: "998533" }), row({ driver_name: "Unassigned", license_plate: "ABC1234", source_image_indexes: [3] })]), orders);
-  expect(records.filter((item) => item.driver_name.value === "Unassigned")).toHaveLength(0);
+  expect(records.filter((item) => item.driver_name.value === "Unassigned" && item.order_match.platform_order_number)).toHaveLength(0);
+  expect(records.find((item) => item.driver_name.value === "Unassigned")?.needs_review).toBe(true);
+});
+
+test('原文已精确匹配唯一订单，图片不重复订单号也能补齐字段', () => {
+ const records=[record()]; records[0].order_match={platform_order_number:'1052074',confidence:'high',evidence:'exact text'};
+ applyFleetPackage(records,vision([row({driver_name:'Gary',driver_phone:'+60176543323',license_plate:'DDN3323',vehicle_brand:'Proton',vehicle_model:'Persona'})]),orders);
+ expect(records[0].driver_name.value).toBe('Gary');
+ expect(records[0].vehicle_model.value).toBe('Proton Persona');
+});
+
+test('未知订单号的图片不能归属到另一笔已知订单', () => {
+ const records=[record()]; records[0].order_match={platform_order_number:'1052074',confidence:'high',evidence:'exact text'};
+ applyFleetPackage(records,vision([row({order_number:'9999999',driver_name:'Other Driver'})]),orders);
+ expect(records[0].driver_name.value).toBeNull();
 });
