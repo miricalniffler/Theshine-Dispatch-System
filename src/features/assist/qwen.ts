@@ -20,7 +20,7 @@ export async function qwenJson<T>(messages: QwenMessage[], model: QwenModel, opt
     response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, temperature: 0.1 }),
+      body: JSON.stringify({ model, messages, enable_thinking: false, response_format: { type: "json_object" }, temperature: 0.1 }),
       // 车辆拼图、夜间照片的视觉理解会比纯文字慢；路由允许的时间内给它足够余量。
       signal: AbortSignal.timeout(options.timeoutMs ?? 110_000),
     });
@@ -30,9 +30,10 @@ export async function qwenJson<T>(messages: QwenMessage[], model: QwenModel, opt
   }
   const body = await response.json().catch(() => ({} as Record<string, unknown>));
   if (!response.ok) {
-    const message = typeof body === "object" && body && "error" in body && typeof (body as { error?: { message?: unknown } }).error?.message === "string"
-      ? (body as { error: { message: string } }).error.message : `Qwen 服务返回 ${response.status}`;
-    throw new Error(message);
+    // Keep only status and a safe provider code: never expose echoed input or keys.
+    const providerCode = (body as { error?: { code?: unknown } }).error?.code;
+    const safeCode = typeof providerCode === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(providerCode) ? providerCode : "UNKNOWN";
+    throw new Error(`QWEN_${response.status}_${safeCode}`);
   }
   const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim()) throw new Error("Qwen 未返回可读取的识别结果。");

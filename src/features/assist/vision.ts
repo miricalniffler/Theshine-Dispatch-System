@@ -25,13 +25,14 @@ function parsed(value: unknown, provider: VehicleVision["provider"], note: strin
 }
 
 function failureReason(error: unknown, provider: "GLM" | "QWEN") {
-  const code = error instanceof Error ? error.message : "UNKNOWN";
+  const code = error instanceof Error ? `${error.name}:${error.message}` : "UNKNOWN";
   if (/REAL_CALLS_DISABLED/.test(code)) return "实际调用未开启";
   if (/_NOT_CONFIGURED/.test(code)) return `${provider} 服务未配置`;
   if (/(?:_401|_403)/.test(code)) return `${provider} 账户或权限不可用`;
+  if (/_400/.test(code)) return `${provider} 请求参数或图片格式不受支持`;
   if (/_404/.test(code)) return `${provider} 模型不可用或不支持当前参数`;
   if (/_429/.test(code)) return `${provider} 请求过于频繁，请稍后重试`;
-  if (/(?:timeout|abort|_408)/i.test(code)) return `${provider} 在 30 秒内未完成`;
+  if (/(?:timeout|abort|_408|超时)/i.test(code)) return `${provider} 识别超时，请重试`;
   if (/EMPTY_RESPONSE/.test(code)) return `${provider} 未返回可读取结果`;
   if (/JSON|格式/.test(code)) return `${provider} 返回格式无法识别`;
   return `${provider} 调用失败`;
@@ -49,7 +50,7 @@ async function glm(imageUrl: string): Promise<VehicleVision> {
   if (!isAiVisionRealCallsEnabled()) throw new Error("REAL_CALLS_DISABLED");
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   if (!key) throw new Error("GLM_NOT_CONFIGURED");
-  const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+  const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }], temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`GLM_${response.status}`);
   const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
@@ -78,7 +79,7 @@ const screenshotPrompt = `读取 WhatsApp 车队聊天截图中明确可见的�
 - 仅填写截图明确可见字段；号码、车牌、品牌与型号要保留原文，无法确认填 null。
 只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_phone":string|null,"license_plate":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"confirmation_status":"ACCEPTED"|"PENDING_DETAILS"|"DECLINED"|"UNKNOWN","confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
 
-const fleetPackagePrompt = `你是吉隆坡机场接送车队资料包的信息抽取助手。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
+const fleetPackagePrompt = `你是机场接送车队资料包的信息抽取助手（支持曼谷、苏梅岛、吉隆坡）。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
 
 严格安全规则：
 - 仅当截图或文字中出现精确订单号时才填写 order_number；多笔订单必须分开 records。没有订单号、订单号不在资料包中，或同一订单对应两套司机/车辆资料时保持待核对，不自行关联。
@@ -126,7 +127,7 @@ export async function recognizeFleetPackage(rawText: string, imageUrls: string[]
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   try {
     if (!key) throw new Error("GLM_NOT_CONFIGURED");
-    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content }], temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`GLM_${response.status}`);
     const result = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
@@ -150,7 +151,7 @@ export async function recognizeFleetReplyText(rawText: string, candidateOrderNum
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   try {
     if (!key) throw new Error("GLM_NOT_CONFIGURED");
-    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: message }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: message }], temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`GLM_${response.status}`);
     const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
@@ -170,7 +171,7 @@ export async function recognizeFleetScreenshot(imageUrl: string): Promise<Screen
   const key = process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY;
   try {
     if (!key) throw new Error("GLM_NOT_CONFIGURED");
-    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: [{ type: "text", text: screenshotPrompt }, { type: "image_url", image_url: { url: imageUrl } }] }], temperature: 0.1, response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
+    const response = await fetch(AI_MODELS.vehicleVision.primary.endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify({ model: AI_MODELS.vehicleVision.primary.model, messages: [{ role: "user", content: [{ type: "text", text: screenshotPrompt }, { type: "image_url", image_url: { url: imageUrl } }] }], temperature: 0.1, reasoning_effort: "low", response_format: { type: "json_object" } }), signal: AbortSignal.timeout(AI_MODELS.vehicleVision.primary.timeoutMs) });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`GLM_${response.status}`);
     const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content;
