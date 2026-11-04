@@ -72,7 +72,7 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
   const summary: GmailIwaySummary = { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0, processedIds: [] };
   try {
     for (const message of messages) {
-      const notice = classifyLifecycleNotice(message.subject, message.text);
+      const notice = classifyLifecycleNotice(message.subject, message.text, message.fields);
       if (notice) {
         const date = validReceivedAt(message.receivedAt);
         const waterline = validReceivedAt(process.env.IWAY_GMAIL_ENABLED_AT || "");

@@ -1,14 +1,26 @@
 import { db } from "@/lib/db";
 import { failure, success } from "@/lib/api-response";
-import { ingestLifecycle, type MailReview } from "@/features/import/gmail-lifecycle";
+import { ingestLifecycle, previewLifecycleReview, type MailReview } from "@/features/import/gmail-lifecycle";
+import { classifyLifecycleNotice } from "@/features/import/iway-lifecycle-parser";
 
 export async function GET() {
   const rows = await db.importedSourceMessage.findMany({ where: { connector: "gmail-iway", action: "LIFECYCLE_REVIEW_PENDING" }, orderBy: { processedAt: "desc" }, take: 100 });
-  return success(rows.map(row => {
+  return success(await Promise.all(rows.map(async row => {
     let review: MailReview | null = null;
-    try { review = JSON.parse(row.sourceText).review; } catch { /* malformed protected audit */ }
-    return { id: row.id, orderId: row.orderId, receivedAt: row.receivedAt, review };
-  }));
+    let orderId = row.orderId;
+    try {
+      const source = JSON.parse(row.sourceText);
+      review = source.review;
+      if (review && source.message && review.reason !== "CANCELLED_NOTIFY_FLEET") {
+        const message = source.message;
+        const notice = classifyLifecycleNotice(message.subject, message.text, message.fields);
+        const order = notice?.orderNumber ? await db.order.findUnique({ where: { platformOrderNumber: notice.orderNumber } }) : null;
+        review = previewLifecycleReview(message, review, order);
+        orderId = order?.id ?? null;
+      }
+    } catch { /* malformed protected audit */ }
+    return { id: row.id, orderId, receivedAt: row.receivedAt, review };
+  })));
 }
 export async function POST(request: Request) {
   const body = await request.json().catch(()=>null);
