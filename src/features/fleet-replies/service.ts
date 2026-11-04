@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { loadRules } from "@/lib/rules/load-rules";
-import { normalizeDriverPhone, normalizeLicensePlateForReturn, normalizeVehicleModel, resolveVehicleModel } from "@/lib/rules/engine";
+import { normalizeDriverPhone, normalizeLicensePlateForReturn, resolveVehicleModel } from "@/lib/rules/engine";
 import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 import { saveDriverDetails } from "@/features/iway/service";
 import { isQwenConfigured } from "@/features/assist/qwen";
@@ -198,6 +198,10 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
     if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
     if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
+    // Brand is useful evidence even if this particular image/text fragment
+    // does not name a model. It can safely complete a verified historical
+    // model later in the same analysis pass.
+    if (!target.vehicle_brand.value && item.vehicle_brand) target.vehicle_brand = field(item.vehicle_brand, `${result.recognition.label} 识别`);
     if (item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`, item.confidence);
   }
 }
@@ -483,6 +487,15 @@ export async function analyzeFleetReply(replyId: string) {
   // AI results. Never auto-save an unverified model-only fallback.
   for (const record of result.records) {
     const vehicle = resolveVehicleModel(record.vehicle_model.value, record.vehicle_brand.value, loadRules());
+    // History may only have the model (for example “Hiace”), while this
+    // package independently identifies the brand. Resolve those two pieces
+    // together before the preview is persisted, so every downstream surface
+    // receives the same complete canonical name (for example “Toyota HiAce”).
+    // A conflicting brand deliberately keeps the historical text and is sent
+    // to the existing manual-review path below.
+    if (vehicle.value && vehicle.value !== record.vehicle_model.value) {
+      record.vehicle_model = field(vehicle.value, `${record.vehicle_model.evidence}；结合本次识别品牌规范化`);
+    }
     if (vehicle.needsManualReview) {
       record.needs_review = true;
       if (vehicle.reviewReason && !record.review_reasons.includes(vehicle.reviewReason)) record.review_reasons.push(vehicle.reviewReason);
@@ -502,7 +515,12 @@ export async function getFleetReply(replyId: string) {
   return { id: reply.id, rawText: reply.rawText, images: reply.images.map(({ id, originalFilename, mimeType }) => ({ id, originalFilename, mimeType })), orders, extraction: extraction ? { id: extraction.id, status: extraction.status, message: extraction.errorMessage, result: extraction.validatedResultJson ? JSON.parse(extraction.validatedResultJson) : null } : null, confirmations: reply.confirmations };
 }
 
-type SavedAnalysisRecord = { order_match?: { platform_order_number?: string | null }; needs_review?: boolean; vehicle_model?: { value?: string | null } };
+type SavedAnalysisRecord = {
+  order_match?: { platform_order_number?: string | null };
+  needs_review?: boolean;
+  vehicle_brand?: { value?: string | null };
+  vehicle_model?: { value?: string | null };
+};
 
 export function requiresManualVehicleConfirmation(record: SavedAnalysisRecord | undefined, proposedVehicle?: string) {
   if (!record || record.needs_review !== false || !record.vehicle_model?.value) return true;
@@ -537,7 +555,11 @@ export async function confirmFleetReply(replyId: string, input: { extractionId?:
     }
     const order = candidates.find((candidate) => candidate.id === record.orderId);
     const phone = normalizeDriverPhone(record.driverPhone, order?.city ?? "", rules);
-    const vehicle = normalizeVehicleModel(record.vehicleModel, rules);
+    // Keep the manual-edit save path aligned with the analysis preview. A
+    // reliable AI brand may complete a model-only manual value, but the
+    // shared resolver still flags conflicting brands instead of guessing.
+    const vehicleResolution = resolveVehicleModel(record.vehicleModel, matchedAnalysis?.vehicle_brand?.value, rules);
+    const vehicle = vehicleResolution.value;
     const missing = [
       !phone ? (record.driverPhone.trim() ? "司机电话格式不正确" : "司机电话") : "",
       !record.licensePlate.trim() ? "车牌" : "",
