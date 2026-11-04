@@ -13,6 +13,7 @@ const defaultLinks: NavLink[] = [
   { href: "/fleets", defaultLabel: "车队管理" },
   { href: "/history-orders", defaultLabel: "历史订单" },
   { href: "/rules", defaultLabel: "设置 / 规则" },
+  { href: "/ai-benchmark", defaultLabel: "AI 模型测试" },
 ];
 
 const storageKey = "iway-navigation-preferences-v1";
