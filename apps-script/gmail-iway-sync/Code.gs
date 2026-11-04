@@ -157,7 +157,7 @@ function safeEquals_(left, right) {
 
 function manualTriggerErrorCode_(error) {
   var text = String(error && error.message || error || '');
-  if (/Service invoked too many times|quota|limit exceeded|daily limit/i.test(text)) return 'GMAIL_QUOTA_EXHAUSTED';
+  if (/Service invoked too many times|quota|limit exceeded|daily limit|一天调用次数过多的服务[：:]\s*gmail/i.test(text)) return 'GMAIL_QUOTA_EXHAUSTED';
   if (/^MANUAL_TRIGGER_[A-Z_]+$/.test(text)) return text;
   return 'GMAIL_MANUAL_SYNC_FAILED';
 }
