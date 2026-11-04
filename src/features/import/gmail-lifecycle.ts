@@ -23,10 +23,20 @@ function differences(order: Order, message: GmailIwayMessage): MailReview["diffe
   // Optional/empty cells are compared only when the table actually supplied
   // them, preventing parser defaults from manufacturing deletions or counts.
   const fields = lifecycleFields(message.fields);
+  const passengers = fields.find(f => f.label === "Passengers");
+  if (passengers) {
+    // The generic new-order parser selects one contact. A review must retain
+    // the entire current table value instead of proposing to remove contacts.
+    const [names, ...phones] = passengers.current.split(/\bPhone\s*:\s*/i);
+    values.passengerName = names.replace(/\(\s*\)/g, "").trim() || null;
+    values.passengerPhone = phones.length ? phones.join("Phone: ").trim() : null;
+  }
   if (fields.some(f => f.label === "Flight number")) values.flightNumber = parsed.flightNumber;
   if (fields.some(f => f.label === "Greeting sign")) values.meetGreetLine = parsed.meetGreetLine;
   if (fields.some(f => f.label === "Pax")) values.adults = parsed.adults;
-  if (fields.some(f => f.label === "Additional remarks")) values.otherNotes = fields.find(f=>f.label === "Additional remarks")!.current;
+  // Nested remarks tables can be incomplete in historical extraction. Only
+  // compare a remark explicitly marked as changed, never manufacture removal.
+  if (fields.some(f => f.label === "Additional remarks" && f.previous.length)) values.otherNotes = fields.find(f=>f.label === "Additional remarks")!.current;
   return Object.entries(values).flatMap(([field, proposed]) => {
     if (proposed === null) return [];
     const raw = order[field as keyof Order];
