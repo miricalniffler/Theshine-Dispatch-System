@@ -95,7 +95,7 @@ function serviceDateFor(dateValue: string, departureValue: string, referenceDate
 }
 
 export function parseIwayNewRide(text: string, options: { referenceDate?: Date } = {}): ParsedIwayNewRide {
-  text = text.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
+  text = text.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ").replace(/\t+/g, "\n");
   const transferNotice = /(?:^|\n)\s*Transfer\s*[:：]/i.test(text) && /(?:^|\n)\s*Passengers\s*[:：]/i.test(text);
   const rideNumber = pick(text, "Ride number").replace(/^\s*(?:ride|order(?:\s*(?:number|no\\.?|id))?)?\s*[:#№-]*\s*/i, "").replace(/\s/g, "");
   const date = transferNotice ? transferField(text, "Pick-up date") : pick(text, "Date");

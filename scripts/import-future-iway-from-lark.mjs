@@ -180,8 +180,8 @@ async function main() {
   // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
   // 再合并结果，既不会漏掉 New ride，也不必下载整个邮箱的 400 封目录。
   // 同步是增量的：已解析邮件已留有缓存，新订单/修改邮件总会排在最新位置。
-  // 每个发件人只看最近 30 封，避免旧邮件越来越多后拖慢每一次人工刷新。
-  const triages = [{ sender: officialSender, max: 30 }, { sender: newRideSender, max: 30 }].map(({ sender, max }) => runCli([
+  // 每个发件人只看最近 200 封，避免旧邮件越来越多后拖慢每一次人工刷新。
+  const triages = [{ sender: officialSender, max: 200 }, { sender: newRideSender, max: 200 }].map(({ sender, max }) => runCli([
     "mail", "+triage", "--as", "user", "--mailbox", mailbox,
     "--filter", JSON.stringify({ from: [sender] }), "--max", String(max), "--format", "json",
   ]));
@@ -200,9 +200,15 @@ async function main() {
   // 自动读取并覆盖对应订单；这让后续手动刷新从约一分钟降到只查邮件目录。
   const previouslyRead = dryRun ? [] : await db.importedSourceMessage.findMany({
     where: { connector: "feishu-mail", externalId: { in: uniqueCandidates.map((mail) => mail.message_id) } },
-    select: { externalId: true },
+    select: { externalId: true, orderId: true, sourceText: true },
   });
-  const knownIds = new Set(previouslyRead.map((item) => item.externalId));
+  // Cached mail only suppresses another read when its exact order still
+  // exists. Legacy cache entries did not store orderId, so reconcile by the
+  // explicit Ride number in the retained source instead of re-reading all mail.
+  const cachedOrderNos = previouslyRead.map((item) => capture(normalizedText(item.sourceText), /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, "")).filter(Boolean);
+  const persistedOrders = cachedOrderNos.length ? await db.order.findMany({ where: { platformOrderNumber: { in: cachedOrderNos } }, select: { platformOrderNumber: true } }) : [];
+  const persistedNumbers = new Set(persistedOrders.map((order) => order.platformOrderNumber));
+  const knownIds = new Set(previouslyRead.filter((item) => persistedNumbers.has(capture(normalizedText(item.sourceText), /Ride number:\s*([\d\s]+?)\s+City:/i).replace(/\s/g, ""))).map((item) => item.externalId));
   const pendingCandidates = dryRun ? uniqueCandidates : uniqueCandidates.filter((mail) => !knownIds.has(mail.message_id));
   const details = pendingCandidates.length ? runCli([
     "mail", "+messages", "--as", "user", "--mailbox", mailbox,
@@ -292,7 +298,12 @@ async function main() {
     sourceText: result.message.body_plain_text || "",
     receivedAt: result.event.receivedAt,
   }));
-  if (processed.length) await db.importedSourceMessage.createMany({ data: processed, skipDuplicates: true });
+  for (const message of processed) {
+    const event = parseResults.find((result) => result.message.message_id === message.externalId)?.event;
+    const persisted = event ? await db.order.findUnique({ where: { platformOrderNumber: event.orderNo }, select: { id: true } }) : null;
+    if (!persisted) continue;
+    await db.importedSourceMessage.upsert({ where: { connector_externalId: { connector: "feishu-mail", externalId: message.externalId } }, create: { ...message, orderId: persisted.id }, update: { orderId: persisted.id } });
+  }
   if (syncRequestId) {
     await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected } });
   }
