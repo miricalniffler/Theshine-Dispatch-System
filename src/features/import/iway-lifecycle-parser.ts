@@ -3,13 +3,15 @@
  */
 export type LifecycleNotice = { kind: "cancel" | "amend" | "review"; orderNumber: string | null; reason: string };
 const digits = (value: string) => value.replace(/[\s\u00a0\u202f]/g, "");
-export function classifyLifecycleNotice(subject: string, text: string): LifecycleNotice | null {
+export function classifyLifecycleNotice(subject: string, text: string, fields?: MailField[]): LifecycleNotice | null {
   const s = subject.trim();
   text = text.replace(/\r\n?/g, "\n");
   const match = s.match(/^(CANCELLATION of|AMENDMENT to) the transfer #([\d\s\u00a0\u202f]+)\s*\(i[’']way\)$/i);
-  const bodyIds = [...text.matchAll(/\bRide number\s*[:：]\s*([\d \t\u00a0\u202f]+)(?=\r?\n|$)/gi)].map(m => digits(m[1]));
+  // Gmail plain text may append the link target after a linked ride number.
+  const bodyIds = [...text.matchAll(/\bRide number\s*[:：]\s*([\d \t\u00a0\u202f]+)(?=\r?\n|$|\s*[<\[]?https?:\/\/)/gi)].map(m => digits(m[1]));
+  const tableIds = lifecycleFields(fields).filter(f => /^Ride number$/i.test(f.label)).map(f => digits(f.current));
   const subjectId = match ? digits(match[2]) : null;
-  const unique = [...new Set(bodyIds)];
+  const unique = [...new Set([...bodyIds, ...tableIds])];
   const orderNumber = subjectId && /^\d{5,12}$/.test(subjectId) && unique.length === 1 && unique[0] === subjectId ? subjectId : null;
   if (!match) {
     if (/^(?:CANCELLATION|AMENDMENT)\b/i.test(s)) return { kind: "review", orderNumber: null, reason: "UNVERIFIED_SUBJECT" };
@@ -23,6 +25,10 @@ export function classifyLifecycleNotice(subject: string, text: string): Lifecycl
     return { kind: explicit ? "cancel" : "review", orderNumber, reason: explicit ? "EXPLICIT_CANCELLATION" : "CANCELLATION_BODY_UNCONFIRMED" };
   }
   return { kind: /Dear partners,\s*we send you an amendment of the following transfer/i.test(text) ? "amend" : "review", orderNumber, reason: "AMENDMENT_REQUIRES_REVIEW" };
+}
+
+export function lifecycleMailType(subject: string) {
+  return /^AMENDMENT\b/i.test(subject.trim()) ? "amend" : /^CANCELLATION\b/i.test(subject.trim()) ? "cancel" : "review";
 }
 
 export type MailField = { label: string; current: string; previous: string[] };

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { classifyLifecycleNotice, currentLifecycleText } from "../src/features/import/iway-lifecycle-parser";
-import { ingestLifecycle } from "../src/features/import/gmail-lifecycle";
+import { ingestLifecycle, previewLifecycleReview, type MailReview } from "../src/features/import/gmail-lifecycle";
 import { db } from "../src/lib/db";
 
 test.describe.configure({ mode: "serial" });
@@ -27,6 +27,33 @@ test("Apps Script 提取当前表格值并分开保留删除线旧值",()=>{
   expect(fields[1]).toMatchObject({label:"Greeting sign",current:"New Name ()",previous:["Old Name"]});
   expect(currentLifecycleText("old unstructured", fields)).not.toContain("Old Name");
   expect(source).toContain("booking@iwayex.com");
+});
+const linkedAmendment = {
+  ...amend, id: "linked-amendment", subject: "AMENDMENT to the transfer #1 172 005 (i’way)",
+  text: "Dear partners, we send you an amendment of the following transfer\nRide number: 1172005 <https://esforty.com/trips?number=1172005>\nCity: Bangkok",
+  fields: [
+    { label: "Ride number", current: "1172005", previous: [] },
+    { label: "Vehicle class", current: "MINIVAN ()", previous: ["MINIBUS"] },
+    { label: "Pax", current: "4 ()", previous: ["6"] },
+    { label: "Passengers", current: "Test A,Test B,Test C,Test D", previous: ["Test A,Test B,Test C,Test D,Test E,Test F"] },
+  ],
+};
+test("1172005：链接订单号与结构化表格用于一致性校验，冲突仍禁止自动操作", () => {
+  expect(classifyLifecycleNotice(linkedAmendment.subject, linkedAmendment.text, linkedAmendment.fields)).toMatchObject({ kind: "amend", orderNumber: "1172005" });
+  expect(classifyLifecycleNotice(linkedAmendment.subject, "Dear partners, we send you an amendment of the following transfer", linkedAmendment.fields)).toMatchObject({ kind: "amend", orderNumber: "1172005" });
+  expect(classifyLifecycleNotice(linkedAmendment.subject, linkedAmendment.text.replace(/1172005/g, "1172006"), linkedAmendment.fields)).toMatchObject({ kind: "review", orderNumber: null });
+  expect(classifyLifecycleNotice(linkedAmendment.subject, linkedAmendment.text, [...linkedAmendment.fields, { label: "Ride number", current: "1172006", previous: [] }])).toMatchObject({ kind: "review", orderNumber: null });
+  expect(classifyLifecycleNotice("Transfer service order", linkedAmendment.text, linkedAmendment.fields)).toBeNull();
+});
+test("待办只读展示可修复旧识别并保留邮件三项变更；取消缺原单不变成新订单", () => {
+  const stored: MailReview = { reason: "ORDER_NUMBER_MISSING_OR_CONFLICTING", orderNumber: null, kind: "review", differences: [], fields: [] };
+  const projected = previewLifecycleReview(linkedAmendment, stored, null);
+  expect(projected).toMatchObject({ mailType: "amend", kind: "amend", orderNumber: "1172005", reason: "AMEND_ORIGINAL_NOT_FOUND" });
+  expect(projected.fields.filter(f => f.previous.length)).toHaveLength(3);
+  expect(stored.orderNumber).toBeNull();
+  const missingCancel = { ...cancel, subject: "CANCELLATION of the transfer #1 162 424 (i’way)", text: cancel.text.replace("1150642", "1162424") };
+  expect(previewLifecycleReview(missingCancel, { ...stored, reason: "ORDER_NOT_FOUND" }, null)).toMatchObject({ mailType: "cancel", orderNumber: "1162424", reason: "CANCEL_ORIGINAL_NOT_FOUND" });
+  expect(previewLifecycleReview(missingCancel, { ...stored, reason: "CANCELLED_NOTIFY_FLEET" }, null).reason).toBe("CANCELLED_NOTIFY_FLEET");
 });
 function fake(status="DISPATCHED", latest=false) {
   let known=false; const logs:any[]=[]; const sources:any[]=[]; const updates:any[]=[];

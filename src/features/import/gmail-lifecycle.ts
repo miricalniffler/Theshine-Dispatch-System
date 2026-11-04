@@ -1,12 +1,20 @@
 import { Prisma, type Order } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { GmailIwayMessage } from "./gmail-iway-sync";
-import { classifyLifecycleNotice, currentLifecycleText, lifecycleFields } from "./iway-lifecycle-parser";
+import { classifyLifecycleNotice, currentLifecycleText, lifecycleFields, lifecycleMailType } from "./iway-lifecycle-parser";
 import { parseIwayNewRide } from "./iway-new-ride-parser";
 import { zonedLocalDateTimeToUtc } from "./service-timezone";
 
 const connector = "gmail-iway";
-export type MailReview = { reason: string; orderNumber: string | null; kind: string; differences: Array<{ field: string; before: string; proposed: string }>; fields: ReturnType<typeof lifecycleFields> };
+export type MailReview = { reason: string; orderNumber: string | null; kind: string; differences: Array<{ field: string; before: string; proposed: string }>; fields: ReturnType<typeof lifecycleFields>; subject?: string; mailType?: string };
+// A read-only projection also repairs old pending cards without replaying a
+// cancellation or changing an order just because the dashboard was opened.
+export function previewLifecycleReview(message: GmailIwayMessage, stored: MailReview, order: Order | null): MailReview {
+  const notice = classifyLifecycleNotice(message.subject, message.text, message.fields);
+  if (!notice || stored.reason === "CANCELLED_NOTIFY_FLEET") return stored;
+  const reason = !notice.orderNumber ? notice.reason : !order ? (lifecycleMailType(message.subject) === "cancel" ? "CANCEL_ORIGINAL_NOT_FOUND" : "AMEND_ORIGINAL_NOT_FOUND") : ["ORDER_NOT_FOUND", "ORDER_NUMBER_MISSING_OR_CONFLICTING", "CANCEL_ORIGINAL_NOT_FOUND", "AMEND_ORIGINAL_NOT_FOUND"].includes(stored.reason) ? notice.reason : stored.reason;
+  return { reason, orderNumber: notice.orderNumber, kind: notice.kind, subject: message.subject, mailType: lifecycleMailType(message.subject), differences: order && notice.kind === "amend" ? differences(order, message) : [], fields: lifecycleFields(message.fields) };
+}
 function differences(order: Order, message: GmailIwayMessage): MailReview["differences"] {
   const text = currentLifecycleText(message.text, message.fields);
   const parsed = parseIwayNewRide(text, { referenceDate: new Date(message.receivedAt) });
@@ -29,7 +37,7 @@ function differences(order: Order, message: GmailIwayMessage): MailReview["diffe
 
 /** The caller already checked sender, timestamp and the original activation waterline. */
 export async function ingestLifecycle(message: GmailIwayMessage, retryPending = false): Promise<"cancelled" | "cancelledReview" | "review" | "skipped"> {
-  const notice = classifyLifecycleNotice(message.subject, message.text)!;
+  const notice = classifyLifecycleNotice(message.subject, message.text, message.fields)!;
   return db.$transaction(async tx => {
     // Serializes creation, state transitions and replay checks for this exact
     // platform number across concurrent HTTP retries without adding a schema.
@@ -63,7 +71,7 @@ export async function ingestLifecycle(message: GmailIwayMessage, retryPending = 
     else if (!current) reason = notice.orderNumber ? "ORDER_NOT_FOUND" : notice.reason;
     else if (latest) reason = "OLDER_THAN_PROCESSED_MAIL";
     else if (current.status === "COMPLETED") reason = "COMPLETED_ORDER_REQUIRES_REVIEW";
-    const review: MailReview = { reason, orderNumber: notice.orderNumber, kind: notice.kind, differences: current && notice.kind === "amend" ? differences(current, message) : [], fields: lifecycleFields(message.fields) };
+    const review: MailReview = { reason, orderNumber: notice.orderNumber, kind: notice.kind, subject: message.subject, mailType: lifecycleMailType(message.subject), differences: current && notice.kind === "amend" ? differences(current, message) : [], fields: lifecycleFields(message.fields) };
     const data = { connector, externalId: message.id, action: (result === "review" || result === "cancelledReview") ? "LIFECYCLE_REVIEW_PENDING" : result === "cancelled" ? "ORDER_CANCELLED" : "LIFECYCLE_SKIPPED", sourceText: JSON.stringify({ review, message }), orderId: current?.id, receivedAt: new Date(message.receivedAt) };
     if (known) {
       await tx.importedSourceMessage.update({ where: { id: known.id }, data });
