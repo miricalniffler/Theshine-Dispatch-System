@@ -16,4 +16,7 @@ test("Apps Script 中文 Gmail 每日额度错误返回配额代码，其他故�
   vm.runInContext("syncIwayGmailOrders = function () { throw new Error('temporary private diagnostic'); };", context);
   expect(JSON.parse(vm.runInContext("doPost({})", context))).toEqual({ status: "FAILED", code: "GMAIL_MANUAL_SYNC_FAILED" });
   expect(vm.runInContext("manualTriggerErrorCode_(new Error('Service invoked too many times for one day: gmail.'))", context)).toBe("GMAIL_QUOTA_EXHAUSTED");
+  expect(vm.runInContext("manualTriggerErrorCode_({ message: '调用次数已达限额：\\u200egmail。', toString: function () { return 'Exception'; } })", context)).toBe("GMAIL_QUOTA_EXHAUSTED");
+  expect(vm.runInContext("manualTriggerErrorCode_({ message: 'Exception', toString: function () { return 'Service invoked too many times for one day: gmail.'; } })", context)).toBe("GMAIL_QUOTA_EXHAUSTED");
+  expect(vm.runInContext("manualTriggerErrorCode_(new Error('1 日にサービス gmail を実行した回数が多すぎます。'))", context)).toBe("GMAIL_QUOTA_EXHAUSTED");
 });
