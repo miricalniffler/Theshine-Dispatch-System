@@ -1,320 +1,52 @@
-import { spawnSync } from "node:child_process";
-import { dirname } from "node:path";
-import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
-import { cityFromIwayOrder, serviceTimeZoneForLocalSync } from "./iway-local-sync-city.mjs";
-import { isLocalNewOrderSubject, parseLocalNewRide, localMailOrderNumber } from "./iway-local-new-ride.mjs";
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíëMyN‹Z–‹­¦ëeŠw¬Õ¥µÁ½ÉÐìÍÁ…Ý¹Må¹Œô™É½´€‰¹½‘”é¡¥±‘}ÁÉ½•ÍÌˆì)¥µÁ½ÉÐì‘¥É¹…µ”ô™É½´€‰¹½‘”éÁ…Ñ ˆì)¥µÁ½ÉÐ€‰‘½Ñ•¹Ø½½¹™¥œˆì)¥µÁ½ÉÐìAÉ¥Íµ…±¥•¹Ðô™É½´€‰ÁÉ¥Íµ„½±¥•¹Ðˆì)¥µÁ½ÉÐì¥ÑåÉ½µ%Ý…å=É‘•È°Í•ÉÙ¥•Q¥µ•i½¹•½É1½…±Må¹Œô™É½´€ˆ¸½¥Ý…äµ±½…°µÍå¹Œµ¥Ñä¹µ©Ìˆì)¥µÁ½ÉÐì¥Í1½…±9•Ý=É‘•ÉMÕ‰©•Ð°Á…ÉÍ•1½…±9•ÝI¥‘”°±½…±5…¥±=É‘•É9Õµ‰•Èô™É½´€ˆ¸½¥Ý…äµ±½…°µ¹•ÜµÉ¥‘”¹µ©Ìˆì)¥µÁ½ÉÐì™•Ñ¡±±QÉ¥…•A…•Ìô™É½´€ˆ¸½±…É¬µµ…¥°µÁ…¥¹…Ñ¥½¸¹µ©Ìˆì((¼¼1…Õ¹¡•¹ÐÉÕ¹ÌÕ¹…ÑÑ•¹‘•¸]¥Ñ¡½ÕÐ„‘…Ñ…‰…Í”½¹¹•Ñ¥½¸Ñ¥µ•½ÕÐ°„(¼¼ÑÉ…¹Í¥•¹ÐMÕÁ…‰…Í”¹•ÑÝ½É¬ÍÑ…±°…¸±•…Ù”¥ÑÌÍ¥¹±”ÁÉ½•ÍÌ…±¥Ù”™½É•Ù•È°(¼¼Ý¡¥ ÁÉ•Ù•¹ÑÌ±…Õ¹¡™É½´ÍÑ…ÉÑ¥¹œÑ¡”¹•áÐ€ÄÀµÍ•½¹¡•¬…¹µ…­•Ì„(¼¼Ý•‰Í¥Ñ”µÉ•ÅÕ•ÍÑ•Íå¹Œ…ÁÁ•…ÈÑ¼Ý…¥Ð¥¹‘•™¥¹¥Ñ•±ä¸)½¹ÍÐ‘…Ñ…‰…Í•UÉ°€ô¹•ÜUI0¡ÁÉ½•ÍÌ¹•¹Ø¹Q	M}UI0¤ì)¥˜€ …‘…Ñ…‰…Í•UÉ°¹Í•…É¡A…É…µÌ¹¡…Ì ‰½¹¹•Ñ}Ñ¥µ•½ÕÐˆ¤¤ì(€‘…Ñ…‰…Í•UÉ°¹Í•…É¡A…É…µÌ¹Í•Ð ‰½¹¹•Ñ}Ñ¥µ•½ÕÐˆ°€ˆÄÀˆ¤ì)ô)½¹ÍÐ‘ˆ€ô¹•ÜAÉ¥Íµ…±¥•¹Ð¡ì‘…Ñ…Í½ÕÉ•Ìèì‘ˆèìÕÉ°è‘…Ñ…‰…Í•UÉ°¹Ñ½MÑÉ¥¹œ ¤ôôô¤ì)½¹ÍÐ±¤€ôÁÉ½•ÍÌ¹•¹Ø¹1I-}1%}AQ ñð€ˆ½UÍ•ÉÌ½µÕé¥Ñ½¹œ¼¹±½…°½‰¥¸½±…É¬µ±¤ˆì)½¹ÍÐµ…¥±‰½à€ôÁÉ½•ÍÌ¹•¹Ø¹%]e}5%1	=`ñð€‰‘¥¹‘…¹Ñ¡•Í¡¥¹”¹½´¹¸ˆì)½¹ÍÐ½™™¥¥…±M•¹‘•È€ô€‰½¹ÑÉ½±¥Ý…å•à¹½´ˆì)½¹ÍÐ¹•ÝI¥‘•M•¹‘•È€ô€‰¹½É•Á±å¥Ý…ä¹ÉÔˆì)½¹ÍÐ‘ÉåIÕ¸€ôÁÉ½•ÍÌ¹…ÉØ¹¥¹±Õ‘•Ì ˆ´µ‘ÉäµÉÕ¸ˆ¤ì)±•ÐÍå¹I•ÅÕ•ÍÑ%€ô¹Õ±°ì)½¹ÍÐÍÑ…±•IÕ¹5Ì€ô€Ô€¨€ØÁ|ÀÀÀì)½¹ÍÐ±¥Q¥µ•½ÕÑ5Ì€ô€ÜÕ|ÀÀÀì)½¹ÍÐµ…áIÕ¹5Ì€ô9Õµ‰•È¡ÁÉ½•ÍÌ¹•¹Ø¹%]e}1=1}Me9}5a}IU9}5Lñð€ÄÈÁ|ÀÀÀ¤ì((¼¼AÉ¥Íµ„Ì¹•ÑÝ½É¬•¹¥¹”…¸Ù•Éä½…Í¥½¹…±±äÍÑ…ä…±¥Ù”…™Ñ•È„½¹¹•Ñ¥½¸(¼¼¡…Ì…±É•…‘ä‰••¸•ÍÑ…‰±¥Í¡•‰ÕÐ„ÅÕ•Éä¹•Ù•ÈÉ•Í½±Ù•Ì¸½¹¹•Ñ¥½¸½ÁÑ¥½¸(¼¼…±½¹”…¹¹½ÐÉ•±¥…‰±ä¥¹Ñ•ÉÉÕÁÐÑ¡…ÐÍÑ…Ñ”¸Q¡¥Ì½ÕÑ•ÈÝ…Ñ¡‘½œµ…­•ÌÑ¡”(¼¼±…Õ¹¡¡•±Á•ÈÍ•±˜µ¡•…±¥¹œè¥Ð•á¥ÑÌ¥¹ÍÑ•…½˜½ÕÁå¥¹œÑ¡”½¹±äÝ½É­•È(¼¼Í±½Ð™½É•Ù•È°…¹±…Õ¹¡…¸ÍÑ…ÉÐÑ¡”¹•áÐÍ¡•‘Õ±•¡•¬¸)½¹ÍÐ¡…É‘MÑ½ÁQ¥µ•È€ôÍ•ÑQ¥µ•½ÕÐ  ¤€ôøì(€½¹Í½±”¹•ÉÉ½È¡)M=8¹ÍÑÉ¥¹¥™ä¡ìÍÑ…ÑÕÌè€‰Ñ¥µ•½ÕÐˆ°µ•ÍÍ…”èƒšr³–rÃ¦Ž{’æ›–B3š¶—¢Ú¢þ€‘íµ…áIÕ¹5Ì€¼€ÄÀÀÁôƒžžK’î7šr«žîOšv¾ò3–ÞË–sš¶‹šr³š²‡’îï–*‡¾ò3ž¢7–B;’òk¢«–*£¦7¢¾WŽ	€ô¤¤ì(€ÁÉ½•ÍÌ¹•á¥Ð Ä¤ì)ô°µ…áIÕ¹5Ì¤ì)¡…É‘MÑ½ÁQ¥µ•È¹Õ¹É•˜ ¤ì((¼¼Q¡”±½…°µ…¥°‰É¥‘”…¸½…Í¥½¹…±±ä±•…Ù”„‘…Ñ…‰…Í”½Èµ…¥°É•ÅÕ•ÍÐ(¼¼Ý…¥Ñ¥¹œ™½É•Ù•È¸Q¡”Ñ¥µ•½ÕÐ¥Ì…ÁÁ±¥•Ñ¼•… ‰±½­¥¹œ±…É¬µ±¤…±°è(¼¼ÍÁ…Ý¹Må¹Œ‰±½­ÌÑ¡”•Ù•¹Ð±½½À°Í¼„)…Ù…MÉ¥ÁÐµ½¹±äÝ…Ñ¡‘½œ…¹¹½Ð(¼¼É•±¥…‰±ä¥¹Ñ•ÉÉÕÁÐ¥Ð½Èµ…É¬Ñ¡”‘…Ñ…‰…Í”ÉÕ¸…Ì™…¥±•¸()™Õ¹Ñ¥½¸ÉÕ¹±¤¡…ÉÌ¤ì(€½¹ÍÐÉ•ÍÕ±Ð€ôÍÁ…Ý¹Må¹Œ¡±¤°…ÉÌ°ì(€€€Ýè€ˆ½UÍ•ÉÌ½µÕé¥Ñ½¹œ½½Õµ•¹ÑÌ¿–â»š"G¢Žžjž¢/–ê<ˆ°(€€€•¹½‘¥¹œè€‰ÕÑ˜àˆ°(€€€•¹Øèì(€€€€€€¸¸¹ÁÉ½•ÍÌ¹•¹Ø°(€€€€€€¼¼1…Õ¹¡•¹ÐÍÑ…ÉÑÌÝ¥Ñ „µ¥¹¥µ…°AQ ¸€-••ÀÑ¡”9½‘”ÉÕ¹Ñ¥µ”Ñ¡…Ð(€€€€€€¼¼±…Õ¹¡•Ñ¡¥ÌÍÉ¥ÁÐ…Ù…¥±…‰±”Ñ¼Ñ¡”±…É¬µ±¤ÝÉ…ÁÁ•È…ÌÝ•±°¸(€€€€€AQ è€‘í‘¥É¹…µ”¡ÁÉ½•ÍÌ¹•á•A…Ñ ¥ôè‘íÁÉ½•ÍÌ¹•¹Ø¹AQ ñð€ˆ½ÕÍÈ½‰¥¸è½‰¥¸‰õ€°(€€€€€1I-MU%Q}1%}9=}UAQ}9=Q%%Hè€ˆÄˆ°(€€€€€1I-MU%Q}1%}9=}M-%11M}9=Q%%Hè€ˆÄˆ°(€€€ô°(€€€µ…á	Õ™™•Èè€ÌÈ€¨€ÄÀÈÐ€¨€ÄÀÈÐ°(€€€Ñ¥µ•½ÕÐè±¥Q¥µ•½ÕÑ5Ì°(€€€­¥±±M¥¹…°è€‰M%QI4ˆ°(€ô¤ì(€¥˜€¡É•ÍÕ±Ð¹•ÉÉ½È¤Ñ¡É½Ü¹•ÜÉÉ½È¡±…É¬µ±¤ƒš&Ÿ¢†3–’Ç¢Ò—¾òh‘íÉ•ÍÕ±Ð¹•ÉÉ½È¹µ•ÍÍ…•õ€¤ì(€¥˜€¡É•ÍÕ±Ð¹ÍÑ…ÑÕÌ€„ôô€À¤Ñ¡É½Ü¹•ÜÉÉ½È¡É•ÍÕ±Ð¹ÍÑ‘•ÉÈñðÉ•ÍÕ±Ð¹ÍÑ‘½ÕÐñð±…É¬µ±¤•á¥Ñ•€‘íÉ•ÍÕ±Ð¹ÍÑ…ÑÕÍõ€¤ì(€É•ÑÕÉ¸)M=8¹Á…ÉÍ”¡É•ÍÕ±Ð¹ÍÑ‘½ÕÐ¤ì)ô()™Õ¹Ñ¥½¸¹½Éµ…±¥é•‘Q•áÐ¡Ù…±Õ”¤ì(€É•ÑÕÉ¸MÑÉ¥¹œ¡Ù…±Õ”ñð€ˆˆ¤¹É•Á±…” ½qÔÀÁ„À½œ°€ˆ€ˆ¤¹É•Á±…” ½qÌ¬½œ°€ˆ€ˆ¤¹ÑÉ¥´ ¤ì)ô()™Õ¹Ñ¥½¸…ÁÑÕÉ”¡Ñ•áÐ°Á…ÑÑ•É¸¤ì(€É•ÑÕÉ¸¹½Éµ…±¥é•‘Q•áÐ¡Ñ•áÐ¹µ…Ñ ¡Á…ÑÑ•É¸¤ü¹lÅtñð€ˆˆ¤ì)ô()™Õ¹Ñ¥½¸Á¡½¹•ÍÉ½´¡Ù…±Õ”¤ì(€½¹ÍÐ¹½Éµ…±¥Í•€ô¹½Éµ…±¥é•‘Q•áÐ¡Ù…±Õ”¤¹É•Á±…” ½oŠOŠQt½œ°€ˆ´ˆ¤ì(€É•ÑÕÉ¸l¸¸¹¹•ÜM•Ð¡l¸¸¹¹½Éµ…±¥Í•¹µ…Ñ¡±° ¼ üép¬ýq‘mq‘qÌ ¥pµuìÔ±õq¤½œ¥t(€€€€¹µ…À ¡µ…Ñ ¤€ôøµ…Ñ¡lÁt¹É•Á±…” ½qÌ¬½œ°€ˆ€ˆ¤¹ÑÉ¥´ ¤¤(€€€€¹™¥±Ñ•È¡	½½±•…¸¤¥tì)ô()™Õ¹Ñ¥½¸…‘‘É•ÍÍÉ½´¡Ù…±Õ”¤ì(€É•ÑÕÉ¸¹½Éµ…±¥é•‘Q•áÐ¡Ù…±Õ”¤(€€€€¹É•Á±…” ½qÌ¬ üéÉ•¹ÑqÌ­…qÌ­Ù•¡¥±•ñ¥¹Ñ•É¥ÑåñÝ…¥Ñ¥¹qÌ­Ñ¥µ•ñ¡¥±‘qÌ­Í•…Ññ•áÑÉ…qÌ­Í•ÉÙ¥•Ìü¥qÌ¨émqÍqMt¨½¤°€ˆˆ¤(€€€€¹ÑÉ¥´ ¤ì)ô()™Õ¹Ñ¥½¸Í•ÉÙ¥•…Ñ”¡Ù…±Õ”¤ì(€½¹ÍÐµ…Ñ €ôÙ…±Õ”¹µ…Ñ  ½x¡mµi„µét¬¥qÌ¬¡q‘ìÄ°Éô¤±qÌ¬¡q‘ìÑô¤¼¤ì(€¥˜€ …µ…Ñ ¤É•ÑÕÉ¸€ˆˆì(€½¹ÍÐµ½¹Ñ¡Ì€ôì(€€€©…¹Õ…Éäè€Ä°™•‰ÉÕ…Éäè€È°µ…É è€Ì°…ÁÉ¥°è€Ð°µ…äè€Ô°©Õ¹”è€Ø°(€€€©Õ±äè€Ü°…ÕÕÍÐè€à°Í•ÁÑ•µ‰•Èè€ä°½Ñ½‰•Èè€ÄÀ°¹½Ù•µ‰•Èè€ÄÄ°‘••µ‰•Èè€ÄÈ°(€ôì(€½¹ÍÐµ½¹Ñ €ôµ½¹Ñ¡Ímµ…Ñ¡lÅt¹Ñ½1½Ý•É…Í” ¥tì(€É•ÑÕÉ¸µ½¹Ñ €ü€‘íµ…Ñ¡lÍuô´‘íMÑÉ¥¹œ¡µ½¹Ñ ¤¹Á…‘MÑ…ÉÐ È°€ˆÀˆ¥ô´‘íµ…Ñ¡lÉt¹Á…‘MÑ…ÉÐ È°€ˆÀˆ¥õ€€è€ˆˆì)ô()™Õ¹Ñ¥½¸Á±…Ñ™½ÉµY•¡¥±•1…‰•°¡Ù•¡¥±•±…ÍÌ¤ì(€½¹ÍÐ…Ñ•½Éä€ô¹½Éµ…±¥é•‘Q•áÐ¡Ù•¡¥±•±…ÍÌ¤¹ÍÁ±¥Ð ˆ ˆ¥lÁt¹ÑÉ¥´ ¤ì(€€¼¼5½‘•°…ÉÌƒ–>«šb¿¢¾—ž¶'žêŸ–>¿žR£žjž’ë’ú/¢ö›¾ò3’â7šb¿¢º‹–6W¢ššÆžj¢ö›—}5æÚ$z{-®éÜj×]\™K›X\
 
-// LaunchAgent runs unattended. Without a database connection timeout, a
-// transient Supabase network stall can leave its single process alive forever,
-// which prevents launchd from starting the next 10-second check and makes a
-// website-requested sync appear to wait indefinitely.
-const databaseUrl = new URL(process.env.DATABASE_URL);
-if (!databaseUrl.searchParams.has("connect_timeout")) {
-  databaseUrl.searchParams.set("connect_timeout", "10");
-}
-const db = new PrismaClient({ datasources: { db: { url: databaseUrl.toString() } } });
-const cli = process.env.LARK_CLI_PATH || "/Users/muzitong/.local/bin/lark-cli";
-const mailbox = process.env.IWAY_MAILBOX || "dingdan@theshine.com.cn";
-const officialSender = "control@iwayex.com";
-const newRideSender = "noreply@iway.ru";
-const dryRun = process.argv.includes("--dry-run");
-let syncRequestId = null;
-const staleRunMs = 5 * 60_000;
-const cliTimeoutMs = 75_000;
-const maxRunMs = Number(process.env.IWAY_LOCAL_SYNC_MAX_RUN_MS || 120_000);
+]™[
+HOˆ
+ÂˆÜ™\“›Îˆ]™[›Ü™\“›ËˆÚ]Nˆ]™[˜Ú]KˆÙ\šXÙQ]Nˆ]™[œÙ\šXÙQ]KˆJJKˆK[ŠJNÂˆ™]\›ŽÂˆBˆÛÛœÝ›Y]ÈH™]ÈX\
 
-// Prisma's network engine can very occasionally stay alive after a connection
-// has already been established but a query never resolves. A connection option
-// alone cannot reliably interrupt that state. This outer watchdog makes the
-// launchd helper self-healing: it exits instead of occupying the only worker
-// slot forever, and launchd can start the next scheduled check.
-const hardStopTimer = setTimeout(() => {
-  console.error(JSON.stringify({ status: "timeout", message: `æœ¬åœ°é£žä¹¦åŒæ­¥è¶…è¿‡ ${maxRunMs / 1000} ç§’ä»æœªç»“æŸï¼Œå·²åœæ­¢æœ¬æ¬¡ä»»åŠ¡ï¼Œç¨åŽä¼šè‡ªåŠ¨é‡è¯•ã€‚` }));
-  process.exit(1);
-}, maxRunMs);
-hardStopTimer.unref();
+NÂˆ›Üˆ
+ÛÛœÝÚ]HÙˆÈ¹¦ï:,-È‹º"ãù¨¡H‹¹d"zf¡¹ghH—JHÂˆÛÛœÝ˜[YHH	ØÚ]_z/iºf'ØÂˆÛÛœÝ›Y]H]ØZ]‹™›Y]™š[™[š\]YJÈÚ\™NˆÈ˜[YWØÚ]NˆÈ˜[YKÚ]HHHJNÂˆYˆ
+Y›Y]
+H›ÝÈ™]È\œ›ÜŠ9¢o¹.#yb,	Û˜[Y_{ï&ù..º`oùacyb&ùnîºh§yi%º/iºf'ûï#9§+9«(y¥¬:+¨¹cey§*¹kï9aixà ˜
+NÂˆ›Y]ËœÙ]
+Ú]K›Y]
+NÂˆBˆÛÛœÝÝ[[X\žHHÈØØ[›™YˆØØ[›™YÛÝ[Ø[™Y]SY\ÜØYÙ\Îˆ[š\]YPØ[™Y]\Ë›[™Ý\œÙYY\ÜØYÙ\Îˆ\œÙY›[™ÝØ[˜Ù[][Û“Y\ÜØYÙ\Îˆ]\™SÜ™\œÎˆ]\™K›[™ÝÜ™X]Yˆ×K\]Yˆ×KØ[˜Ù[Yˆ×K[˜Ú[™ÙYˆ×K™Z™XÝYˆ™Z™XÝYY\ÜØYÙ\Ë›[™ÝNÂˆ›Üˆ
+ÛÛœÝ][HÙˆ]\™JHÂˆÛÛœÝ^\Ý[™ÈH]ØZ]‹›Ü™\‹™š[™[š\]YJÈÚ\™NˆÈ]›Ü›SÜ™\“[X™\Žˆ][K›Ü™\“›ÈHJNÂˆËÈÈ›Ý\]K™[Ü[‹Ø[˜Ù[ÜˆÝ\Ú\ÙHÝ™\Üš]H[ˆ^\Ý[™ÈÜ™\‚ˆËÈÚ[HÜ\˜][™È[ˆ™]Ë[Ü™\œË[Û›H™XÛÝ™\žH[ÙK‚ˆYˆ
+^\Ý[™ÊHÈÝ[[X\žK[˜Ú[™ÙYœ\Ú
+][K›Ü™\“›ÊNÈÛÛ[YNÈBˆÛÛœÝ›Y]H›Y]Ë™Ù]
+][K˜Ú]JNÂˆÛÛœÝ]HHÂˆÚ]Nˆ][K˜Ú]Kˆ›Y]Yˆ›Y]šYˆÙ\šXÙQ]Nˆ][KœÙ\šXÙQ]KˆXÚÝ\]U[YNˆ][KœXÚÝ\]U[YKˆXÚÝ\Y™\ÜÎˆ][KœXÚÝ\Y™\ÜËˆ›ÜÙ™Y™\ÜÎˆ][K™›ÜÙ™Y™\ÜËˆ\ÜÙ[™Ù\“˜[YNˆ][Kœ\ÜÙ[™Ù\“˜[YKˆ\ÜÙ[™Ù\”Û™Nˆ][Kœ\ÜÙ[™Ù\”Û™Kˆ›YÚ[X™\Žˆ][K™›YÚ[X™\‹ˆ]›Ü›U™ZXÛU\Nˆ][Kœ]›Ü›U™ZXÛU\KˆÙX]ÛÝ[ˆ][KœÙX]ÛÝ[ˆY[Îˆ][K˜Y[ËˆÚ[™[Žˆ][K˜Ú[™[‹ˆYÙØYÙNˆ][K›YÙØYÙKˆYY]Ü™Y][™Nˆ][K›YY]Ü™Y][™KˆÝ\“›Ý\Îˆ][K›Ý\“›Ý\Ëˆ˜]ÔÛÝ\˜ÙNˆ][Kœ˜]ÔÛÝ\˜ÙKˆNÂˆžHÂˆÛÛœÝÜ™X]YH]ØZ]‹›Ü™\‹˜Ü™X]JÈ]NˆÈ]›Ü›SÜ™\“[X™\Žˆ][K›Ü™\“›Ë‹‹™]KÝ]\Îˆ”‘PQWÕ×ÑTÔUÒˆHJNÂˆ]ØZ]‹˜XÝ]š]SÙË˜Ü™X]JÈ]NˆÈÜ™\’YˆÜ™X]YšYXÝ[ÛŽˆ¹.ãºhç¹.iº`«¹ë¬ykï9aiy§*¹§iz+¨¹ceH‹XÝÜŽˆ¹ìîùîçùkï9aiH‹Y]Y]Nˆ”ÓÓ‹œÝš[™ÚYžJÈY\ÜØYÙRYˆ][KœÛÝ\˜ÙSY\ÜØYÙRYÝXš™XÝˆ][KœÛÝ\˜ÙTÝXš™XÝJHHJNÂˆÝ[[X\žK˜Ü™X]Yœ\Ú
+][K›Ü™\“›ÊNÂˆHØ]Ú
+\œ›ÜŠHÂˆËÈH][˜ÚYÙ[[™H]Û‹]šYÙÙ\™Y[ˆØ[ˆÝ™\›\ˆH[š\]YBˆËÈÜ™\ˆ[X™\ˆ\ÈHš[˜[Y[\Ý[˜ÞHÝX\™È[›Ý\ˆÝXØÙ\ÜÙ[[‚ˆËÈYX[œÈ\ÈÛ™HÚÝ[š[š\Ú›Ü›X[HÚ]Ý]Ý™\Üš][™È[ž][™Ë‚ˆYˆ
+Z\ÓÜ™\[™XYPÜ™X]Y
+\œ›ÜŠJH›ÝÈ\œ›ÜŽÂˆÝ[[X\žK[˜Ú[™ÙYœ\Ú
+][K›Ü™\“›ÊNÂˆBˆBˆËÈ9cê¹¨!ú+¬9mì¹¢$9b§ú+îù¡à¹æ¡:`«¹.í¸à ¹¨/9o#ùo ¹n.9æ¡:`«¹.í¹.ãy/&¹g*9."ù. 9«(yb-ù¥¬:aãz+å{ï#:`oùacBˆËÈ9. 9«(z)èù§¤9fj9¥azf§9¢¢º+¨¹cey¬.9.ayoïyåixà ‚ˆÛÛœÝ›ØÙ\ÜÙYH\œÙT™\Ý[Ë™š[\Š
+™\Ý[
+HOˆ™\Ý[™]™[Ë›Ü™\“›ÊK›X\
 
-// The local mail bridge can occasionally leave a database or mail request
-// waiting forever. The timeout is applied to each blocking lark-cli call:
-// spawnSync blocks the event loop, so a JavaScript-only watchdog cannot
-// reliably interrupt it or mark the database run as failed.
+™\Ý[
+HOˆ
+ÂˆÛÛ›™XÝÜŽˆ™™Z\ÚK[XZ[‹ˆ^\›˜[Yˆ™\Ý[›Y\ÜØYÙK›Y\ÜØYÙWÚYˆXÝ[ÛŽˆ™\Ý[™]™[˜XÝ[Û‹ˆÛÝ\˜ÙU^ˆ™\Ý[›Y\ÜØYÙK˜›ÙWÜZ[—Ý^ˆ‹ˆ™XÙZ]™Y]ˆ™\Ý[™]™[œ™XÙZ]™Y]ˆJJNÂˆ›Üˆ
+ÛÛœÝY\ÜØYÙHÙˆ›ØÙ\ÜÙY
+HÂˆÛÛœÝ]™[H\œÙT™\Ý[Ë™š[™
 
-function runCli(args) {
-  const result = spawnSync(cli, args, {
-    cwd: "/Users/muzitong/Documents/å¸®æˆ‘è£…çš„ç¨‹åº",
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      // LaunchAgent starts with a minimal PATH.  Keep the Node runtime that
-      // launched this script available to the lark-cli wrapper as well.
-      PATH: `${dirname(process.execPath)}:${process.env.PATH || "/usr/bin:/bin"}`,
-      LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
-      LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
-    },
-    maxBuffer: 32 * 1024 * 1024,
-    timeout: cliTimeoutMs,
-    killSignal: "SIGTERM",
-  });
-  if (result.error) throw new Error(`lark-cli æ‰§è¡Œå¤±è´¥ï¼š${result.error.message}`);
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout || `lark-cli exited ${result.status}`);
-  return JSON.parse(result.stdout);
-}
+™\Ý[
+HOˆ™\Ý[›Y\ÜØYÙK›Y\ÜØYÙWÚYOOHY\ÜØYÙK™^\›˜[Y
+OË™]™[ÂˆÛÛœÝ\œÚ\ÝYH]™[È]ØZ]‹›Ü™\‹™š[™[š\]YJÈÚ\™NˆÈ]›Ü›SÜ™\“[X™\Žˆ]™[›Ü™\“›ÈKÙ[XÝˆÈYˆYHHJHˆ[ÂˆYˆ
+\\œÚ\ÝY
+HÛÛ[YNÂˆ]ØZ]‹š[\ÜYÛÝ\˜ÙSY\ÜØYÙK\Ù\
+ÈÚ\™NˆÈÛÛ›™XÝÜ—Ù^\›˜[YˆÈÛÛ›™XÝÜŽˆ™™Z\ÚK[XZ[‹^\›˜[YˆY\ÜØYÙK™^\›˜[YHKÜ™X]NˆÈ‹‹›Y\ÜØYÙKÜ™\’Yˆ\œÚ\ÝYšYK\]NˆÈÜ™\’Yˆ\œÚ\ÝYšYHJNÂˆBˆYˆ
+Þ[˜Ô™\]Y\ÝY
+HÂˆ]ØZ]‹š[\ÜÞ[˜Ô[‹\]JÈÚ\™NˆÈYˆÞ[˜Ô™\]Y\ÝYK]NˆÈÝ]\ÎˆÝ[[X\žKœ™Z™XÝYÈ‘RSQˆˆ”ÕPÐÑQQQ‹ÛÛ\]Y]ˆ™]È]J
+KÜ™X]YÛÝ[ˆÝ[[X\žK˜Ü™X]Y›[™Ý\]YÛÝ[ˆÝ[[X\žK\]Y›[™ÝØ[˜Ù[YÛÝ[ˆÝ[[X\žK˜Ø[˜Ù[Y›[™ÝÚÚ\YÛÝ[ˆÝ[[X\žK[˜Ú[™ÙY›[™Ý
+ÈÝ[[X\žKœ™Z™XÝY\œ›Ü“Y\ÜØYÙNˆÝ[[X\žKœ™Z™XÝYÈ	ÜÝ[[X\žKœ™Z™XÝYH9l y¥¬:+¨¹cez`«¹.íº)èù§¤9i,z-){ï&ù§*¹èkº+©9aj:`ê9d#9«iy¢$9b§ûï#:+íù¨à9§éy§+9§.¹d#9«iy¥éyoåøà ˜ˆ[HJNÂˆBˆÛÛœÛÛK›ÙÊ”ÓÓ‹œÝš[™ÚYžJÝ[[X\žK[ŠJNÂŸB‚›XZ[Š
+K˜Ø]Ú
+\Þ[˜È
+\œ›ÜŠHOˆÂˆYˆ
+Þ[˜Ô™\]Y\ÝY
+HÂˆ]ØZ]‹š[\ÜÞ[˜Ô[‹\]JÈÚ\™NˆÈYˆÞ[˜Ô™\]Y\ÝYK]NˆÈÝ]\Îˆ‘RSQ‹ÛÛ\]Y]ˆ™]È]J
+K\œ›Ü“Y\ÜØYÙNˆ\œ›Üˆ[œÝ[˜Ù[Ùˆ\œ›ÜˆÈ\œ›Ü‹›Y\ÜØYÙHˆ¹§*¹çéyd#9«ize&z+ëÈˆHJNÂˆBˆ›ÝÈ\œ›ÜŽÂŸJK™š[˜[J\Þ[˜È
 
-function normalizedText(value) {
-  return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-}
+HOˆÂˆÛX\•[Y[Ý]
+\™ÝÜ[Y\ŠNÂˆ]ØZ]‹‰\ØÛÛ›™XÝ
 
-function capture(text, pattern) {
-  return normalizedText(text.match(pattern)?.[1] || "");
-}
-
-function phonesFrom(value) {
-  const normalised = normalizedText(value).replace(/[â€“â€”]/g, "-");
-  return [...new Set([...normalised.matchAll(/(?:\+?\d[\d\s()\-]{5,}\d)/g)]
-    .map((match) => match[0].replace(/\s+/g, " ").trim())
-    .filter(Boolean))];
-}
-
-function addressFrom(value) {
-  return normalizedText(value)
-    .replace(/\s+(?:rent\s+a\s+vehicle|intercity|waiting\s+time|child\s+seat|extra\s+services?)\s*:[\s\S]*$/i, "")
-    .trim();
-}
-
-function serviceDate(value) {
-  const match = value.match(/^([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})$/);
-  if (!match) return "";
-  const months = {
-    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
-    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
-  };
-  const month = months[match[1].toLowerCase()];
-  return month ? `${match[3]}-${String(month).padStart(2, "0")}-${match[2].padStart(2, "0")}` : "";
-}
-
-function platformVehicleLabel(vehicleClass) {
-  const category = normalizedText(vehicleClass).split("(")[0].trim();
-  // Model cars åªæ˜¯è¯¥ç­‰çº§å¯ç”¨çš„ç¤ºä¾‹è½¦ï¼Œä¸æ˜¯è®¢å•è¦æ±‚çš„è½¦åž‹ã€‚C æ˜¯ i'way
-  // çš„ COMFORT ç­‰çº§ä»£ç ï¼Œåº”è½¬æ¢ä¸ºå¹³å°è½¦åž‹åç§°åŽå†æ˜¾ç¤º/æ´¾å•ã€‚
-  if (/^C$/i.test(category)) return "COMFORT";
-  return category;
-}
-
-function isOrderAlreadyCreated(error) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
-}
-
-function parseOrder(message, meta) {
-  if (/^New ride\b/i.test(meta.subject)) return parseLocalNewRide(message, meta);
-  const text = normalizedText(message.body_plain_text);
-  const orderNo = localMailOrderNumber(text);
-  const iwayCity = capture(text, /City:\s*(.*?)\s+Pick-up date:/i);
-  const date = serviceDate(capture(text, /Pick-up date:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})/i));
-  const pickupTime = capture(text, /Local pick-up time:\s*(\d{1,2}:\d{2})/i);
-  const vehicleBlock = capture(text, /Vehicle Class:\s*(.*?)\s+Model cars:/i);
-  const modelCars = capture(text, /Model cars:\s*(.*?)\s+Pax:/i);
-  const vehicleType = platformVehicleLabel(vehicleBlock);
-  const seatCount = Number(modelCars.match(/seats\s*-\s*(\d+)/i)?.[1] || 0) || null;
-  const pax = Number(capture(text, /Pax:\s*(\d+)/i)) || 0;
-  const transfer = capture(text, /Transfer:\s*(.*?)\s+Flight number:/i);
-  const [pickupRaw, dropoffRaw] = transfer.split(/\s*(?:â‡’|=>|â†’)\s*/);
-  const pickupAddress = addressFrom(pickupRaw);
-  const dropoffAddress = addressFrom(dropoffRaw);
-  const rawFlight = capture(text, /Flight number:\s*(.*?)\s+Greeting sign:/i);
-  const flightNumber = rawFlight.split("(")[0].replace(/[â†“â†‘]/g, "").trim() || null;
-  const greetingSign = capture(text, /Greeting sign:\s*(.*?)\s+Additional remarks:/i);
-  const passengerBlock = capture(text, /Passengers:\s*(.*?)\s+Phone:/i);
-  const passengers = passengerBlock.split(/\s*,\s*/).map((name) => name.trim()).filter(Boolean);
-  const phoneBlock = capture(text, /Phone:\s*(.*?)\s+Please send us a confirmation/i);
-  const phones = phonesFrom(phoneBlock);
-  const additionalRemarks = capture(text, /Additional remarks:\s*(.*?)\s+i[â€™']way notes:/i);
-  const city = cityFromIwayOrder(iwayCity, pickupAddress, dropoffAddress);
-  const children = Number(capture(text, /Children:\s*(\d+)/i)) || 0;
-  const statedAdults = Number(capture(text, /Adults:\s*(\d+)/i)) || 0;
-  const adults = statedAdults || Math.max(0, pax - children);
-  if (!orderNo || !city || !date || !pickupTime || !pickupAddress || !dropoffAddress || !passengers.length || !phones.length || !vehicleType) return null;
-  return {
-    orderNo,
-    city,
-    serviceDate: date,
-    // Kuala Lumpur is one hour behind Bangkok. Store an actual instant so the
-    // home-page date window and displayed local pickup time stay correct.
-    pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00${serviceTimeZoneForLocalSync(city) === "Asia/Kuala_Lumpur" ? "+08:00" : "+07:00"}`),
-    pickupAddress,
-    dropoffAddress,
-    passengerName: passengers.at(-1),
-    passengerPhone: phones.join(" / "),
-    flightNumber,
-    platformVehicleType: vehicleType,
-    seatCount,
-    adults,
-    children,
-    luggage: adults + children,
-    meetGreetLine: greetingSign || null,
-    otherNotes: additionalRemarks || null,
-    rawSource: text,
-    sourceMessageId: message.message_id,
-    sourceSubject: meta.subject,
-    receivedAt: new Date(meta.date),
-  };
-}
-
-function todayBangkok() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date());
-}
-
-async function main() {
-  if (!dryRun) {
-    const staleBefore = new Date(Date.now() - staleRunMs);
-    // ImportSyncRun is an execution log, not a prerequisite for starting the
-    // local mailbox reader. Every scheduled LaunchAgent invocation reads
-    // Feishu directly, then records its own result below.
-    await db.importSyncRun.updateMany({
-      where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
-      data: { status: "FAILED", completedAt: new Date(), errorMessage: "æœ¬æœºé£žä¹¦åŒæ­¥è¶…è¿‡ 5 åˆ†é’Ÿæœªå®Œæˆï¼Œå·²ç”±ä¸‹ä¸€è½®å‘¨æœŸåŒæ­¥è‡ªåŠ¨é‡Šæ”¾ã€‚" },
-    });
-    const run = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
-    syncRequestId = run.id;
-  }
-  // lark-cli çš„ from æ•°ç»„å¹¶éžâ€œä»»ä¸€å‘ä»¶äººâ€ã€‚åˆ†åˆ«æŒ‰å•ä¸€å®˜æ–¹å‘ä»¶äººæŸ¥è¯¢ï¼Œ
-  // å†åˆå¹¶ç»“æžœï¼Œæ—¢ä¸ä¼šæ¼æŽ‰ New rideï¼Œä¹Ÿä¸å¿…ä¸‹è½½æ•´ä¸ªé‚®ç®±çš„ 400 å°ç›®å½•ã€‚
-  // åŒæ­¥æ˜¯å¢žé‡çš„ï¼šå·²è§£æžé‚®ä»¶å·²ç•™æœ‰ç¼“å­˜ï¼Œæ–°è®¢å•/ä¿®æ”¹é‚®ä»¶æ€»ä¼šæŽ’åœ¨æœ€æ–°ä½ç½®ã€‚
-  // æ¯ä¸ªå‘ä»¶äººåªçœ‹æœ€è¿‘ 200 å°ï¼Œé¿å…æ—§é‚®ä»¶è¶Šæ¥è¶Šå¤šåŽæ‹–æ…¢æ¯ä¸€æ¬¡äººå·¥åˆ·æ–°ã€‚
-  const triages = [{ sender: officialSender, max: 200 }, { sender: newRideSender, max: 200 }].map(({ sender, max }) => runCli([
-    "mail", "+triage", "--as", "user", "--mailbox", mailbox,
-    "--filter", JSON.stringify({ from: [sender] }), "--max", String(max), "--format", "json",
-  ]));
-  const triageMessages = triages.flatMap((result) => result.messages || []);
-  const scannedCount = triages.reduce((total, result) => total + Number(result.count || 0), 0);
-  // This emergency recovery path imports only verified new-order notices.
-  // Amendments and every cancellation-shaped mail are deliberately excluded:
-  // they require the stricter event processor and must never change an
-  // existing production order through this legacy helper.
-  const candidates = triageMessages.filter((mail) => isLocalNewOrderSubject(mail.subject));
-  const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
-  // åŽ†å²é‚®ä»¶æ— éœ€æ¯æ¬¡é‡æ–°ä¸‹è½½æ­£æ–‡ã€‚æ–°ä¿®æ”¹é‚®ä»¶ä¼šæœ‰æ–°çš„ message_idï¼Œä»ä¼šè¢«
-  // è‡ªåŠ¨è¯»å–å¹¶è¦†ç›–å¯¹åº”è®¢å•ï¼›è¿™è®©åŽç»­æ‰‹åŠ¨åˆ·æ–°ä»Žçº¦ä¸€åˆ†é’Ÿé™åˆ°åªæŸ¥é‚®ä»¶ç›®å½•ã€‚
-  const previouslyRead = dryRun ? [] : await db.importedSourceMessage.findMany({
-    where: { connector: "feishu-mail", externalId: { in: uniqueCandidates.map((mail) => mail.message_id) } },
-    select: { externalId: true, orderId: true, sourceText: true },
-  });
-  // Cached mail only suppresses another read when its exact order still
-  // exists. Legacy cache entries did not store orderId, so reconcile by the
-  // explicit Ride number in the retained source instead of re-reading all mail.
-  const cachedOrderNos = previouslyRead.map((item) => localMailOrderNumber(normalizedText(item.sourceText))).filter(Boolean);
-  const persistedOrders = cachedOrderNos.length ? await db.order.findMany({ where: { platformOrderNumber: { in: cachedOrderNos } }, select: { platformOrderNumber: true } }) : [];
-  const persistedNumbers = new Set(persistedOrders.map((order) => order.platformOrderNumber));
-  const knownIds = new Set(previouslyRead.filter((item) => persistedNumbers.has(localMailOrderNumber(normalizedText(item.sourceText)))).map((item) => item.externalId));
-  const pendingCandidates = dryRun ? uniqueCandidates : uniqueCandidates.filter((mail) => !knownIds.has(mail.message_id));
-  const details = pendingCandidates.length ? runCli([
-    "mail", "+messages", "--as", "user", "--mailbox", mailbox,
-    "--message-ids", pendingCandidates.map((mail) => mail.message_id).join(","),
-    "--html=false", "--format", "json",
-  ]) : { data: { messages: [] } };
-  const metadata = new Map(uniqueCandidates.map((mail) => [mail.message_id, mail]));
-  const parseResults = details.data.messages.map((message) => {
-    const meta = metadata.get(message.message_id);
-    const order = parseOrder(message, meta);
-    return { message, event: order ? { action: "upsert", ...order } : null };
-  });
-  const rejectedMessages = parseResults.filter((result) => !result.event?.orderNo).map((result) => metadata.get(result.message.message_id));
-  const parsed = parseResults.map((result) => result.event).filter((event) => event?.orderNo).sort((left, right) => left.receivedAt - right.receivedAt);
-  const latestByOrder = new Map(parsed.map((event) => [event.orderNo, event]));
-  const today = todayBangkok();
-  const future = [];
-  for (const event of latestByOrder.values()) {
-    if (event.action === "upsert" && event.serviceDate >= today) future.push(event);
-  }
-  if (dryRun) {
-    console.log(JSON.stringify({
-      scanned: scannedCount,
-      candidateMessages: uniqueCandidates.length,
-      parsedMessages: parsed.filter((event) => event.action === "upsert").length,
-      cancellationMessages: 0,
-      rejectedMessages: rejectedMessages.length,
-      futureOrders: future.map((event) => ({
-        orderNo: event.orderNo,
-        city: event.city,
-        serviceDate: event.serviceDate,
-      })),
-    }, null, 2));
-    return;
-  }
-  const fleets = new Map();
-  for (const city of ["æ›¼è°·", "è‹æ¢…", "å‰éš†å¡"]) {
-    const name = `${city}è½¦é˜Ÿ`;
-    const fleet = await db.fleet.findUnique({ where: { name_city: { name, city } } });
-    if (!fleet) throw new Error(`æ‰¾ä¸åˆ°${name}ï¼›ä¸ºé¿å…åˆ›å»ºé¢å¤–è½¦é˜Ÿï¼Œæœ¬æ¬¡æ–°è®¢å•æœªå¯¼å…¥ã€‚`);
-    fleets.set(city, fleet);
-  }
-  const summary = { scanned: scannedCount, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.length, cancellationMessages: 0, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
-  for (const item of future) {
-    const existing = await db.order.findUnique({ where: { platformOrderNumber: item.orderNo } });
-    // Do not update, reopen, cancel, or otherwise overwrite an existing order
-    // while operating in new-orders-only recovery mode.
-    if (existing) { summary.unchanged.push(item.orderNo); continue; }
-    const fleet = fleets.get(item.city);
-    const data = {
-      city: item.city,
-      fleetId: fleet.id,
-      serviceDate: item.serviceDate,
-      pickupDateTime: item.pickupDateTime,
-      pickupAddress: item.pickupAddress,
-      dropoffAddress: item.dropoffAddress,
-      passengerName: item.passengerName,
-      passengerPhone: item.passengerPhone,
-      flightNumber: item.flightNumber,
-      platformVehicleType: item.platformVehicleType,
-      seatCount: item.seatCount,
-      adults: item.adults,
-      children: item.children,
-      luggage: item.luggage,
-      meetGreetLine: item.meetGreetLine,
-      otherNotes: item.otherNotes,
-      rawSource: item.rawSource,
-    };
-    try {
-      const created = await db.order.create({ data: { platformOrderNumber: item.orderNo, ...data, status: "READY_TO_DISPATCH" } });
-      await db.activityLog.create({ data: { orderId: created.id, action: "ä»Žé£žä¹¦é‚®ç®±å¯¼å…¥æœªæ¥è®¢å•", actor: "ç³»ç»Ÿå¯¼å…¥", metadata: JSON.stringify({ messageId: item.sourceMessageId, subject: item.sourceSubject }) } });
-      summary.created.push(item.orderNo);
-    } catch (error) {
-      // The LaunchAgent and a button-triggered run can overlap. The unique
-      // order number is the final idempotency guard; another successful run
-      // means this one should finish normally without overwriting anything.
-      if (!isOrderAlreadyCreated(error)) throw error;
-      summary.unchanged.push(item.orderNo);
-    }
-  }
-  // åªæ ‡è®°å·²æˆåŠŸè¯»æ‡‚çš„é‚®ä»¶ã€‚æ ¼å¼å¼‚å¸¸çš„é‚®ä»¶ä»ä¼šåœ¨ä¸‹ä¸€æ¬¡åˆ·æ–°é‡è¯•ï¼Œé¿å…
-  // ä¸€æ¬¡è§£æžå™¨æ•…éšœæŠŠè®¢å•æ°¸ä¹…å¿½ç•¥ã€‚
-  const processed = parseResults.filter((result) => result.event?.orderNo).map((result) => ({
-    connector: "feishu-mail",
-    externalId: result.message.message_id,
-    action: result.event.action,
-    sourceText: result.message.body_plain_text || "",
-    receivedAt: result.event.receivedAt,
-  }));
-  for (const message of processed) {
-    const event = parseResults.find((result) => result.message.message_id === message.externalId)?.event;
-    const persisted = event ? await db.order.findUnique({ where: { platformOrderNumber: event.orderNo }, select: { id: true } }) : null;
-    if (!persisted) continue;
-    await db.importedSourceMessage.upsert({ where: { connector_externalId: { connector: "feishu-mail", externalId: message.externalId } }, create: { ...message, orderId: persisted.id }, update: { orderId: persisted.id } });
-  }
-  if (syncRequestId) {
-    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: summary.rejected ? "FAILED" : "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected, errorMessage: summary.rejected ? `${summary.rejected} å°æ–°è®¢å•é‚®ä»¶è§£æžå¤±è´¥ï¼›æœªç¡®è®¤å…¨éƒ¨åŒæ­¥æˆåŠŸï¼Œè¯·æ£€æŸ¥æœ¬æœºåŒæ­¥æ—¥å¿—ã€‚` : null } });
-  }
-  console.log(JSON.stringify(summary, null, 2));
-}
-
-main().catch(async (error) => {
-  if (syncRequestId) {
-    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "FAILED", completedAt: new Date(), errorMessage: error instanceof Error ? error.message : "æœªçŸ¥åŒæ­¥é”™è¯¯" } });
-  }
-  throw error;
-}).finally(async () => {
-  clearTimeout(hardStopTimer);
-  await db.$disconnect();
-});
+NÂŸJNÂ

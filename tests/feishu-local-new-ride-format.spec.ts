@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { isLocalNewOrderSubject, parseLocalNewRide, localMailOrderNumber } from '../scripts/iway-local-new-ride.mjs';
+import { isFreshCompletedLocalRun } from '../src/features/import/local-feishu-wait';
 
 const meta = { subject: 'New ride #1173316.', date: '2026-11-04T15:21:00Z' };
 const message = { message_id: 'test-new-ride', body_plain_text: `Ride number: #1173316
@@ -15,6 +16,13 @@ Remarks:
 Number of passengers: 1
 Clients: Test Passenger, phone 15102098006
 Meeting tablet: Test Passenger` };
+
+test('手动同步只接受本次明确请求 ID 的最终结果，不把周期任务算作完成', () => {
+  const requestedAt = Date.parse('2026-11-05T10:00:00Z');
+  expect(isFreshCompletedLocalRun({ id: 'periodic-run', status: 'SUCCEEDED', completedAt: '2026-11-05T10:00:01Z' }, requestedAt, 'request-run')).toBeFalsy();
+  expect(isFreshCompletedLocalRun({ id: 'request-run', status: 'RUNNING', completedAt: null }, requestedAt, 'request-run')).toBeFalsy();
+  expect(isFreshCompletedLocalRun({ id: 'request-run', status: 'SUCCEEDED', completedAt: '2026-11-05T10:00:01Z' }, requestedAt, 'request-run')).toBeTruthy();
+});
 
 test('飞书接受无 iway 字样的严格 New ride 主题，拒绝修改取消及询价', () => {
   expect(isLocalNewOrderSubject(meta.subject)).toBeTruthy();
