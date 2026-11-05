@@ -212,8 +212,8 @@ async function main() {
   // existing production order through this legacy helper.
   const candidates = triageMessages.filter((mail) => isLocalNewOrderSubject(mail.subject));
   const uniqueCandidates = [...new Map(candidates.map((mail) => [mail.message_id, mail])).values()];
-  // 历史邮件无需每次重新下载正文。新修改邮件会有新的 message_id，仍会被
-  // 自动读取并覆盖对应订单；这让后续手动刷新从约一分钟降到只查邮件目录。
+  // 已导入且订单仍存在的邮件不再下载正文；每次仍扫描完整摘要目录。
+  // 本机恢复助手只导入新订单，绝不根据修改/取消邮件覆盖现有订单。
   const previouslyRead = dryRun ? [] : await db.importedSourceMessage.findMany({
     where: { connector: "feishu-mail", externalId: { in: uniqueCandidates.map((mail) => mail.message_id) } },
     select: { externalId: true, orderId: true, sourceText: true },
