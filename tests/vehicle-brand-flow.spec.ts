@@ -141,3 +141,23 @@ for (const confidence of ["HIGH", "LOW"]) test(`图片入口保留完整新车�
  const result=await identifyVehicleFromImage("https://example.invalid/test.png");expect(result.value).toBe("BYD Sealion 7");expect(result.status).toBe(confidence==="HIGH"?"SUGGESTION_READY":"MANUAL_REVIEW_REQUIRED");expect(h.writes).toBe(0);
  }finally{h.restore();}
 });
+
+test("中文敏感标签不得作为司机姓名", async () => {
+  const { sanitizeAiDriverName } = await import("../src/features/fleet-replies/service");
+  expect(sanitizeAiDriverName("车牌号：WXY1234")).toBeNull();
+  expect(sanitizeAiDriverName("司机姓名：王明")).toBe("王明");
+  expect(sanitizeAiDriverName("电话：0123456789")).toBeNull();
+});
+
+test("只有一条规则记录时，无订单号的 AI 结果也不能覆盖已匹配司机", async () => {
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try {
+  h.reply.rawText="订单号：9900001\n司机姓名：王明\n电话：0123456789";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:null,driver_name:"其他司机",driver_phone:"0198888777",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);
+  expect(result.result.records[0].order_match.platform_order_number).toBe("9900001");
+  expect(result.result.records[0].driver_name.value).toBe("王明");
+  expect(result.result.records[0].driver_phone.value).toBe("0123456789");
+  expect(h.writes).toBe(0);
+ } finally {h.restore();}
+});
