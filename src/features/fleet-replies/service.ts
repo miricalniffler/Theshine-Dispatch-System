@@ -200,7 +200,9 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     // A Chinese or free-form order header may not have produced a matching
     // rule record. Reuse an unassigned record only for a single-record reply;
     // never attach unknown fields to another order in a multi-order reply.
-    let target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : !item.order_number && result.records.length === 1 ? result.records[0] : undefined;
+    // Do not attach unbound AI details to an existing order: a single
+    // rule-parsed record is not evidence that this AI row belongs to it.
+    let target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : undefined;
     if (!target && exact && result.records.length === 1 && vision.records.length === 1 && !result.records[0].order_match.platform_order_number) target = result.records[0];
     if (!target && exact) { target = emptyPackageRecord(result.records.length); result.records.push(target); }
     if (!target) continue;
