@@ -99,7 +99,7 @@ export async function createFleetReply(input: { dispatchBatchId?: string; orderI
   return { id: reply.id, rawText: reply.rawText, imageCount: reply.images.length };
 }
 
-const orderHeader = /(?:^|\n)[ \t]*(?:(?:M\d+[ \t]+)?(?:order[ \t]*(?:number|id|no\.?)|ride[ \t]*number)[ \t]*[:：#][ \t]*|(?=\d))(\d{1,2}[ \u00a0]+\d{3}[ \u00a0]+\d{3}|\d{3}[ \u00a0]+\d{3,4}|\d{6,8})(?=[ \t]*(?:\r?$|\n|Passenger|Pickup|Driver))/gim;
+const orderHeader = /(?:^|\n)[ \t]*(?:(?:M\d+[ \t]+)?(?:order[ \t]*(?:number|id|no\.?)|ride[ \t]*number|订单(?:编号|号码|号)|订单)[ \t]*[:：#][ \t]*|(?=\d))(\d{1,2}[ \u00a0]+\d{3}[ \u00a0]+\d{3}|\d{3}[ \u00a0]+\d{3,4}|\d{6,8})(?=[ \t]*(?:\r?$|\n|Passenger|Pickup|Driver|司机|电话|车牌|车型))/gim;
 
 export function orderBlocks(text: string) {
   const matches = [...text.matchAll(orderHeader)];
@@ -124,7 +124,7 @@ function bangkokDriverReplySection(block: string) {
 }
 
 function readName(block: string) {
-  const labelled = firstMatch(block, /(?:driver\s*name|driver|name)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:driver\s*name|driver|name|司机姓名|司机名字|司机)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled) return labelled.replace(/^(?:driver\s*name|driver|name)\s*[:：.]?/i, "").trim();
   const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
   const phoneAt = lines.findIndex((line) => /(?:tel|phone|📞|\+?66|0\d{8,})/i.test(line));
@@ -143,7 +143,7 @@ function readPhone(block: string) {
   // match cross a line break, otherwise “062…\n6911” becomes one invalid
   // telephone number.
   const linePhones = block.split("\n").flatMap((line) => {
-    const matches = [...line.matchAll(/(?:\+\s*66[\s-]*|0)\d(?:[\d -]*\d)/g)].map((match) => match[0].trim());
+    const matches = [...line.matchAll(/(?:\+\s*(?:66|60)[\s-]*|0)\d(?:[\d -]*\d)/g)].map((match) => match[0].trim());
     return matches.filter((value) => value.replace(/\D/g, "").length >= 9);
   });
   // If the fleet gave local Thai numbers, they are the reply's intended
@@ -154,7 +154,7 @@ function readPhone(block: string) {
 }
 
 function readPlate(block: string) {
-  const labelled = firstMatch(block, /(?:car\s*(?:no|number|plate)|plate|license\s*plate|ทะเบียน)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:car\s*(?:no|number|plate)|plate|license\s*plate|ทะเบียน|车牌号码|车牌号|车牌)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled) return labelled;
   const lines = block.split("\n").map((line) => line.trim());
   const value = lines.find((line) => /^(?:\d{3,5}|[ก-๙]{1,3}\s*\d{1,4}|\d{1,2}[ก-๙]{1,3}\s*\d{1,4})$/i.test(line));
@@ -162,20 +162,20 @@ function readPlate(block: string) {
 }
 
 function readVehicleModel(block: string, allowInlineModel = true) {
-  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model|van|minibus|sedan|suv)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model|van|minibus|sedan|suv|具体车型|车辆型号|车型)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled && !/^(?:minibus|minivan|van|sedan|standard)$/i.test(labelled)) return labelled;
   return allowInlineModel ? firstMatch(block, /\b((?:toyota|hyundai|honda|isuzu|mitsubishi|mercedes)[^,\n]{0,45})/i) : null;
 }
 
 export function sanitizeAiDriverName(value: string | null) {
-  const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name)\s*(?::|：|\.)+\s*/i, "").trim() || null;
+  const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name|司机姓名|司机名字|司机)\s*(?::|：|\.)+\s*/i, "").trim() || null;
   if (!cleaned || /\b(?:car\s*plate|plate\s*number|license\s*plate|mobile|phone|tel(?:ephone)?|vehicle|model)\b/i.test(cleaned)) return null;
   if (/\d{5,}/.test(cleaned) || (/[฀-๿]/.test(cleaned) && /\d/.test(cleaned))) return null;
   return cleaned.slice(0, 100);
 }
 
 export function sanitizeAiPlate(value: string | null) {
-  const cleaned = value?.replace(/^(?:car\s*plate|plate\s*number|license\s*plate|ทะเบียน)\s*(?::|：|\.)+\s*/i, "").trim() || null;
+  const cleaned = value?.replace(/^(?:car\s*plate|plate\s*number|license\s*plate|ทะเบียน|车牌号码|车牌号|车牌)\s*(?::|：|\.)+\s*/i, "").trim() || null;
   if (!cleaned || /\b(?:driver|mobile|phone|tel(?:ephone)?)\b/i.test(cleaned)) return null;
   // Thai plates may be Thai letters + numbers + a province; retain the fleet's
   // original text rather than collapsing it to the numeric part.
@@ -183,20 +183,32 @@ export function sanitizeAiPlate(value: string | null) {
   return cleaned.slice(0, 120);
 }
 
-function mergeAiText(result: Analysis, vision: FleetTextVision, orders: CandidateOrder[]) {
+function mergeAiText(result: Analysis, vision: FleetTextVision, orders: CandidateOrder[], sourceText: string) {
   if (vision.provider === "NONE") {
     result.recognition = { provider: "RULES", label: "规则降级", note: vision.note };
     return;
   }
   result.recognition = { provider: vision.provider, label: vision.provider === "GLM" ? "AI：GLM" : "AI：Qwen", note: vision.note };
   for (const item of vision.records) {
-    const exact = item.order_number ? orders.find((order) => normalizedOrderNo(order.orderNo) === normalizedOrderNo(item.order_number!)) : undefined;
-    const target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : result.records.length === 1 ? result.records[0] : undefined;
+    const exact = item.order_number ? orders.find((order) => {
+      const number = normalizedOrderNo(order.orderNo);
+      if (number !== normalizedOrderNo(item.order_number!) || !/^\d+$/.test(number)) return false;
+      // Candidate order numbers are included in the prompt for context, not
+      // as evidence. Require the exact number to occur in the user's text.
+      return new RegExp(`(?<!\\d)${number.split("").join("[ \\u00a0]*")}(?!\\d)`).test(sourceText);
+    }) : undefined;
+    // A Chinese or free-form order header may not have produced a matching
+    // rule record. Reuse an unassigned record only for a single-record reply;
+    // never attach unknown fields to another order in a multi-order reply.
+    let target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : !item.order_number && result.records.length === 1 ? result.records[0] : undefined;
+    if (!target && exact && result.records.length === 1 && vision.records.length === 1 && !result.records[0].order_match.platform_order_number) target = result.records[0];
+    if (!target && exact) { target = emptyPackageRecord(result.records.length); result.records.push(target); }
     if (!target) continue;
     if (exact) {
       target.order_match = { platform_order_number: exact.orderNo, confidence: item.confidence === "HIGH" ? "high" : "medium", evidence: `${result.recognition.label} 从原文识别订单号` };
-      target.needs_review = false;
-      target.review_reasons = [];
+      target.review_reasons = target.review_reasons.filter((reason) => reason !== "缺少可匹配的订单号");
+      if (item.confidence !== "HIGH" && !target.review_reasons.includes("AI 识别置信度不足，请人工核对")) target.review_reasons.push("AI 识别置信度不足，请人工核对");
+      target.needs_review = target.review_reasons.length > 0;
     }
     const name = sanitizeAiDriverName(item.driver_name);
     const plate = sanitizeAiPlate(item.license_plate);
@@ -281,11 +293,11 @@ function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
     const firstPhone = phone?.split("/")[0] ?? null;
     const phoneAt = firstPhone ? block.indexOf(firstPhone) : -1;
     const beforePhone = phoneAt >= 0 ? block.slice(0, phoneAt) : block;
-    const name = beforePhone
+    const name = readName(block) ?? beforePhone
       .replace(new RegExp(`^\\s*${orderNoPattern}\\s*[,，:]?\\s*`, "m"), "")
       .replace(/\b(?:toyota\s+commut(?:er)?|commut(?:er)?\s+toyota|toyota\s+ventury|mitsubishi\s+pajero|(?:toyota\s+)?all\s+new\s+v9|toyota\s+hiace)\b/ig, "")
       .replace(/\b\d{1,2}-\d{3,5}\b|\b\d{3,5}\b/g, "")
-      .split(/[,，]/).map((value) => value.trim()).filter(Boolean).at(-1) || null;
+      .split(/[,，]/).map((value) => value.trim()).filter(Boolean).at(-1) ?? null;
     return {
       source_index,
       order_match: { platform_order_number: exact?.orderNo ?? null, confidence: exact ? "high" as const : "low" as const, evidence: exact ? "苏梅回复行首包含订单号" : "苏梅回复未提供可用订单号" },
@@ -473,7 +485,7 @@ export async function analyzeFleetReply(replyId: string) {
   // candidates for the same operator submission.
   if (reply.rawText.trim() && !reply.images.length) {
     const vision = await recognizeFleetReplyText(reply.rawText, orders.map((order) => order.orderNo));
-    mergeAiText(result, vision, orders);
+    mergeAiText(result, vision, orders, reply.rawText);
   } else {
     result.recognition = { provider: "RULES", label: "AI 未调用", note: reply.images.length ? "将作为一个资料包联合识别。" : "未提供车队文字；仅在有截图时调用图片识别。" };
   }

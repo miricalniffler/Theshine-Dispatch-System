@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { db } from "../src/lib/db";
 import { identifyVehicleFromImage } from "../src/features/assist/service";
-import { analyzeFleetReply, confirmFleetReply } from "../src/features/fleet-replies/service";
+import { analyzeFleetReply, confirmFleetReply, orderBlocks } from "../src/features/fleet-replies/service";
 import { getDriverDetails, createIwayPreview } from "../src/features/iway/service";
 import { listSqliteOrders, findPersistedOrder } from "../src/features/orders/sqlite-repository";
 
@@ -33,6 +33,54 @@ function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confid
  return {order,reply,logs,get writes(){return writes;},get assignments(){return assignmentWrites;},get batches(){return batches;},get extraction(){return extraction;},restore(){originals.reverse().forEach(fn=>fn());}};
 }
 const input=(model:string,extra:any={})=>({orderId:"test-order",driverName:"Test Driver",driverPhone:"0812345678",licensePlate:"กก 1234",vehicleCategory:"SUV",vehicleModel:model,...extra});
+
+test("中文多订单分别切分，司机电话不会被当成订单",()=>{
+ const blocks=orderBlocks("订单号：9900001\n司机：王明\n电话：0123456789\n订单编号：9900002\n司机：李明\n电话：0812345678");
+ expect(blocks).toHaveLength(2);expect(blocks[0]).toContain("王明");expect(blocks[0]).not.toContain("李明");expect(blocks[1]).toContain("李明");
+});
+
+test("中文字段在 AI 不可用时仍可识别并保持完整车牌", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try{
+  process.env.AI_VISION_REAL_CALLS_ENABLED="false";
+  h.reply.rawText="订单号：9900001\n司机姓名：王明\n司机电话：0123456789\n车牌号：กข 1234\n具体车型：Toyota HiAce";
+  const result=await analyzeFleetReply(h.reply.id);const record=result.result.records[0];
+  expect(record.order_match.platform_order_number).toBe("9900001");
+  expect(record.driver_name.value).toBe("王明");expect(record.driver_phone.value).toBe("0123456789");
+  expect(record.license_plate.value).toBe("กข 1234");expect(record.vehicle_model.value).toBe("Toyota HiAce");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("非固定中文格式由 AI 提取订单时，结果不会被未匹配的规则记录丢弃", async()=>{
+ const h=harness({vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"});
+ try{
+  h.reply.rawText="明天这一单 9900001 已安排，司机王明，号码 0123456789，车牌 WXY1234，丰田 HiAce。";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:"9900001",driver_name:"王明",driver_phone:"0123456789",license_plate:"WXY1234",vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);const record=result.result.records[0];
+  expect(record.order_match.platform_order_number).toBe("9900001");expect(record.driver_name.value).toBe("王明");
+  expect(record.driver_phone.value).toBe("0123456789");expect(record.license_plate.value).toBe("WXY1234");
+  expect(record.vehicle_model.value).toBe("Toyota HiAce");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("AI 给出未知订单号时不将资料归到单条未匹配记录", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try{
+  h.reply.rawText="请安排司机，订单号请稍后核对";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:"9999999",driver_name:"其他司机",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);expect(result.result.records[0].order_match.platform_order_number).toBeNull();
+  expect(result.result.records[0].driver_name.value).not.toBe("其他司机");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("AI 不能把候选列表里存在但原文未出现的订单号当成匹配依据", async()=>{
+ const h=harness({vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"});
+ try{
+  h.reply.rawText="司机王明，电话 0123456789，订单号稍后提供。";
+  const result=await analyzeFleetReply(h.reply.id);
+  expect(result.result.records[0].order_match.platform_order_number).toBeNull();expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
 
 test("AI 未收录品牌型号 → 确认写入 → 列表/详情/编辑读取 → iWay 预览完整保留",async()=>{
  const h=harness({vehicle_brand:"BYD",vehicle_model:"Sealion 7",confidence:"HIGH"});

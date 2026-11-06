@@ -82,6 +82,7 @@ const screenshotPrompt = `读取 WhatsApp 车队聊天截图中明确可见的�
 const fleetPackagePrompt = `你是机场接送车队资料包的信息抽取助手（支持曼谷、苏梅岛、吉隆坡）。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
 
 严格安全规则：
+- 原文和图片可能包含中文、英文、泰文、马来文或混合聊天。识别“订单号、司机姓名、电话、车牌、车型”等中文字段及自然语言，不要因为包含中文而忽略已明确提供的信息。
 - 仅当截图或文字中出现精确订单号时才填写 order_number；多笔订单必须分开 records。没有订单号、订单号不在资料包中，或同一订单对应两套司机/车辆资料时保持待核对，不自行关联。
 - WhatsApp 联系人/群成员名字不是司机姓名。电子钱包收款人姓名只能在资料包仅有一笔精确订单、没有其他司机姓名且没有冲突时作为候选；把 driver_name_source 写为 EWALLET_PAYEE。银行卡号、钱包号、二维码内容、交易号绝不能写入任何字段。
 - 司机电话只能来自明确的司机资料；马来西亚号码保留原文（例如 012-345 6789 或 +60 12-345 6789），账户号不可当电话。
@@ -91,7 +92,16 @@ const fleetPackagePrompt = `你是机场接送车队资料包的信息抽取助�
 
 只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_name_source":"DRIVER_DETAILS"|"EWALLET_PAYEE"|"UNKNOWN","driver_phone":string|null,"license_plate":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"vehicle_category":string|null,"vehicle_color":string|null,"confirmation_status":"ACCEPTED"|"PENDING_DETAILS"|"DECLINED"|"UNKNOWN","source_image_indexes":number[],"confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
 
-const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。仅从原文提取明确出现的订单号、司机姓名、泰国电话、原始车牌（保留泰文）、车辆类别、车辆品牌和具体车型。\n\n严格规则：\n- Driver/司机字段绝不能包含 Car Plate、Plate Number、Mobile、Phone、Tel、Vehicle、Model 等标签，也不能包含车牌或电话号码。\n- 车牌必须保留原文，例如“ฮพ 5348 กรุงเทพ”，不得只保留数字。\n- vehicle_category（例如 VAN）与 vehicle_brand、vehicle_model 分别填写，不能把大类当作具体车型。\n- 无法确定就填 null，不能猜测或补全。\n- 一条原文可有多笔订单。\n\n只输出 JSON：{\"records\":[{\"order_number\":string|null,\"driver_name\":string|null,\"driver_phone\":string|null,\"license_plate\":string|null,\"vehicle_category\":string|null,\"vehicle_brand\":string|null,\"vehicle_model\":string|null,\"confidence\":\"HIGH\"|\"MEDIUM\"|\"LOW\"|\"UNKNOWN\"}]}`;
+const fleetTextPrompt = `你是机场接送车队回复的信息抽取助手。原文可能是中文、英文、泰文、马来文或混合文本，也可能是非固定格式的聊天内容。提取明确出现的订单号、司机姓名、司机电话、完整原始车牌、车辆类别、车辆品牌和具体车型。不要因为出现中文或其他说明文字而忽略其余字段。
+
+严格规则：
+- 识别订单号/订单编号、司机/司机姓名、电话/手机号、车牌/车牌号、车型/车辆型号等中英字段，也可理解自然语言。乘客或聊天发言人的姓名和电话不等于司机资料。
+- 电话保留原文，支持泰国、马来西亚及其他明确提供的号码；车牌保留全部原文，包括泰文或马来西亚字母和数字。
+- vehicle_category（例如 VAN、MINIBUS、Sedan）与 vehicle_brand、vehicle_model 分别填写，不能把大类当作具体车型。
+- 只提取明确资料，候选订单号仅用于核对，不能推断或编造原文中未出现的订单号；无法确定的字段填 null。
+- 多笔订单分别输出，无法可靠归属的资料不要分配给其他订单；冲突或不确定时降低置信度。
+
+只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_phone":string|null,"license_plate":string|null,"vehicle_category":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
 
 function confidence(value: unknown): VehicleVision["confidence"] {
   return value === "HIGH" || value === "MEDIUM" || value === "LOW" ? value : "UNKNOWN";
