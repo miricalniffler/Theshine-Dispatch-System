@@ -198,11 +198,8 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
       // as evidence. Require the exact number to occur in the user's text.
       return new RegExp(`(?<!\\d)${number.split("").join("[ \\u00a0]*")}(?!\\d)`).test(sourceText);
     }) : undefined;
-    // A Chinese or free-form order header may not have produced a matching
-    // rule record. Reuse an unassigned record only for a single-record reply;
-    // never attach unknown fields to another order in a multi-order reply.
-    // Do not attach unbound AI details to an existing order: a single
-    // rule-parsed record is not evidence that this AI row belongs to it.
+    // An AI row must identify an exact order visible in the original text.
+    // A single rule record does not establish the identity of an unbound AI row.
     let target = exact ? result.records.find((record) => record.order_match.platform_order_number === exact.orderNo) : undefined;
     if (!target && exact && result.records.length === 1 && vision.records.length === 1 && !result.records[0].order_match.platform_order_number) target = result.records[0];
     if (!target && exact) { target = emptyPackageRecord(result.records.length); result.records.push(target); }
