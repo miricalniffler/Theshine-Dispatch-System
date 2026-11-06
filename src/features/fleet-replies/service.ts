@@ -170,6 +170,7 @@ function readVehicleModel(block: string, allowInlineModel = true) {
 export function sanitizeAiDriverName(value: string | null) {
   const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name|司机姓名|司机名字|司机)\s*(?::|：|\.)+\s*/i, "").trim() || null;
   if (!cleaned || /\b(?:car\s*plate|plate\s*number|license\s*plate|mobile|phone|tel(?:ephone)?|vehicle|model)\b/i.test(cleaned)) return null;
+  if (/(?:车牌|电话|手机号|车型|车辆型号|订单号|订单编号|乘客姓名)/.test(cleaned)) return null;
   if (/\d{5,}/.test(cleaned) || (/[฀-๿]/.test(cleaned) && /\d/.test(cleaned))) return null;
   return cleaned.slice(0, 100);
 }
