@@ -184,6 +184,18 @@ export function sanitizeAiPlate(value: string | null) {
   return cleaned.slice(0, 120);
 }
 
+function mergeAiField(target: ReplyRecord, key: "driver_name" | "driver_phone" | "license_plate" | "vehicle_category" | "vehicle_brand", value: string | null, evidence: string, normalize: (value: string) => string = (value) => value.trim().toLocaleLowerCase()) {
+  if (!value) return;
+  const current = target[key].value;
+  if (current && normalize(current) !== normalize(value)) {
+    const reason = "AI 识别与原文规则解析结果冲突，请人工核对";
+    target.needs_review = true;
+    if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
+    return;
+  }
+  if (!current) target[key] = field(value, evidence);
+}
+
 function mergeAiText(result: Analysis, vision: FleetTextVision, orders: CandidateOrder[], sourceText: string) {
   if (vision.provider === "NONE") {
     result.recognition = { provider: "RULES", label: "规则降级", note: vision.note };
@@ -212,15 +224,32 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     }
     const name = sanitizeAiDriverName(item.driver_name);
     const plate = sanitizeAiPlate(item.license_plate);
-    if (name) target.driver_name = field(name, `${result.recognition.label} 识别，需人工核对`);
-    if (item.driver_phone) target.driver_phone = field(item.driver_phone, `${result.recognition.label} 识别，需人工核对`);
-    if (plate) target.license_plate = field(plate, `${result.recognition.label} 识别，保留车牌原文`);
-    if (item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `${result.recognition.label} 识别`);
+    const nameKey = (value: string) => value.replace(/[\s\p{P}\p{S}]/gu, "").toLocaleLowerCase();
+    const digits = (value: string) => value.replace(/\D/g, "");
+    mergeAiField(target, "driver_name", name, `${result.recognition.label} 识别，需人工核对`, nameKey);
+    mergeAiField(target, "driver_phone", item.driver_phone, `${result.recognition.label} 识别，需人工核对`, digits);
+    mergeAiField(target, "license_plate", plate, `${result.recognition.label} 识别，保留车牌原文`, normalizePlate);
+    mergeAiField(target, "vehicle_category", item.vehicle_category, `${result.recognition.label} 识别`);
     // Brand is useful evidence even if this particular image/text fragment
     // does not name a model. It can safely complete a verified historical
     // model later in the same analysis pass.
-    if (!target.vehicle_brand.value && item.vehicle_brand) target.vehicle_brand = field(item.vehicle_brand, `${result.recognition.label} 识别`);
-    if (item.vehicle_model) applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`, item.confidence);
+    const brandConflict = Boolean(item.vehicle_brand && target.vehicle_brand.value && target.vehicle_brand.value.trim().toLocaleLowerCase() !== item.vehicle_brand.trim().toLocaleLowerCase());
+    mergeAiField(target, "vehicle_brand", item.vehicle_brand, `${result.recognition.label} 识别`);
+    if (item.vehicle_model) {
+      const resolved = resolveVehicleModel(item.vehicle_model, item.vehicle_brand, loadRules()).value;
+      const currentModel = target.vehicle_model.value;
+      const currentRawModel = target.vehicle_model_raw.value;
+      const modelConflict = currentModel
+        ? Boolean(resolved && normalizePlate(currentModel) !== normalizePlate(resolved))
+        : Boolean(currentRawModel && normalizePlate(currentRawModel) !== normalizePlate(item.vehicle_model));
+      if (brandConflict || modelConflict) {
+        const reason = "AI 识别与原文规则解析结果冲突，请人工核对";
+        target.needs_review = true;
+        if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
+      } else {
+        applyRecognizedVehicle(target, item.vehicle_brand, item.vehicle_model, `${result.recognition.label} 识别`, item.confidence);
+      }
+    }
   }
 }
 
