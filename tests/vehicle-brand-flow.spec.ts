@@ -1,22 +1,24 @@
 import { test, expect } from "@playwright/test";
 import { db } from "../src/lib/db";
 import { identifyVehicleFromImage } from "../src/features/assist/service";
-import { analyzeFleetReply, confirmFleetReply } from "../src/features/fleet-replies/service";
+import { analyzeFleetReply, confirmFleetReply, orderBlocks } from "../src/features/fleet-replies/service";
 import { getDriverDetails, createIwayPreview } from "../src/features/iway/service";
 import { listSqliteOrders, findPersistedOrder } from "../src/features/orders/sqlite-repository";
 
 test.describe.configure({mode:"serial"});
 // In-memory persistence adapter; AI transport only is stubbed. Production
 // analysis/confirmation/save/archive/read/preview functions run unchanged.
-function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confidence:string}, historyVehicleModel: string | null = null) {
+function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confidence:string}, historyVehicleModel: string | null = null, includeSecondOrder = false) {
  const originals:Array<()=>void>=[];
  function stub(delegate:string,method:string,fn:any){const obj=(db as any)[delegate];const old=obj[method];obj[method]=fn;originals.push(()=>obj[method]=old);}
  const order:any={id:"test-order",platformOrderNumber:"9900001",city:"曼谷",serviceDate:"2026-11-02",pickupDateTime:new Date("2026-11-02T02:00:00Z"),passengerName:"Test Passenger",passengerPhone:"+10000000000",pickupAddress:"Test airport",dropoffAddress:"Test hotel",platformVehicleType:"Comfort",status:"DISPATCHED",createdAt:new Date(),fleet:{name:"Test fleet"},driverDetail:null,driverVehicleAssignments:[],customerCommunicationExceptions:[],activityLogs:[]};
- const reply:any={id:"test-reply",candidateOrderIds:JSON.stringify([order.id]),dispatchBatchId:null,rawText:`Order Number: 9900001\nDriver: Test Driver\nPhone: 0812345678\nPlate: กก 1234${ai.vehicle_model ? "\nModel: Test model" : ""}`,createdBy:"运营人员|BANGKOK",images:[]};
+ const secondOrder:any=includeSecondOrder?{...order,id:"test-order-2",platformOrderNumber:"9900002",passengerName:"Test Passenger 2"}:null;
+ const orders:any[]=secondOrder?[order,secondOrder]:[order];
+ const reply:any={id:"test-reply",candidateOrderIds:JSON.stringify(orders.map((item)=>item.id)),dispatchBatchId:null,rawText:`Order Number: 9900001\nDriver: Test Driver\nPhone: 0812345678\nPlate: กก 1234${ai.vehicle_model==="INOVA" ? "\nModel: INOVA" : ""}`,createdBy:"运营人员|BANGKOK",images:[]};
  let extraction:any=null;let driver:any=null;const logs:any[]=[];let writes=0;let assignmentWrites=0;let batches=0;
- const expanded=()=>({...order,driverDetail:driver,activityLogs:[]});
+ const expanded=(item:any)=>({...item,driverDetail:item.id===order.id?driver:null,activityLogs:[]});
  stub("fleetReply","findUnique",async()=>reply);
- stub("order","findMany",async()=>[expanded()]);stub("order","findUnique",async()=>expanded());stub("order","update",async({data}:any)=>Object.assign(order,data));
+ stub("order","findMany",async()=>orders.map(expanded));stub("order","findUnique",async({where}:any)=>expanded(orders.find((item)=>item.id===where.id)??order));stub("order","update",async({where,data}:any)=>Object.assign(orders.find((item)=>item.id===where.id)??order,data));
  stub("aiExtraction","create",async({data}:any)=>extraction={id:"extraction-current",...data});stub("aiExtraction","findFirst",async()=>extraction);
  stub("driverDetail","findMany",async()=>historyVehicleModel ? [{licensePlate:"กก 1234",confirmedVehicleModel:historyVehicleModel}] : []);
  stub("driverDetail","upsert",async({create,update}:any)=>{writes++;driver={id:"test-driver-detail",driverProfileId:null,vehicleProfileId:null,...(driver?{...driver,...update}:create)};return driver;});
@@ -33,6 +35,54 @@ function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confid
  return {order,reply,logs,get writes(){return writes;},get assignments(){return assignmentWrites;},get batches(){return batches;},get extraction(){return extraction;},restore(){originals.reverse().forEach(fn=>fn());}};
 }
 const input=(model:string,extra:any={})=>({orderId:"test-order",driverName:"Test Driver",driverPhone:"0812345678",licensePlate:"กก 1234",vehicleCategory:"SUV",vehicleModel:model,...extra});
+
+test("中文多订单分别切分，司机电话不会被当成订单",()=>{
+ const blocks=orderBlocks("订单号：9900001\n司机：王明\n电话：0123456789\n订单编号：9900002\n司机：李明\n电话：0812345678");
+ expect(blocks).toHaveLength(2);expect(blocks[0]).toContain("王明");expect(blocks[0]).not.toContain("李明");expect(blocks[1]).toContain("李明");
+});
+
+test("中文字段在 AI 不可用时仍可识别并保持完整车牌", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try{
+  process.env.AI_VISION_REAL_CALLS_ENABLED="false";
+  h.reply.rawText="订单号：9900001\n司机姓名：王明\n司机电话：0123456789\n车牌号：กข 1234\n具体车型：Toyota HiAce";
+  const result=await analyzeFleetReply(h.reply.id);const record=result.result.records[0];
+  expect(record.order_match.platform_order_number).toBe("9900001");
+  expect(record.driver_name.value).toBe("王明");expect(record.driver_phone.value).toBe("0123456789");
+  expect(record.license_plate.value).toBe("กข 1234");expect(record.vehicle_model.value).toBe("Toyota HiAce");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("非固定中文格式由 AI 提取订单时，结果不会被未匹配的规则记录丢弃", async()=>{
+ const h=harness({vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"});
+ try{
+  h.reply.rawText="明天这一单 9900001 已安排，司机王明，号码 0123456789，车牌 WXY1234，丰田 HiAce。";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:"9900001",driver_name:"王明",driver_phone:"0123456789",license_plate:"WXY1234",vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);const record=result.result.records[0];
+  expect(record.order_match.platform_order_number).toBe("9900001");expect(record.driver_name.value).toBe("王明");
+  expect(record.driver_phone.value).toBe("0123456789");expect(record.license_plate.value).toBe("WXY1234");
+  expect(record.vehicle_model.value).toBe("Toyota HiAce");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("AI 给出未知订单号时不将资料归到单条未匹配记录", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try{
+  h.reply.rawText="请安排司机，订单号请稍后核对";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:"9999999",driver_name:"其他司机",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);expect(result.result.records[0].order_match.platform_order_number).toBeNull();
+  expect(result.result.records[0].driver_name.value).not.toBe("其他司机");expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("AI 不能把候选列表里存在但原文未出现的订单号当成匹配依据", async()=>{
+ const h=harness({vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"});
+ try{
+  h.reply.rawText="司机王明，电话 0123456789，订单号稍后提供。";
+  const result=await analyzeFleetReply(h.reply.id);
+  expect(result.result.records[0].order_match.platform_order_number).toBeNull();expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
 
 test("AI 未收录品牌型号 → 确认写入 → 列表/详情/编辑读取 → iWay 预览完整保留",async()=>{
  const h=harness({vehicle_brand:"BYD",vehicle_model:"Sealion 7",confidence:"HIGH"});
@@ -92,4 +142,41 @@ for (const confidence of ["HIGH", "LOW"]) test(`图片入口保留完整新车�
  try{globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({vehicle_brand:"BYD",vehicle_model:"Sealion 7",confidence})}}]}),{status:200});
  const result=await identifyVehicleFromImage("https://example.invalid/test.png");expect(result.value).toBe("BYD Sealion 7");expect(result.status).toBe(confidence==="HIGH"?"SUGGESTION_READY":"MANUAL_REVIEW_REQUIRED");expect(h.writes).toBe(0);
  }finally{h.restore();}
+});
+
+test("中文敏感标签不得作为司机姓名", async () => {
+  const { sanitizeAiDriverName } = await import("../src/features/fleet-replies/service");
+  expect(sanitizeAiDriverName("车牌号：WXY1234")).toBeNull();
+  expect(sanitizeAiDriverName("司机姓名：王明")).toBe("王明");
+  expect(sanitizeAiDriverName("电话：0123456789")).toBeNull();
+});
+
+test("只有一条规则记录时，无订单号的 AI 结果也不能覆盖已匹配司机", async () => {
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try {
+  h.reply.rawText="订单号：9900001\n司机姓名：王明\n电话：0123456789";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:null,driver_name:"其他司机",driver_phone:"0198888777",confidence:"HIGH"}]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);
+  expect(result.result.records[0].order_match.platform_order_number).toBe("9900001");
+  expect(result.result.records[0].driver_name.value).toBe("王明");
+  expect(result.result.records[0].driver_phone.value).toBe("0123456789");
+  expect(h.writes).toBe(0);
+ } finally {h.restore();}
+});
+
+test("多订单 AI 把司机车辆信息交叉归属时不得覆盖规则解析结果", async () => {
+ const h=harness({vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"},null,true);
+ try {
+  h.reply.rawText="订单号：9900001\n司机姓名：王明\n司机电话：0123456789\n车牌号：WXY1234\n车型：Toyota HiAce\n订单号：9900002\n司机姓名：李明\n司机电话：0198765432\n车牌号：ABC5678\n车型：Toyota Innova";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[
+   {order_number:"9900001",driver_name:"李明",driver_phone:"0198765432",license_plate:"ABC5678",vehicle_brand:"Toyota",vehicle_model:"Innova",confidence:"HIGH"},
+   {order_number:"9900002",driver_name:"王明",driver_phone:"0123456789",license_plate:"WXY1234",vehicle_brand:"Toyota",vehicle_model:"HiAce",confidence:"HIGH"},
+  ]})}}]}),{status:200});
+  const result=await analyzeFleetReply(h.reply.id);
+  const first=result.result.records.find((record)=>record.order_match.platform_order_number==="9900001")!;
+  const second=result.result.records.find((record)=>record.order_match.platform_order_number==="9900002")!;
+  expect(first.driver_name.value).toBe("王明");expect(first.driver_phone.value).toBe("0123456789");expect(first.license_plate.value).toBe("WXY1234");
+  expect(second.driver_name.value).toBe("李明");expect(second.driver_phone.value).toBe("0198765432");expect(second.license_plate.value).toBe("ABC5678");
+  expect(h.writes).toBe(0);
+ } finally {h.restore();}
 });
