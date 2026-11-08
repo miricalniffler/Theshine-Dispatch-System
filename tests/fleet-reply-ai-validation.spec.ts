@@ -29,14 +29,14 @@ test("AI 提供品牌和未收录的新车型时，完整品牌加型号会被�
   });
 });
 
-test("目录只做已知完整品牌车型的保守格式校验，不为缺失品牌补全", () => {
+test("车型目录为唯一匹配的具体型号安全补全品牌", () => {
   expect(resolveVehicleModel("toyota camry", "Toyota")).toMatchObject({
     value: "Toyota Camry",
     needsManualReview: false,
   });
   expect(resolveVehicleModel("Camry")).toMatchObject({
-    value: "Camry",
-    needsManualReview: true,
+    value: "Toyota Camry",
+    needsManualReview: false,
   });
   expect(normalizeVehicleModel("INOVA")).toBe("INOVA");
 });

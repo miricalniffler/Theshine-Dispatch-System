@@ -46,6 +46,15 @@ function applyRecognizedVehicle(target: ReplyRecord, brand: string | null, model
   if (model) target.vehicle_model_raw = field(model, evidence);
   const resolved = resolveVehicleModel(model, brand, loadRules());
   if (resolved.value) target.vehicle_model = field(resolved.value, evidence);
+  if (!brand && resolved.vehicleBrand) target.vehicle_brand = field(resolved.vehicleBrand, `${evidence}；按唯一车型目录补全品牌`);
+  if (resolved.vehicleCategory) {
+    if (target.vehicle_category.value && target.vehicle_category.value.toLocaleLowerCase() !== resolved.vehicleCategory.toLocaleLowerCase()) {
+      target.needs_review = true;
+      const reason = `AI 车辆类别与车型目录不一致（${target.vehicle_category.value} / ${resolved.vehicleCategory}），请人工核对`;
+      if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
+    }
+    target.vehicle_category = field(resolved.vehicleCategory, `${evidence}；按车型目录识别车辆类别`);
+  }
   if (resolved.needsManualReview && resolved.reviewReason) {
     target.needs_review = true;
     if (!target.review_reasons.includes(resolved.reviewReason)) target.review_reasons.push(resolved.reviewReason);
@@ -124,8 +133,8 @@ function bangkokDriverReplySection(block: string) {
 }
 
 function readName(block: string) {
-  const labelled = firstMatch(block, /(?:driver\s*name|driver|name|司机姓名|司机名字|司机)\s*(?::|：|\.)+\s*([^\n]+)/i);
-  if (labelled) return labelled.replace(/^(?:driver\s*name|driver|name)\s*[:：.]?/i, "").trim();
+  const labelled = firstMatch(block, /(?:driver\s*name|driver|name|司机姓名|司机名字|司机名|名字|姓名|司机)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  if (labelled) return labelled.replace(/^(?:driver\s*name|driver|name|司机姓名|司机名字|司机名|名字|姓名|司机)\s*[:：.]?/i, "").trim();
   const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
   const phoneAt = lines.findIndex((line) => /(?:tel|phone|📞|\+?66|0\d{8,})/i.test(line));
   if (phoneAt > 0) {
@@ -162,13 +171,13 @@ function readPlate(block: string) {
 }
 
 function readVehicleModel(block: string, allowInlineModel = true) {
-  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model|van|minibus|sedan|suv|具体车型|车辆型号|车型)\s*(?::|：|\.)+\s*([^\n]+)/i);
+  const labelled = firstMatch(block, /(?:vehicle\s*(?:type|model)?|type|model|van|minibus|sedan|suv|具体车型|车辆型号|车型|车款)\s*(?::|：|\.)+\s*([^\n]+)/i);
   if (labelled && !/^(?:minibus|minivan|van|sedan|standard)$/i.test(labelled)) return labelled;
   return allowInlineModel ? firstMatch(block, /\b((?:toyota|hyundai|honda|isuzu|mitsubishi|mercedes)[^,\n]{0,45})/i) : null;
 }
 
 export function sanitizeAiDriverName(value: string | null) {
-  const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name|司机姓名|司机名字|司机)\s*(?::|：|\.)+\s*/i, "").trim() || null;
+  const cleaned = value?.replace(/^(?:driver(?:\s*name)?|name|司机姓名|司机名字|司机名|名字|姓名|司机)\s*(?::|：|\.)+\s*/i, "").trim() || null;
   if (!cleaned || /\b(?:car\s*plate|plate\s*number|license\s*plate|mobile|phone|tel(?:ephone)?|vehicle|model)\b/i.test(cleaned)) return null;
   if (/(?:车牌|电话|手机号|车型|车辆型号|订单号|订单编号|乘客姓名)/.test(cleaned)) return null;
   if (/\d{5,}/.test(cleaned) || (/[฀-๿]/.test(cleaned) && /\d/.test(cleaned))) return null;
@@ -194,6 +203,19 @@ function mergeAiField(target: ReplyRecord, key: "driver_name" | "driver_phone" |
     return;
   }
   if (!current) target[key] = field(value, evidence);
+}
+
+function mergeAiDriverName(target: ReplyRecord, name: string | null, evidence: string) {
+  if (!name) return;
+  const current = target.driver_name.value;
+  if (current && /\p{Script=Han}/u.test(current) && /^[A-Za-z][A-Za-z .'-]*$/.test(name)) {
+    target.driver_name = field(name, `${evidence}；中文原文“${current}”`);
+    const reason = "中文司机姓名已转写为英文，请人工核对拼写";
+    target.needs_review = true;
+    if (!target.review_reasons.includes(reason)) target.review_reasons.push(reason);
+    return;
+  }
+  mergeAiField(target, "driver_name", name, evidence, (value) => value.replace(/[\s\p{P}\p{S}]/gu, "").toLocaleLowerCase());
 }
 
 function mergeAiText(result: Analysis, vision: FleetTextVision, orders: CandidateOrder[], sourceText: string) {
@@ -224,9 +246,8 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
     }
     const name = sanitizeAiDriverName(item.driver_name);
     const plate = sanitizeAiPlate(item.license_plate);
-    const nameKey = (value: string) => value.replace(/[\s\p{P}\p{S}]/gu, "").toLocaleLowerCase();
     const digits = (value: string) => value.replace(/\D/g, "");
-    mergeAiField(target, "driver_name", name, `${result.recognition.label} 识别，需人工核对`, nameKey);
+    mergeAiDriverName(target, name, `${result.recognition.label} 英文姓名转写，需人工核对`);
     mergeAiField(target, "driver_phone", item.driver_phone, `${result.recognition.label} 识别，需人工核对`, digits);
     mergeAiField(target, "license_plate", plate, `${result.recognition.label} 识别，保留车牌原文`, normalizePlate);
     mergeAiField(target, "vehicle_category", item.vehicle_category, `${result.recognition.label} 识别`);
@@ -239,8 +260,9 @@ function mergeAiText(result: Analysis, vision: FleetTextVision, orders: Candidat
       const resolved = resolveVehicleModel(item.vehicle_model, item.vehicle_brand, loadRules()).value;
       const currentModel = target.vehicle_model.value;
       const currentRawModel = target.vehicle_model_raw.value;
+      const currentResolved = currentModel ? resolveVehicleModel(currentModel, item.vehicle_brand, loadRules()) : null;
       const modelConflict = currentModel
-        ? Boolean(resolved && normalizePlate(currentModel) !== normalizePlate(resolved))
+        ? Boolean(resolved && currentResolved?.value && normalizePlate(currentResolved.value) !== normalizePlate(resolved))
         : Boolean(currentRawModel && normalizePlate(currentRawModel) !== normalizePlate(item.vehicle_model));
       if (brandConflict || modelConflict) {
         const reason = "AI 识别与原文规则解析结果冲突，请人工核对";
@@ -479,7 +501,7 @@ export function applyFleetPackage(records: ReplyRecord[], vision: FleetPackageVi
     };
     // A wallet payee is a weak identity clue, never a driver identity on its
     // own unless this submission has one exact order and no competing name.
-    if (item.driver_name && (item.driver_name_source !== "EWALLET_PAYEE" || (packageHasOneExactOrder && !target.driver_name.value))) merge("driver_name", sanitizeAiDriverName(item.driver_name));
+    if (item.driver_name && (item.driver_name_source !== "EWALLET_PAYEE" || (packageHasOneExactOrder && !target.driver_name.value))) mergeAiDriverName(target, sanitizeAiDriverName(item.driver_name), `来自${source}的英文姓名转写`);
     if (item.driver_name_source === "EWALLET_PAYEE") addReview(target, "电子钱包收款人仅作为候选司机姓名，请人工核对");
     merge("driver_phone", item.driver_phone); merge("license_plate", sanitizeAiPlate(item.license_plate));
     if (!target.vehicle_category.value && item.vehicle_category) target.vehicle_category = field(item.vehicle_category, `来自${source}`);
@@ -546,9 +568,23 @@ export async function analyzeFleetReply(replyId: string) {
     if (vehicle.value && vehicle.value !== record.vehicle_model.value) {
       record.vehicle_model = field(vehicle.value, `${record.vehicle_model.evidence}；结合本次识别品牌规范化`);
     }
+    if (!record.vehicle_brand.value && vehicle.vehicleBrand) record.vehicle_brand = field(vehicle.vehicleBrand, "按唯一车型目录补全车辆品牌");
+    if (vehicle.vehicleCategory) {
+      if (record.vehicle_category.value && record.vehicle_category.value.toLocaleLowerCase() !== vehicle.vehicleCategory.toLocaleLowerCase()) {
+        record.needs_review = true;
+        const reason = `AI 车辆类别与车型目录不一致（${record.vehicle_category.value} / ${vehicle.vehicleCategory}），请人工核对`;
+        if (!record.review_reasons.includes(reason)) record.review_reasons.push(reason);
+      }
+      record.vehicle_category = field(vehicle.vehicleCategory, "按车型目录识别车辆类别");
+    }
     if (vehicle.needsManualReview) {
       record.needs_review = true;
       if (vehicle.reviewReason && !record.review_reasons.includes(vehicle.reviewReason)) record.review_reasons.push(vehicle.reviewReason);
+    }
+    if (record.driver_name.value && /\p{Script=Han}/u.test(record.driver_name.value)) {
+      record.needs_review = true;
+      const reason = "司机姓名仍为中文，英文拼写需人工核对";
+      if (!record.review_reasons.includes(reason)) record.review_reasons.push(reason);
     }
   }
   // 规则尚在校准期：分析只生成草稿，绝不自动改写订单资料。

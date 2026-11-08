@@ -152,12 +152,15 @@ export type VehicleModelResolution = {
   value: string | null;
   needsManualReview: boolean;
   reviewReason?: string;
+  vehicleCategory?: string;
+  vehicleBrand?: string;
 };
 
 /**
  * Combines only evidence the source already supplied. The vehicle catalogue
- * may standardize a known complete brand/model pair, but is never a whitelist
- * and must not invent a missing brand for an otherwise model-only value.
+ * may standardize a known complete brand/model pair or complete a unique
+ * model alias from the maintained catalogue. Unknown or ambiguous models keep
+ * their original value and require review.
  */
 export function resolveVehicleModel(
   vehicle: string | null | undefined,
@@ -190,7 +193,7 @@ export function resolveVehicleModel(
     if (explicitOtherBrand) return { value: model, needsManualReview: true, reviewReason: "AI 识别的品牌与车型前缀冲突，请人工确认" };
     const matchingCandidate = candidates.filter(brandMatches);
     if (matchingCandidate.length === 1) {
-      return { value: matchingCandidate[0].canonical_name, needsManualReview: false };
+      return { value: matchingCandidate[0].canonical_name, needsManualReview: false, vehicleCategory: matchingCandidate[0].vehicle_category, vehicleBrand: matchingCandidate[0].brand };
     }
     // The model already contains the AI-supplied brand (for example “BYD
     // Sealion 7”), so preserve it rather than duplicating the prefix.
@@ -202,8 +205,8 @@ export function resolveVehicleModel(
 
   // A complete known name can receive harmless capitalization normalization;
   // a model-only value remains exactly as received and needs operator review.
-  if (modelBrand && vehicleKey(modelBrand.canonical_name) === modelKey) {
-    return { value: modelBrand.canonical_name, needsManualReview: false };
+  if (modelBrand) {
+    return { value: modelBrand.canonical_name, needsManualReview: false, vehicleCategory: modelBrand.vehicle_category, vehicleBrand: modelBrand.brand };
   }
   return { value: model, needsManualReview: true, reviewReason: "AI 只识别到车型，缺少可确认的品牌，请人工确认" };
 }
