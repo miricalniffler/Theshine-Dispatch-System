@@ -1,5 +1,5 @@
 # 日常业务规则的唯一配置入口。旧文件“business-rules .yaml”保留为原始资料。
-rules_version: "2026-11-03.1"
+rules_version: "2026-11-08.1"
 timezone: "Asia/Bangkok"
 
 templates:
@@ -130,6 +130,12 @@ transforms:
     - brand: Nissan
       canonical_name: "Nissan Almera"
       model_aliases: ["almera"]
+    - brand: Perodua
+      canonical_name: "Perodua Alza"
+      brand_aliases: ["北路大"]
+      model_aliases: ["alza"]
+      aliases: ["北路大 Alza", "北路大Alza"]
+      vehicle_category: "MPV"
     - brand: Mercedes-Benz
       brand_aliases: ["mercedes", "mercedes benz", "mercedes-benz"]
       canonical_name: "Mercedes-Benz V-Class"

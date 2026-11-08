@@ -22,7 +22,7 @@ export type RulesConfig = {
     };
     // A maintained catalog of confirmed brand + model names.  An alias is
     // expanded only when it identifies exactly one catalog entry.
-    vehicle_models: Array<{ brand: string; canonical_name: string; model_aliases: string[]; brand_aliases?: string[]; aliases?: string[] }>;
+    vehicle_models: Array<{ brand: string; canonical_name: string; model_aliases: string[]; brand_aliases?: string[]; aliases?: string[]; vehicle_category?: string }>;
     vehicle_aliases: Record<string, string>;
     generic_vehicle_labels_not_allowed_for_return: string[];
   };
