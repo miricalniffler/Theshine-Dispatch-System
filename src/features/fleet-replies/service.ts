@@ -323,6 +323,12 @@ function parseBangkokRecords(text: string, orders: CandidateOrder[]): Analysis {
 }
 
 function parseSamuiRecords(text: string, orders: CandidateOrder[]): Analysis {
+  // Labelled, multiline replies use the same explicit order boundaries in all
+  // regions. The Samui-specific parser below is for its compact, unlabeled
+  // one-line format and would otherwise merge an entire labelled batch.
+  if (/^[ \t]*(?:(?:M\d+[ \t]+)?(?:order[ \t]*(?:number|id|no\.?)|ride[ \t]*number|订单(?:编号|号码|号)|订单))[ \t]*[:：#]/im.test(text)) {
+    return parseBangkokRecords(text, orders);
+  }
   // i'way 订单号原先多为 6 位，现在也会出现 7 位，并且 esforty 常把
   // 7 位订单号显示成 “1 015 534”。三种写法都必须识别为一笔新回复，
   // 否则下一笔的姓名和电话会被并入前一笔。

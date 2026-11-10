@@ -8,12 +8,12 @@ import { listSqliteOrders, findPersistedOrder } from "../src/features/orders/sql
 test.describe.configure({mode:"serial"});
 // In-memory persistence adapter; AI transport only is stubbed. Production
 // analysis/confirmation/save/archive/read/preview functions run unchanged.
-function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confidence:string}, historyVehicleModel: string | null = null, includeSecondOrder = false) {
+function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confidence:string}, historyVehicleModel: string | null = null, includeSecondOrder = false, additionalNumbers: string[] = []) {
  const originals:Array<()=>void>=[];
  function stub(delegate:string,method:string,fn:any){const obj=(db as any)[delegate];const old=obj[method];obj[method]=fn;originals.push(()=>obj[method]=old);}
  const order:any={id:"test-order",platformOrderNumber:"9900001",city:"曼谷",serviceDate:"2026-11-02",pickupDateTime:new Date("2026-11-02T02:00:00Z"),passengerName:"Test Passenger",passengerPhone:"+10000000000",pickupAddress:"Test airport",dropoffAddress:"Test hotel",platformVehicleType:"Comfort",status:"DISPATCHED",createdAt:new Date(),fleet:{name:"Test fleet"},driverDetail:null,driverVehicleAssignments:[],customerCommunicationExceptions:[],activityLogs:[]};
  const secondOrder:any=includeSecondOrder?{...order,id:"test-order-2",platformOrderNumber:"9900002",passengerName:"Test Passenger 2"}:null;
- const orders:any[]=secondOrder?[order,secondOrder]:[order];
+ const orders:any[]=[order,...(secondOrder?[secondOrder]:[]),...additionalNumbers.map((number,index)=>({...order,id:`batch-order-${index}`,platformOrderNumber:number}))];
  const reply:any={id:"test-reply",candidateOrderIds:JSON.stringify(orders.map((item)=>item.id)),dispatchBatchId:null,rawText:`Order Number: 9900001\nDriver: Test Driver\nPhone: 0812345678\nPlate: กก 1234${ai.vehicle_model==="INOVA" ? "\nModel: INOVA" : ""}`,createdBy:"运营人员|BANGKOK",images:[]};
  let extraction:any=null;let driver:any=null;const logs:any[]=[];let writes=0;let assignmentWrites=0;let batches=0;
  const expanded=(item:any)=>({...item,driverDetail:item.id===order.id?driver:null,activityLogs:[]});
@@ -35,6 +35,59 @@ function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confid
  return {order,reply,logs,get writes(){return writes;},get assignments(){return assignmentWrites;},get batches(){return batches;},get extraction(){return extraction;},restore(){originals.reverse().forEach(fn=>fn());}};
 }
 const input=(model:string,extra:any={})=>({orderId:"test-order",driverName:"Test Driver",driverPhone:"0812345678",licensePlate:"กก 1234",vehicleCategory:"SUV",vehicleModel:model,...extra});
+
+const batchReply = `Order Number：1136594
+Name：Denis Chen
+Car Plate：W 3497 R
+Model：Almera
+Phone:+601133208350
+
+Order Number：1105474
+Name：Pat Arkin
+Car Plate：Vkk5015
+Model：Aruz Silver
+Phone: +60162739483
+
+Order Number：1094978
+Name：Pat Arkin
+Car Plate：Vkk5015
+Model：Aruz Silver
+Phone: +60162739483
+
+Order Number：1169322
+Name：Pat Arkin
+Car Plate：Vkk5015
+Model：Aruz Silver
+Phone: +60162739483`;
+
+for (const profile of ["AUTO", "KUALA_LUMPUR", "SAMUI"]) test(`四笔车队回复逐条识别并保持订单边界（${profile}）`,async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"},null,false,["1136594","1105474","1094978","1169322"]);
+ try {
+  h.reply.rawText=batchReply;h.reply.createdBy=`运营人员|${profile}`;process.env.AI_VISION_REAL_CALLS_ENABLED="false";
+  const a=await analyzeFleetReply(h.reply.id);
+  expect(a.result.records).toHaveLength(4);
+  for(const [index,number] of ["1136594","1105474","1094978","1169322"].entries()){
+   const record=a.result.records[index];expect(record.order_match.platform_order_number).toBe(number);
+   expect(record.driver_name.value).toBe(index===0?"Denis Chen":"Pat Arkin");
+   expect(record.driver_phone.value).toBe(index===0?"+601133208350":"+60162739483");
+   expect(record.license_plate.value).toBe(index===0?"W 3497 R":"Vkk5015");
+   expect(record.vehicle_model.value).toBeTruthy();
+  }
+  expect(a.result.records[1].needs_review).toBe(true);expect(h.writes).toBe(0);
+ } finally {h.restore();}
+});
+
+test("AI 只返回第一笔时，另外三笔仍然展示并等待核对",async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"},null,false,["1136594","1105474","1094978","1169322"]);
+ try{
+  h.reply.rawText=batchReply;h.reply.createdBy="运营人员|KUALA_LUMPUR";
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({records:[{order_number:"1136594",driver_name:"Denis Chen",driver_phone:"+601133208350",license_plate:"W 3497 R",vehicle_brand:"Nissan",vehicle_model:"Almera",confidence:"HIGH"}]})}}]}),{status:200});
+  const a=await analyzeFleetReply(h.reply.id);expect(a.result.records).toHaveLength(4);
+  expect(a.result.records.map(r=>r.order_match.platform_order_number)).toEqual(["1136594","1105474","1094978","1169322"]);
+  for(const r of a.result.records.slice(1)){expect(r.driver_name.value).toBe("Pat Arkin");expect(r.license_plate.value).toBe("Vkk5015");expect(r.vehicle_model.value).toBe("Aruz Silver");expect(r.needs_review).toBe(true);}
+  expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
 
 test("中文多订单分别切分，司机电话不会被当成订单",()=>{
  const blocks=orderBlocks("订单号：9900001\n司机：王明\n电话：0123456789\n订单编号：9900002\n司机：李明\n电话：0812345678");

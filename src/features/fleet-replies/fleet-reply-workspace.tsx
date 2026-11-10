@@ -69,6 +69,7 @@ export function FleetReplyWorkspace() {
   const [orders, setOrders] = useState<CandidateOrder[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [forms, setForms] = useState<Editable[]>([]);
+  const [savedReplyOrderIds, setSavedReplyOrderIds] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [working, setWorking] = useState(false);
   const [iwayText, setIwayText] = useState("");
@@ -152,6 +153,7 @@ export function FleetReplyWorkspace() {
       if (response.ok && payload.data?.valid) savedOrderIds.push(record.orderId);
       else errors.push(payload.data?.errors?.map((item: { message: string }) => item.message).join("；") || payload.error?.message || "这笔资料未能保存。");
     }
+    setSavedReplyOrderIds((current) => [...new Set([...current, ...savedOrderIds])]);
     if (!savedOrderIds.length) {
       setIwayText("");
       setReturnOrderIds([]);
@@ -207,7 +209,7 @@ export function FleetReplyWorkspace() {
   }
 
   async function saveAndAnalyze() {
-    setWorking(true); setNotice(null); setResult(null); setForms([]); setIwayText(""); setUnresolved([]); setShowEditor(false);
+    setWorking(true); setNotice(null); setResult(null); setForms([]); setSavedReplyOrderIds([]); setIwayText(""); setUnresolved([]); setShowEditor(false);
     try {
       const create = await fetch("/api/fleet-replies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rawText, images, fleetProfile, serviceDate }) });
       const created = await create.json();
@@ -231,8 +233,8 @@ export function FleetReplyWorkspace() {
       const autoSave = ready.length ? await saveAndGenerate(created.data.id, ready, analysed.data.extractionId) : null;
       const needsEdit = ready.length !== nextForms.length || Boolean(autoSave?.errors.length);
       setShowEditor(needsEdit);
-      if (!ready.length) setNotice({ tone: "error", text: "识别结果尚不完整或订单匹配不够确定，请补充后再保存。" });
-      else if (needsEdit && !autoSave?.errors.length) setNotice({ tone: "success", text: `已自动保存 ${ready.length} 笔完整资料并生成 i’way 回传；其余资料请补充后再保存。` });
+      if (!ready.length) setNotice({ tone: "error", text: `已识别 ${nextForms.length} 笔资料；订单匹配、车型或其他字段需要人工核对后才能保存。` });
+      else if (needsEdit && !autoSave?.errors.length) setNotice({ tone: "success", text: `已识别 ${nextForms.length} 笔，其中 ${ready.length} 笔已保存；另外 ${nextForms.length - ready.length} 笔需要在下方核对后保存。` });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "分析失败。" });
     } finally {
@@ -241,6 +243,8 @@ export function FleetReplyWorkspace() {
   }
 
   function setForm(index: number, key: keyof Editable, value: string | boolean) {
+    const previousOrderId = forms[index]?.orderId;
+    if (previousOrderId) setSavedReplyOrderIds((current) => current.filter((id) => id !== previousOrderId));
     setForms((current) => current.map((form, position) => position === index ? { ...form, [key]: value, ...(key === "vehicleModel" || key === "orderId" ? { vehicleManualConfirmed: false } : {}) } : form));
   }
 
@@ -293,7 +297,7 @@ export function FleetReplyWorkspace() {
     {notice && <p className={`inline-notice ${notice.tone}`}>{notice.text}</p>}
     <section className="fleet-reply-results iway-return-queue"><h2>待回传 i’way</h2><p>当前日期：{serviceDate}。司机资料完整的订单已默认勾选；不完整订单会显示缺失项且不会勾选。</p>{datedReturnItems.length ? datedReturnItems.map((item) => { const missing = missingReturnFields(item); const complete = missing.length === 0; return <article className="reply-candidate reply-result-summary" key={item.order.id}><header><strong>{item.order.orderNo}</strong><span className={complete ? "reply-complete" : "reply-incomplete"}>{complete ? "资料完整" : `缺${missing.join("、")}`}</span></header><div className="reply-result-fields"><span>司机：{item.driver?.confirmedDriverName || "—"}</span><span>电话：{item.driver?.normalizedDriverPhone || "—"}</span><span>车型：{item.driver?.confirmedVehicleModel || "—"}</span><span>车牌：{item.driver?.licensePlate || "—"}</span></div><label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(item.order.id)} disabled={!complete} onChange={() => toggleReturnOrder(item.order.id)} />加入 i’way 回传</label></article>; }) : <p className="preview-empty">当前日期没有可回传的订单。</p>}{iwayText ? <pre tabIndex={0}>{iwayText}</pre> : <p className="preview-empty">选择订单后可直接生成 i’way 标准文本。</p>}<div className="preview-actions"><button type="button" className="confirm-action" onClick={() => void generateSelectedReturn()} disabled={working || !returnOrderIds.length}>生成标准文本</button><button type="button" className="secondary-action" onClick={() => void copyIwayReturn()} disabled={working || !iwayText}>复制全部</button><button type="button" className="return-mark-action" onClick={() => void confirmIwayReturn()} disabled={working || !returnOrderIds.length || markedReturned}>{markedReturned ? "已标记为已回传" : "标记为已回传"}</button></div></section>
     {result && <section className="fleet-reply-results">
-      <section className="fleet-reply-recognized"><h2>② 识别结果</h2><p>{result.recognition?.label || "规则降级"}{result.recognition?.note ? ` · ${result.recognition.note}` : ""}</p><p>资料完整的订单已默认勾选进入 i’way 回传；缺少资料的订单不会被选中。</p>{result.records.map((record, index) => { const form = forms[index]; const missing = form ? missingFields(form) : ["资料"]; const complete = form ? isComplete(form) : false; const order = orders.find((item) => item.id === form?.orderId); return <article className="reply-candidate reply-result-summary" key={`${record.source_index}-${index}`}><header><strong>{order?.orderNo || record.order_match.platform_order_number || "未匹配订单"}</strong><span className={complete ? "reply-complete" : "reply-incomplete"}>{complete ? "资料完整" : `缺${missing.join("、")}`}</span></header><div className="reply-result-fields"><span>司机：{form?.driverName || "—"}</span><span>电话：{form?.driverPhone || "—"}</span><span>车型：{form?.vehicleModel || "—"}</span><span>车牌：{form?.licensePlate || "—"}</span></div>{complete && form?.orderId && <label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(form.orderId)} onChange={() => toggleReturnOrder(form.orderId)} />加入 i’way 回传</label>}</article>; })}</section>
+      <section className="fleet-reply-recognized"><h2>② 识别结果（{result.records.length} 笔）</h2><p>{result.recognition?.label || "规则降级"}{result.recognition?.note ? ` · ${result.recognition.note}` : ""}</p><p>每笔订单分别显示；需要核对或补充的资料请在下方修改并保存。</p>{result.records.map((record, index) => { const form = forms[index]; const missing = form ? missingFields(form) : ["资料"]; const complete = form ? isComplete(form) : false; const saved = Boolean(form?.orderId && savedReplyOrderIds.includes(form.orderId)); const requiresReview = record.needs_review && !saved; const order = orders.find((item) => item.id === form?.orderId); return <article className="reply-candidate reply-result-summary" key={`${record.source_index}-${index}`}><header><strong>{order?.orderNo || record.order_match.platform_order_number || "未匹配订单"}</strong><span className={complete && !requiresReview ? "reply-complete" : "reply-incomplete"}>{!complete ? `缺${missing.join("、")}` : requiresReview ? "需要人工核对" : saved ? "已保存" : "资料完整"}</span></header><div className="reply-result-fields"><span>司机：{form?.driverName || "—"}</span><span>电话：{form?.driverPhone || "—"}</span><span>车型：{form?.vehicleModel || "—"}</span><span>车牌：{form?.licensePlate || "—"}</span></div>{requiresReview && <p className="reply-evidence">{record.review_reasons.join("；") || "请核对订单及车辆资料"}</p>}{complete && form?.orderId && !requiresReview && <label className="reply-return-select"><input type="checkbox" checked={returnOrderIds.includes(form.orderId)} onChange={() => toggleReturnOrder(form.orderId)} />加入 i’way 回传</label>}</article>; })}</section>
       {unresolved.length > 0 && <div className="unmatched-block"><h3>有资料需要修改</h3>{unresolved.map((item, index) => <p key={`${item}-${index}`}>{item}</p>)}</div>}
       <button type="button" className="secondary-action" onClick={() => setShowEditor((current) => !current)}>{showEditor ? "收起修改资料" : "修改回传资料"}</button>
       {showEditor && <><h2>修改回传资料</h2>{result.records.map((record, index) => <article className="reply-candidate" key={`${record.source_index}-${index}`}>
