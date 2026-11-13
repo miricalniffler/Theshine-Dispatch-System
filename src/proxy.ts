@@ -8,7 +8,7 @@ export async function proxy(request: NextRequest) {
   // This server-to-server POST authenticates its own dedicated bearer token.
   // Redirecting it to the team login preserves POST and produces a 405 there.
   // Keep GET/status and every other method behind the team-login guard.
-  if (request.method === "POST" && request.nextUrl.pathname === "/api/import-sync/gmail-iway") {
+  if (request.method === "POST" && ["/api/import-sync/gmail-iway", "/api/mail-operations/gmail"].includes(request.nextUrl.pathname)) {
     return NextResponse.next();
   }
   if (publicPaths.some((path) => request.nextUrl.pathname.startsWith(path))) {

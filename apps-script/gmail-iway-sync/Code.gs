@@ -39,6 +39,46 @@ function installIwayGmailHourlyTrigger_() {
   ScriptApp.newTrigger('syncIwayGmailOrders').timeBased().everyHours(1).create();
 }
 
+// A separate trigger keeps operational (complaint/quotation) mail completely
+// isolated from i'way order ingestion.  It reads only short, recent batches
+// and the server still owns the permanent de-duplication key.
+function configureMailOperationsFiveMinuteTrigger() {
+  var props = PropertiesService.getScriptProperties();
+  requireConfig_(props);
+  if (!props.getProperty('IWAY_GMAIL_OPERATIONS_URL')) throw new Error('IWAY_GMAIL_OPERATIONS_URL 未设置。');
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'syncKualaLumpurMailOperations') ScriptApp.deleteTrigger(trigger);
+  });
+  ScriptApp.newTrigger('syncKualaLumpurMailOperations').timeBased().everyMinutes(5).create();
+}
+
+function syncKualaLumpurMailOperations() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { status: 'IN_PROGRESS' };
+  try {
+    var props = PropertiesService.getScriptProperties(); requireConfig_(props);
+    var seen = getOperationsSeen_(props); var messages = [];
+    // Search within a bounded recent window. Filtering in both Apps Script and
+    // the server intentionally errs on the side of privacy: only KL complaint
+    // / quotation candidates leave Gmail.
+    GmailApp.search('newer_than:14d', 0, 50).forEach(function (thread) { thread.getMessages().forEach(function (mail) {
+      var id = mail.getId(); var subject = mail.getSubject() || ''; var text = mail.getPlainBody() || '';
+      if (seen[id] || !/(kuala\s*lumpur|klia|malaysia|吉隆坡)/i.test(subject + '\n' + text)) return;
+      if (!/(complaint|dissatisfied|unhappy|refund|late|no\s+show|inquir|quotation|quote|price|rate|询价|报价|投诉)/i.test(subject + '\n' + text)) return;
+      messages.push({ id:id, threadId:thread.getId(), sender:mail.getFrom(), subject:subject, receivedAt:mail.getDate().toISOString(), text:text });
+    }); });
+    messages = messages.sort(function(a,b) { return new Date(a.receivedAt) - new Date(b.receivedAt); }).slice(0, 20);
+    if (!messages.length) return { status: 'SUCCEEDED', created: 0 };
+    var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_OPERATIONS_URL'), { method:'post', contentType:'application/json', headers:{ Authorization:'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') }, payload:JSON.stringify({messages:messages}), muteHttpExceptions:true });
+    if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('运营邮件导入服务返回 HTTP ' + response.getResponseCode());
+    messages.forEach(function (item) { seen[item.id] = Date.now(); }); saveOperationsSeen_(props, seen);
+    return { status:'SUCCEEDED', summary:JSON.parse(response.getContentText()) };
+  } finally { lock.releaseLock(); }
+}
+
+function getOperationsSeen_(props) { try { return JSON.parse(props.getProperty('IWAY_GMAIL_OPERATIONS_SEEN') || '{}'); } catch (_) { return {}; } }
+function saveOperationsSeen_(props, seen) { var cutoff = Date.now() - 21 * 24 * 60 * 60 * 1000; Object.keys(seen).forEach(function (id) { if (seen[id] < cutoff) delete seen[id]; }); props.setProperty('IWAY_GMAIL_OPERATIONS_SEEN', JSON.stringify(seen)); }
+
 function syncIwayGmailOrders() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return { status: 'IN_PROGRESS' };

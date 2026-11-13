@@ -22,7 +22,7 @@ export function PwaRegistration() {
     // control indefinitely and continue intercepting even diagnostic routes.
     // A changed script URL also forces an update check for registrations made
     // by releases before the compatibility worker existed.
-    void navigator.serviceWorker.register("/service-worker.js?rev=compat-v2", { scope: "/", updateViaCache: "none" }).then((registration) =>
+    void navigator.serviceWorker.register("/service-worker.js?rev=push-v1", { scope: "/", updateViaCache: "none" }).then((registration) =>
       registration.update(),
     ).catch(() => {
       // The site remains fully usable online if installation support is unavailable.
