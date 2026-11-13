@@ -18,7 +18,7 @@ templates:
       Pickup address: {{pickup_address}}
       Dropoff address: {{dropoff_address}}
       Vehicle Type: {{platform_vehicle_type}}{{seat_count|prefix(' ')}}
-      Luggage Capacity: Children: {{children|default(0)}}; Adults: {{adults|default(0)}}; Luggage: {{luggage|default(0)}}
+      Passenger Count: Children: {{children|default(0)}}; Adults: {{adults|default(0)}}
       {{child_seat_line|omit_if_empty}}
       {{meet_greet_line|omit_if_empty}}
       {{other_notes|omit_if_empty}}
