@@ -36,6 +36,26 @@ function harness(ai: {vehicle_brand:string|null;vehicle_model:string|null;confid
 }
 const input=(model:string,extra:any={})=>({orderId:"test-order",driverName:"Test Driver",driverPhone:"0812345678",licensePlate:"กก 1234",vehicleCategory:"SUV",vehicleModel:model,...extra});
 
+test("新版派单没有行李字段时，仍只识别车队司机而不是乘客", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try {
+  process.env.AI_VISION_REAL_CALLS_ENABLED="false";
+  h.reply.rawText="Order Number: 9900001\nPassenger Name: Passenger A\nPassenger Phone Number: 0811111111\nPassenger Count: Children: 0; Adults: 2\nName: Pat Arkin\nPhone: 0822222222\nCar Plate: กก 1234\nModel: Toyota Camry";
+  const a=await analyzeFleetReply(h.reply.id);const r=a.result.records[0];
+  expect(r.driver_name.value).toBe("Pat Arkin");expect(r.driver_phone.value).toBe("0822222222");expect(r.license_plate.value).toBe("กก 1234");
+  expect(h.writes).toBe(0);
+ }finally{h.restore();}
+});
+
+test("历史派单仍可依据旧行李行定位车队回复", async()=>{
+ const h=harness({vehicle_brand:null,vehicle_model:null,confidence:"HIGH"});
+ try {
+  process.env.AI_VISION_REAL_CALLS_ENABLED="false";
+  h.reply.rawText="Order Number: 9900001\nPassenger Name: Passenger A\nPassenger Phone Number: 0811111111\nLuggage Capacity: Children: 0; Adults: 2; Luggage: 2\nName: Pat Arkin\nPhone: 0822222222\nCar Plate: กก 1234\nModel: Toyota Camry";
+  const a=await analyzeFleetReply(h.reply.id);expect(a.result.records[0].driver_name.value).toBe("Pat Arkin");expect(a.result.records[0].driver_phone.value).toBe("0822222222");
+ }finally{h.restore();}
+});
+
 const batchReply = `Order Number：1136594
 Name：Denis Chen
 Car Plate：W 3497 R

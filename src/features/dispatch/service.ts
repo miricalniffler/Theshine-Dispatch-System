@@ -1,5 +1,5 @@
 import { loadRules } from "@/lib/rules/load-rules";
-import { defaultLuggageCount, formatInternationalPhone, formatMeetGreetLine, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
+import { formatInternationalPhone, formatMeetGreetLine, renderDispatchBatchFooter, renderTemplate, validateRequiredFields } from "@/lib/rules/engine";
 import { db } from "@/lib/db";
 import { serviceTimeZoneForCity } from "@/lib/city/detect-city";
 
@@ -20,7 +20,6 @@ type DispatchOrder = {
   flightNumber: string | null;
   adults: number;
   children: number;
-  luggage: number;
   meetGreetLine: string | null;
 };
 
@@ -55,7 +54,6 @@ function contentFor(order: DispatchOrder, rules = loadRules()) {
     seat_count: order.vehicleType === "Van" ? 8 : null,
     adults: order.adults,
     children: order.children,
-    luggage: defaultLuggageCount(order.luggage, order.adults, order.children, rules),
     child_seat_line: "",
     meet_greet_line: formatMeetGreetLine(order.meetGreetLine, order.passengerName, rules),
     other_notes: "",
@@ -110,7 +108,6 @@ async function selectedDispatchOrders(orderIds: string[]) {
     flightNumber: row.flightNumber,
     adults: row.adults,
     children: row.children,
-    luggage: row.luggage,
     meetGreetLine: row.meetGreetLine,
   }));
 }

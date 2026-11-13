@@ -127,7 +127,7 @@ function firstMatch(text: string, pattern: RegExp) { return text.match(pattern)?
 // as “Passenger Name” and “Passenger Phone Number” get mistaken for driver
 // details.
 function bangkokDriverReplySection(block: string) {
-  const anchors = [...block.matchAll(/(?:luggage\s*capacity|meet\s*with\s*greeting\s*sign|meet\s*&?\s*greet)[^\n]*/gi)];
+  const anchors = [...block.matchAll(/(?:luggage\s*capacity|passenger\s*count|meet\s*with\s*greeting\s*sign|meet\s*&?\s*greet)[^\n]*/gi)];
   const last = anchors.at(-1);
   return last?.index === undefined ? block : block.slice(last.index + last[0].length);
 }
