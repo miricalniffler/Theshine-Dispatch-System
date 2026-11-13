@@ -44,8 +44,7 @@ function installIwayGmailHourlyTrigger_() {
 // and the server still owns the permanent de-duplication key.
 function configureMailOperationsFiveMinuteTrigger() {
   var props = PropertiesService.getScriptProperties();
-  requireConfig_(props);
-  if (!props.getProperty('IWAY_GMAIL_OPERATIONS_URL')) throw new Error('IWAY_GMAIL_OPERATIONS_URL 未设置。');
+  requireMailOperationsConfig_(props);
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'syncKualaLumpurMailOperations') ScriptApp.deleteTrigger(trigger);
   });
@@ -56,7 +55,7 @@ function syncKualaLumpurMailOperations() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return { status: 'IN_PROGRESS' };
   try {
-    var props = PropertiesService.getScriptProperties(); requireConfig_(props);
+    var props = PropertiesService.getScriptProperties(); requireMailOperationsConfig_(props);
     var seen = getOperationsSeen_(props); var messages = [];
     // Search within a bounded recent window. Filtering in both Apps Script and
     // the server intentionally errs on the side of privacy: only KL complaint
@@ -69,11 +68,17 @@ function syncKualaLumpurMailOperations() {
     }); });
     messages = messages.sort(function(a,b) { return new Date(a.receivedAt) - new Date(b.receivedAt); }).slice(0, 20);
     if (!messages.length) return { status: 'SUCCEEDED', created: 0 };
-    var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_OPERATIONS_URL'), { method:'post', contentType:'application/json', headers:{ Authorization:'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') }, payload:JSON.stringify({messages:messages}), muteHttpExceptions:true });
+    var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_OPERATIONS_URL'), { method:'post', contentType:'application/json', headers:{ Authorization:'Bearer ' + props.getProperty('IWAY_GMAIL_OPERATIONS_TOKEN') }, payload:JSON.stringify({messages:messages}), muteHttpExceptions:true });
     if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('运营邮件导入服务返回 HTTP ' + response.getResponseCode());
     messages.forEach(function (item) { seen[item.id] = Date.now(); }); saveOperationsSeen_(props, seen);
     return { status:'SUCCEEDED', summary:JSON.parse(response.getContentText()) };
   } finally { lock.releaseLock(); }
+}
+
+function requireMailOperationsConfig_(props) {
+  ['IWAY_GMAIL_OPERATIONS_URL', 'IWAY_GMAIL_OPERATIONS_TOKEN'].forEach(function (key) {
+    if (!props.getProperty(key)) throw new Error(key + ' 未设置。');
+  });
 }
 
 function getOperationsSeen_(props) { try { return JSON.parse(props.getProperty('IWAY_GMAIL_OPERATIONS_SEEN') || '{}'); } catch (_) { return {}; } }
