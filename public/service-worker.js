@@ -22,3 +22,9 @@ self.addEventListener("activate", (event) => {
       .then(() => self.clients.claim()),
   );
 });
+
+self.addEventListener("push", (event) => {
+  const payload = event.data ? event.data.json() : {};
+  event.waitUntil(self.registration.showNotification(payload.title || "邮件运营提醒", { body: payload.body || "有新的待处理邮件", data: { url: payload.url || "/mail-operations" }, icon: "/iway-logo.png", badge: "/iway-logo.png" }));
+});
+self.addEventListener("notificationclick", (event) => { event.notification.close(); event.waitUntil(clients.openWindow(event.notification.data?.url || "/mail-operations")); });

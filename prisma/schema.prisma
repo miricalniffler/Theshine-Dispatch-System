@@ -43,6 +43,7 @@ model Order {
   customerNotifications CustomerNotification[]
   customerInboundMessages CustomerInboundMessage[]
   customerCommunicationExceptions CustomerCommunicationException[]
+  mailOperationMessages MailOperationMessage[]
   customerConfirmationStatus String?
   customerConfirmedAt DateTime?
   customerLargeLuggageCount Int?
@@ -547,4 +548,76 @@ model VehicleCapacityRule {
   updatedAt             DateTime @updatedAt
 
   @@index([isActive, normalizedVehicleModel])
+}
+
+// Gmail operations mailbox records are deliberately separate from the i'way
+// order-import ledger.  A mail can be reviewed many times without altering an
+// order, and Gmail message IDs make ingestion retry-safe.
+model MailOperationMessage {
+  id             String   @id @default(cuid())
+  gmailMessageId String   @unique
+  gmailThreadId  String?
+  sender         String
+  subject        String
+  receivedAt     DateTime
+  bodyText       String
+  category       String   @default("OTHER")
+  status         String   @default("OPEN")
+  city           String?
+  orderId        String?
+  extracted      Json?
+  analysis       Json?
+  draftReply     String?
+  draftUpdatedAt DateTime?
+  sentAt         DateTime?
+  sentMessageId  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  order  Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  events MailOperationEvent[]
+
+  @@index([status, category, receivedAt])
+  @@index([orderId, receivedAt])
+  @@index([gmailThreadId])
+}
+
+model MailOperationEvent {
+  id        String   @id @default(cuid())
+  messageId String
+  action    String
+  actor     String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  message MailOperationMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  @@index([messageId, createdAt])
+}
+
+// Rules are intentionally empty on first release: pricing is only generated
+// where the operator has maintained a matching, active rule.
+model QuoteRule {
+  id          String   @id @default(cuid())
+  city        String
+  routeKey    String
+  vehicleType String?
+  currency    String   @default("MYR")
+  baseCost    Decimal? @db.Decimal(12, 2)
+  marginRate  Decimal? @db.Decimal(6, 4)
+  surcharge   Decimal? @db.Decimal(12, 2)
+  note        String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([city, routeKey, isActive])
+}
+
+model WebPushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
