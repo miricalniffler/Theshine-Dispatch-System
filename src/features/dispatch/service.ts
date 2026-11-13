@@ -38,6 +38,15 @@ function safeAddress(value: string) {
     .trim();
 }
 
+// Only the pickup endpoint establishes an airport arrival; a flight number or
+// airport at the destination also occurs on airport drop-offs.
+function isKualaLumpurAirportPickup(address: string) {
+  const text = address.normalize("NFKC");
+  const airport = /\b(?:klia\s*2?|kul|szb)\b|\bkuala\s+lumpur\s+international\b|\bsubang\s+(?:international\s+)?airport\b|\bsultan\s+abdul\s+aziz\s+shah\s+airport\b|吉隆坡国际机场/i.test(text);
+  const hotel = /\b(?:hotel|hostel|resort|homestay)\b|酒店|旅馆/i.test(text);
+  return airport && !hotel;
+}
+
 function contentFor(order: DispatchOrder, rules = loadRules()) {
   return {
     platform_order_number: order.orderNo,
@@ -55,7 +64,9 @@ function contentFor(order: DispatchOrder, rules = loadRules()) {
     adults: order.adults,
     children: order.children,
     child_seat_line: "",
-    meet_greet_line: formatMeetGreetLine(order.meetGreetLine, order.passengerName, rules),
+    meet_greet_line: order.city === "吉隆坡"
+      ? isKualaLumpurAirportPickup(order.pickupAddress) ? formatMeetGreetLine(order.meetGreetLine || "Meet&Greet", order.passengerName, rules) : ""
+      : formatMeetGreetLine(order.meetGreetLine, order.passengerName, rules),
     other_notes: "",
   };
 }
