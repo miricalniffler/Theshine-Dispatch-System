@@ -7,5 +7,5 @@ export async function GET(request: NextRequest) {
 }
 export async function POST(request: NextRequest) {
   await request.json().catch(() => ({}));
-  return NextResponse.json({ error: { code: "FIXED_FLEET_DIRECTORY", message: "第一期固定使用曼谷车队和苏梅车队，不能新增其他车队。", fields: [] } }, { status: 409 });
+  return NextResponse.json({ error: { code: "FIXED_FLEET_DIRECTORY", message: "车队目录由系统按正式运营城市自动维护，不能手动新增其他车队。", fields: [] } }, { status: 409 });
 }

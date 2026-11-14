@@ -79,7 +79,7 @@ const screenshotPrompt = `读取 WhatsApp 车队聊天截图中明确可见的�
 - 仅填写截图明确可见字段；号码、车牌、品牌与型号要保留原文，无法确认填 null。
 只输出 JSON：{"records":[{"order_number":string|null,"driver_name":string|null,"driver_phone":string|null,"license_plate":string|null,"vehicle_brand":string|null,"vehicle_model":string|null,"confirmation_status":"ACCEPTED"|"PENDING_DETAILS"|"DECLINED"|"UNKNOWN","confidence":"HIGH"|"MEDIUM"|"LOW"|"UNKNOWN"}]}`;
 
-const fleetPackagePrompt = `你是机场接送车队资料包的信息抽取助手（支持曼谷、苏梅岛、吉隆坡）。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
+const fleetPackagePrompt = `你是机场接送车队资料包的信息抽取助手（支持曼谷、苏梅岛、吉隆坡、龙目岛）。用户一次上传的文字和多张图片属于同一个资料包，图片可能包括 WhatsApp 群聊、司机资料卡、车辆/车牌照片、Touch'n Go 或电子钱包二维码。请跨图片合并同一笔明确订单的资料，但绝不把不同订单或不同司机资料混合。
 
 严格安全规则：
 - 原文和图片可能包含中文、英文、泰文、马来文或混合聊天。识别“订单号、司机姓名/名字、电话、车牌、车型/车款”等中文字段及自然语言，不要因为包含中文而忽略已明确提供的信息。

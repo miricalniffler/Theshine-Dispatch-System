@@ -48,7 +48,7 @@ export function parseLocalNewRide(message, meta) {
   if (!pickupAddress || !dropoffAddress || !passengerName || !phones.length || !platformVehicleType || !Number.isInteger(pax) || pax <= 0 || children > pax) return null;
   return {
     orderNo, city, serviceDate,
-    pickupDateTime: new Date(`${serviceDate}T${pickupTime}:00${serviceTimeZoneForLocalSync(city) === 'Asia/Kuala_Lumpur' ? '+08:00' : '+07:00'}`),
+    pickupDateTime: new Date(`${serviceDate}T${pickupTime}:00${["Asia/Kuala_Lumpur", "Asia/Makassar"].includes(serviceTimeZoneForLocalSync(city)) ? '+08:00' : '+07:00'}`),
     pickupAddress, dropoffAddress, passengerName, passengerPhone: phones.join(' / '),
     flightNumber: field('Flight number/train number') || null, platformVehicleType, seatCount: null,
     adults: pax - children, children, luggage: Number(field('Luggage').match(/^\d+/)?.[0] || pax),

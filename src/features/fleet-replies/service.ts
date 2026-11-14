@@ -27,7 +27,7 @@ export type ReplyRecord = {
 };
 type Analysis = { records: ReplyRecord[]; unmatched_items: { source_type: "text" | "image"; source_id: string; reason: string }[]; recognition?: { provider: "GLM" | "QWEN" | "RULES"; label: string; note: string } };
 type VisualResult = { vehicle_brand: string | null; vehicle_model: string | null; vehicle_category: string | null; license_plate: string | null; confidence: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN" };
-type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR";
+type FleetProfile = "AUTO" | "BANGKOK" | "SAMUI" | "KUALA_LUMPUR" | "LOMBOK";
 
 function normalizedOrderNo(value: string) { return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase(); }
 function normalizePlate(value: string | null) { return (normalizeLicensePlateForReturn(value) ?? "").replace(/[\s-]/g, "").toLowerCase(); }
@@ -97,7 +97,7 @@ export async function listFleetReplyDates() {
 export async function createFleetReply(input: { dispatchBatchId?: string; orderIds?: string[]; serviceDate?: string; rawText?: string; fleetProfile?: FleetProfile; images?: { dataUrl: string; filename?: string; mimeType?: string }[] }) {
   const rawText = input.rawText?.trim() ?? "";
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(input.serviceDate ?? "") ? input.serviceDate! : bangkokTomorrow();
-  const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : input.fleetProfile === "KUALA_LUMPUR" ? "吉隆坡" : undefined;
+  const city = input.fleetProfile === "SAMUI" ? "苏梅" : input.fleetProfile === "BANGKOK" ? "曼谷" : input.fleetProfile === "KUALA_LUMPUR" ? "吉隆坡" : input.fleetProfile === "LOMBOK" ? "龙目岛" : undefined;
   const dateOrderIds = input.orderIds?.length ? [] : (await db.order.findMany({ where: { serviceDate: selectedDate, status: { notIn: ["CANCELLED"] }, ...(city ? { city } : {}) }, select: { id: true } })).map((order) => order.id);
   const orderIds = [...new Set([...(input.orderIds ?? []), ...dateOrderIds])];
   if (!rawText && !(input.images?.length)) throw new Error("SOURCE_REQUIRED");
@@ -291,10 +291,10 @@ function autoMatchSingleUnassigned(records: ReplyRecord[], orders: CandidateOrde
 
 function resolveProfile(reply: { createdBy: string | null; rawText: string }, orders: CandidateOrder[]): FleetProfile {
   const requested = reply.createdBy?.split("|")[1] as FleetProfile | undefined;
-  if (requested === "BANGKOK" || requested === "SAMUI" || requested === "KUALA_LUMPUR") return requested;
+  if (requested === "BANGKOK" || requested === "SAMUI" || requested === "KUALA_LUMPUR" || requested === "LOMBOK") return requested;
   const normalized = normalizedOrderNo(reply.rawText);
   const matchedCities = new Set(orders.filter((order) => normalized.includes(normalizedOrderNo(order.orderNo))).map((order) => order.city));
-  if (matchedCities.size === 1) return [...matchedCities][0] === "苏梅" ? "SAMUI" : [...matchedCities][0] === "吉隆坡" ? "KUALA_LUMPUR" : "BANGKOK";
+  if (matchedCities.size === 1) return [...matchedCities][0] === "苏梅" ? "SAMUI" : [...matchedCities][0] === "吉隆坡" ? "KUALA_LUMPUR" : [...matchedCities][0] === "龙目岛" ? "LOMBOK" : "BANGKOK";
   return "AUTO";
 }
 

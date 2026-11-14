@@ -140,7 +140,7 @@ function parseOrder(message, meta) {
     serviceDate: date,
     // Kuala Lumpur is one hour behind Bangkok. Store an actual instant so the
     // home-page date window and displayed local pickup time stay correct.
-    pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00${serviceTimeZoneForLocalSync(city) === "Asia/Kuala_Lumpur" ? "+08:00" : "+07:00"}`),
+    pickupDateTime: new Date(`${date}T${pickupTime.padStart(5, "0")}:00${["Asia/Kuala_Lumpur", "Asia/Makassar"].includes(serviceTimeZoneForLocalSync(city)) ? "+08:00" : "+07:00"}`),
     pickupAddress,
     dropoffAddress,
     passengerName: passengers.at(-1),
@@ -246,8 +246,11 @@ async function main() {
   const fleets = new Map();
   for (const city of ["曼谷", "苏梅", "吉隆坡", "龙目岛"]) {
     const name = `${city}车队`;
-    const fleet = await db.fleet.findUnique({ where: { name_city: { name, city } } });
-    if (!fleet) throw new Error(`找不到${name}；为避免创建额外车队，本次新订单未导入。`);
+    const fleet = await db.fleet.upsert({
+      where: { name_city: { name, city } },
+      update: { isActive: true },
+      create: { name, city, isActive: true },
+    });
     fleets.set(city, fleet);
   }
   const summary = { scanned: scannedCount, candidateMessages: uniqueCandidates.length, parsedMessages: parsed.length, cancellationMessages: 0, futureOrders: future.length, created: [], updated: [], cancelled: [], unchanged: [], rejected: rejectedMessages.length };
