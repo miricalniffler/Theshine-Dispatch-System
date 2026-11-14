@@ -101,10 +101,13 @@ function syncKualaLumpurMailOperations() {
     }
     var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_OPERATIONS_URL'), { method:'post', contentType:'application/json', headers:{ Authorization:'Bearer ' + props.getProperty('IWAY_GMAIL_OPERATIONS_TOKEN') }, payload:JSON.stringify({messages:messages}), muteHttpExceptions:true });
     if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('运营邮件导入服务返回 HTTP ' + response.getResponseCode());
+    var responsePayload = JSON.parse(response.getContentText());
+    var summary = responsePayload && responsePayload.data ? responsePayload.data : responsePayload;
+    if (!summary || typeof summary !== 'object') throw new Error('运营邮件导入服务返回格式无效。');
     messages.forEach(function (item) { seen[item.id] = Date.now(); }); saveOperationsSeen_(props, seen);
     var latestSuccessAt = new Date().toISOString();
     props.setProperty('IWAY_GMAIL_OPERATIONS_LAST_SUCCESS_AT', latestSuccessAt);
-    return { status:'SUCCEEDED', summary:JSON.parse(response.getContentText()), latestSuccessAt:latestSuccessAt };
+    return { status:'SUCCEEDED', summary:summary, latestSuccessAt:latestSuccessAt };
   } finally { lock.releaseLock(); }
 }
 
