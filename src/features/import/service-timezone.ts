@@ -12,6 +12,7 @@ const zoneRules: ZoneRule[] = [
   { timeZone: "Asia/Bangkok", signals: [/\b(?:bangkok|bkk|pattaya|chon\s*buri|suvarnabhumi|don\s*mue?ang|dmk|koh\s*samui|samui|usm)\b/i, /ประเทศไทย|กรุงเทพ|สุวรรณภูมิ|สมุย/u] },
   { timeZone: "Asia/Tokyo", signals: [/\b(?:tokyo|japan|haneda|narita|hnd|nrt)\b/i, /東京|日本|羽田|成田/u] },
   { timeZone: "Asia/Kuala_Lumpur", signals: [/\b(?:kuala\s*lumpur|malaysia|klia|kul)\b/i, /كوالالمبور/u] },
+  { timeZone: "Asia/Makassar", signals: [/\b(?:lombok|lop|mataram|telok\s*kodek|gili)\b/i, /龙目岛/u] },
   { timeZone: "Asia/Singapore", signals: [/\b(?:singapore|changi|sin)\b/i, /新加坡/u] },
 ];
 
