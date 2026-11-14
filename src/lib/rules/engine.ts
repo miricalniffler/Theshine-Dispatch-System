@@ -70,8 +70,9 @@ export function normalizeThailandPhone(phone: string | null | undefined, rules: 
 }
 
 /** Normalizes a driver phone only for the confirmed operating country.  This
- * prevents Thai assumptions from corrupting Malaysian fleet contacts. */
+ * prevents a country-specific rule from corrupting another fleet's contacts. */
 export function normalizeDriverPhone(phone: string | null | undefined, city: string, rules: RulesConfig = loadRules()) {
+  if (city === "龙目岛") return normalizeIndonesiaPhone(phone);
   if (city !== "吉隆坡") return normalizeThailandPhone(phone, rules);
   if (!phone) return null;
   const normalizeOne = (original: string) => {
@@ -86,6 +87,25 @@ export function normalizeDriverPhone(phone: string | null | undefined, city: str
     // +60. Never pad or guess a missing digit.
     if (!/^1\d{8,9}$/.test(national)) return null;
     return `+60 ${national}`;
+  };
+  const values = phone.split("/").map(normalizeOne);
+  return values.every(Boolean) ? values.join("/") : null;
+}
+
+function normalizeIndonesiaPhone(phone: string | null | undefined) {
+  if (!phone) return null;
+  const normalizeOne = (original: string) => {
+    const compact = original.trim().replace(/[\s()\-]/g, "");
+    const digits = compact.replace(/^\+/, "");
+    let national = "";
+    if (compact.startsWith("+62")) national = digits.slice(2);
+    else if (/^0\d+$/.test(digits)) national = digits.slice(1);
+    else return null;
+    if (national.startsWith("0")) national = national.slice(1);
+    // Indonesian mobile numbers use the +62 country code and an 8-prefix.
+    // Accept only an explicit, complete mobile number; never pad or infer one.
+    if (!/^8\d{8,11}$/.test(national)) return null;
+    return `+62 ${national}`;
   };
   const values = phone.split("/").map(normalizeOne);
   return values.every(Boolean) ? values.join("/") : null;
