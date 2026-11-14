@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 
 export type GmailManualTriggerResult =
-  | { kind: "completed"; created: number; cancelled: number; review: number; skipped: number; rejected: number }
+  | { kind: "completed"; created: number; cancelled: number; review: number; skipped: number; rejected: number; latestSuccessAt?: string }
   | { kind: "in-progress"; message: string }
   | { kind: "unavailable"; message: string }
   | { kind: "failed"; code?: string; message: string };
@@ -25,7 +25,9 @@ export function gmailManualTriggerReady() {
   return Boolean(secret) && safeTriggerUrl(url);
 }
 
-function signedPayload(action: "sync" | "status", secret: string) {
+type ManualAction = "sync" | "operations" | "status";
+
+function signedPayload(action: ManualAction, secret: string) {
   const issuedAt = new Date().toISOString();
   const nonce = randomUUID();
   const signature = createHmac("sha256", secret).update(`${action}\n${issuedAt}\n${nonce}`).digest("base64");
@@ -37,31 +39,38 @@ function numberField(value: unknown) { return typeof value === "number" && Numbe
 function userSafeFailure(code: unknown) {
   if (code === "GMAIL_QUOTA_EXHAUSTED") return "Gmail 配额不足，同步失败。";
   if (code === "MANUAL_TRIGGER_NOT_CONFIGURED") return "Gmail 手动同步尚未完成 Apps Script 配置。";
+  if (typeof code === "string" && code.startsWith("MANUAL_TRIGGER_")) return "Apps Script 手动同步身份验证失败，请检查服务端配置。";
   return "Gmail 同步失败，请检查受保护的 Apps Script 执行记录后重试。";
 }
 
-export async function triggerManualGmailSync(fetchImpl: typeof fetch = fetch): Promise<GmailManualTriggerResult> {
+function safeTimestamp(value: unknown) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) ? value : undefined;
+}
+
+export async function triggerManualGmailSync(fetchImpl: typeof fetch = fetch, action: Exclude<ManualAction, "status"> = "sync"): Promise<GmailManualTriggerResult> {
   if (!gmailManualTriggerReady()) return { kind: "unavailable", message: "Gmail 手动同步尚未配置；请先部署并配置 Google Apps Script。" };
   const { url, secret } = triggerConfig();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), triggerTimeoutMs);
   try {
-    const response = await fetchImpl(url, { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(signedPayload("sync", secret)), signal: controller.signal });
-    const payload = await response.json().catch(() => null) as { status?: string; code?: string; summary?: Record<string, unknown> } | null;
+    const response = await fetchImpl(url, { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(signedPayload(action, secret)), signal: controller.signal });
+    const payload = await response.json().catch(() => null) as { status?: string; code?: string; summary?: Record<string, unknown>; latestSuccessAt?: unknown } | null;
     if (!response.ok || !payload) return { kind: "failed", message: "Gmail 同步触发服务不可用；尚未确认同步成功。" };
     if (payload.status === "IN_PROGRESS") return { kind: "in-progress", message: "已有一轮 Gmail 同步正在进行，请等待其完成。" };
     if (payload.status !== "SUCCEEDED") return { kind: "failed", code: payload.code, message: userSafeFailure(payload.code) };
     const summary = payload.summary || {};
-    return { kind: "completed", created: numberField(summary.created), cancelled: numberField(summary.cancelled), review: numberField(summary.review), skipped: numberField(summary.skipped), rejected: numberField(summary.rejected) };
+    return { kind: "completed", created: numberField(summary.created), cancelled: numberField(summary.cancelled), review: numberField(summary.review), skipped: numberField(summary.skipped), rejected: numberField(summary.rejected), latestSuccessAt: safeTimestamp(payload.latestSuccessAt) };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") return { kind: "failed", message: "Gmail 同步请求超时，尚未确认同步成功；请查看最新同步状态后再试。" };
     return { kind: "failed", message: "Gmail 同步触发服务不可用；尚未确认同步成功。" };
   } finally { clearTimeout(timer); }
 }
 
+export type GmailManualTriggerStatus = { available: boolean; latestOrderSuccessAt: string | null; latestOperationsSuccessAt: string | null };
+
 /** A signed, no-Gmail-read probe. It prevents the dashboard from enabling the button merely because Vercel variables exist. */
-export async function gmailManualTriggerAvailable(fetchImpl: typeof fetch = fetch) {
-  if (!gmailManualTriggerReady()) return false;
+export async function getGmailManualTriggerStatus(fetchImpl: typeof fetch = fetch): Promise<GmailManualTriggerStatus> {
+  if (!gmailManualTriggerReady()) return { available: false, latestOrderSuccessAt: null, latestOperationsSuccessAt: null };
   const { url, secret } = triggerConfig();
   const request = signedPayload("status", secret);
   const target = new URL(url);
@@ -70,8 +79,13 @@ export async function gmailManualTriggerAvailable(fetchImpl: typeof fetch = fetc
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const response = await fetchImpl(target, { method: "GET", cache: "no-store", signal: controller.signal });
-    const payload = await response.json().catch(() => null) as { status?: string } | null;
-    return Boolean(response.ok && payload?.status === "READY");
-  } catch { return false; }
+    const payload = await response.json().catch(() => null) as { status?: string; latestOrderSuccessAt?: unknown; latestOperationsSuccessAt?: unknown } | null;
+    const available = Boolean(response.ok && payload?.status === "READY");
+    return { available, latestOrderSuccessAt: safeTimestamp(payload?.latestOrderSuccessAt) || null, latestOperationsSuccessAt: safeTimestamp(payload?.latestOperationsSuccessAt) || null };
+  } catch { return { available: false, latestOrderSuccessAt: null, latestOperationsSuccessAt: null }; }
   finally { clearTimeout(timer); }
+}
+
+export async function gmailManualTriggerAvailable(fetchImpl: typeof fetch = fetch) {
+  return (await getGmailManualTriggerStatus(fetchImpl)).available;
 }

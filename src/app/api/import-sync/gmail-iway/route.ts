@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { failure, success } from "@/lib/api-response";
 import { getGmailIwaySyncStatus, gmailIwaySyncReady, ingestGmailIwayMessages } from "@/features/import/gmail-iway-sync";
-import { gmailManualTriggerAvailable, gmailManualTriggerReady } from "@/features/import/gmail-manual-trigger";
+import { getGmailManualTriggerStatus, gmailManualTriggerReady } from "@/features/import/gmail-manual-trigger";
 
 const messageSchema = z.object({
   id: z.string().trim().min(1).max(300),
@@ -30,7 +30,8 @@ function authorised(request: Request) {
 
 export async function GET() {
   const manualTriggerConfigured = gmailManualTriggerReady();
-  return success({ configured: gmailIwaySyncReady(), manualTriggerConfigured, manualTriggerAvailable: manualTriggerConfigured && await gmailManualTriggerAvailable(), latestRun: await getGmailIwaySyncStatus() });
+  const manualTrigger = await getGmailManualTriggerStatus();
+  return success({ configured: gmailIwaySyncReady(), manualTriggerConfigured, manualTriggerAvailable: manualTrigger.available, latestSuccessfulSyncAt: manualTrigger.latestOrderSuccessAt, latestRun: await getGmailIwaySyncStatus() });
 }
 
 export async function POST(request: Request) {

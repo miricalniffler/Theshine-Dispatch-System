@@ -18,10 +18,10 @@ function setupIwayGmailSync() {
   props.setProperty('IWAY_GMAIL_ENABLED_AT', new Date().toISOString());
   props.deleteProperty('IWAY_GMAIL_SEEN');
   props.setProperty('IWAY_GMAIL_SCAN_OFFSET', '0');
-  installIwayGmailHourlyTrigger_();
+  installIwayGmailThirtyMinuteTrigger_();
 }
 
-// Use this when changing an already-running project to the hourly schedule.
+// Use this when changing an already-running project to the 30-minute schedule.
 // Unlike setupIwayGmailSync, it never changes the Gmail activation waterline,
 // seen-message cache, or pagination cursor.
 function configureIwayGmailHourlyTrigger() {
@@ -29,26 +29,47 @@ function configureIwayGmailHourlyTrigger() {
   requireConfig_(props);
   var enabledAt = new Date(props.getProperty('IWAY_GMAIL_ENABLED_AT'));
   if (isNaN(enabledAt.getTime())) throw new Error('IWAY_GMAIL_ENABLED_AT 未设置；为保护同步起点，不能自动初始化。');
-  installIwayGmailHourlyTrigger_();
+  installIwayGmailThirtyMinuteTrigger_();
 }
 
-function installIwayGmailHourlyTrigger_() {
+function installIwayGmailThirtyMinuteTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'syncIwayGmailOrders') ScriptApp.deleteTrigger(trigger);
   });
-  ScriptApp.newTrigger('syncIwayGmailOrders').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('syncIwayGmailOrders').timeBased().everyMinutes(30).create();
+}
+
+// Replaces only these two Gmail timers. Waterlines, seen ids, and the order
+// pagination cursor are deliberately never read-modify-written here.
+function configureIwayGmailThirtyMinuteTriggers() {
+  var props = PropertiesService.getScriptProperties();
+  requireConfig_(props);
+  requireMailOperationsConfig_(props);
+  var enabledAt = new Date(props.getProperty('IWAY_GMAIL_ENABLED_AT'));
+  if (isNaN(enabledAt.getTime())) throw new Error('IWAY_GMAIL_ENABLED_AT 未设置；为保护同步起点，不能自动初始化。');
+  installIwayGmailThirtyMinuteTrigger_();
+  installMailOperationsThirtyMinuteTrigger_();
 }
 
 // A separate trigger keeps operational (complaint/quotation) mail completely
 // isolated from i'way order ingestion.  It reads only short, recent batches
 // and the server still owns the permanent de-duplication key.
-function configureMailOperationsFiveMinuteTrigger() {
+function configureMailOperationsThirtyMinuteTrigger() {
   var props = PropertiesService.getScriptProperties();
   requireMailOperationsConfig_(props);
+  installMailOperationsThirtyMinuteTrigger_();
+}
+
+// Backward-compatible editor entry point; the installed interval is 30 min.
+function configureMailOperationsFiveMinuteTrigger() {
+  configureMailOperationsThirtyMinuteTrigger();
+}
+
+function installMailOperationsThirtyMinuteTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'syncKualaLumpurMailOperations') ScriptApp.deleteTrigger(trigger);
   });
-  ScriptApp.newTrigger('syncKualaLumpurMailOperations').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('syncKualaLumpurMailOperations').timeBased().everyMinutes(30).create();
 }
 
 function syncKualaLumpurMailOperations() {
@@ -73,11 +94,20 @@ function syncKualaLumpurMailOperations() {
       messages.push({ id:id, threadId:thread.getId(), sender:mail.getFrom(), subject:subject, receivedAt:mail.getDate().toISOString(), text:text });
     }); });
     messages = messages.sort(function(a,b) { return new Date(a.receivedAt) - new Date(b.receivedAt); }).slice(0, 20);
-    if (!messages.length) return { status: 'SUCCEEDED', created: 0 };
+    if (!messages.length) {
+      var lastSuccessAt = new Date().toISOString();
+      props.setProperty('IWAY_GMAIL_OPERATIONS_LAST_SUCCESS_AT', lastSuccessAt);
+      return { status: 'SUCCEEDED', summary: { created: 0, skipped: 0 }, latestSuccessAt: lastSuccessAt };
+    }
     var response = UrlFetchApp.fetch(props.getProperty('IWAY_GMAIL_OPERATIONS_URL'), { method:'post', contentType:'application/json', headers:{ Authorization:'Bearer ' + props.getProperty('IWAY_GMAIL_OPERATIONS_TOKEN') }, payload:JSON.stringify({messages:messages}), muteHttpExceptions:true });
     if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('运营邮件导入服务返回 HTTP ' + response.getResponseCode());
+    var responsePayload = JSON.parse(response.getContentText());
+    var summary = responsePayload && responsePayload.data ? responsePayload.data : responsePayload;
+    if (!summary || typeof summary !== 'object') throw new Error('运营邮件导入服务返回格式无效。');
     messages.forEach(function (item) { seen[item.id] = Date.now(); }); saveOperationsSeen_(props, seen);
-    return { status:'SUCCEEDED', summary:JSON.parse(response.getContentText()) };
+    var latestSuccessAt = new Date().toISOString();
+    props.setProperty('IWAY_GMAIL_OPERATIONS_LAST_SUCCESS_AT', latestSuccessAt);
+    return { status:'SUCCEEDED', summary:summary, latestSuccessAt:latestSuccessAt };
   } finally { lock.releaseLock(); }
 }
 
@@ -103,7 +133,9 @@ function syncIwayGmailOrders() {
     var messages = page.messages;
     if (!messages.length) {
       if (page.threadCount) advanceScanOffset_(props, page.threadCount);
-      return { status: 'SUCCEEDED', summary: emptySummary_() };
+      var lastSuccessAt = new Date().toISOString();
+      props.setProperty('IWAY_GMAIL_ORDERS_LAST_SUCCESS_AT', lastSuccessAt);
+      return { status: 'SUCCEEDED', summary: emptySummary_(), latestSuccessAt: lastSuccessAt };
     }
     var headers = { Authorization: 'Bearer ' + props.getProperty('IWAY_GMAIL_INGEST_TOKEN') };
     // Preview deployments can keep Vercel SSO enabled. When a Vercel
@@ -133,7 +165,9 @@ function syncIwayGmailOrders() {
     if (processed.length === messages.length && page.remainingEligible === messages.length) {
       advanceScanOffset_(props, page.threadCount);
     }
-    return { status: 'SUCCEEDED', summary: syncSummary_(payload && payload.data) };
+    var latestSuccessAt = new Date().toISOString();
+    props.setProperty('IWAY_GMAIL_ORDERS_LAST_SUCCESS_AT', latestSuccessAt);
+    return { status: 'SUCCEEDED', summary: syncSummary_(payload && payload.data), latestSuccessAt: latestSuccessAt };
   } finally {
     lock.releaseLock();
   }
@@ -145,8 +179,10 @@ function syncIwayGmailOrders() {
 function doPost(e) {
   try {
     var props = PropertiesService.getScriptProperties();
-    verifyManualTrigger_(props, e, 'sync');
-    return jsonResponse_(syncIwayGmailOrders());
+    var action = manualTriggerAction_(e);
+    if (action !== 'sync' && action !== 'operations') throw new Error('MANUAL_TRIGGER_INVALID_REQUEST');
+    verifyManualTrigger_(props, e, action);
+    return jsonResponse_(action === 'operations' ? syncKualaLumpurMailOperations() : syncIwayGmailOrders());
   } catch (error) {
     return jsonResponse_({ status: 'FAILED', code: manualTriggerErrorCode_(error) });
   }
@@ -156,11 +192,23 @@ function doPost(e) {
 // It validates the deployed script and secrets but never reads Gmail.
 function doGet(e) {
   try {
-    verifyManualTrigger_(PropertiesService.getScriptProperties(), e, 'status');
-    return jsonResponse_({ status: 'READY' });
+    var props = PropertiesService.getScriptProperties();
+    verifyManualTrigger_(props, e, 'status');
+    return jsonResponse_({
+      status: 'READY',
+      latestOrderSuccessAt: props.getProperty('IWAY_GMAIL_ORDERS_LAST_SUCCESS_AT') || null,
+      latestOperationsSuccessAt: props.getProperty('IWAY_GMAIL_OPERATIONS_LAST_SUCCESS_AT') || null
+    });
   } catch (error) {
     return jsonResponse_({ status: 'UNAVAILABLE', code: manualTriggerErrorCode_(error) });
   }
+}
+
+function manualTriggerAction_(e) {
+  try {
+    var request = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : (e && e.parameter || null);
+    return request && request.action;
+  } catch (_) { throw new Error('MANUAL_TRIGGER_INVALID_REQUEST'); }
 }
 
 function emptySummary_() { return { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0 }; }
