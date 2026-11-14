@@ -129,6 +129,8 @@ export async function activeAirportGuideCandidates(): Promise<AirportGuideMatchC
 const defaultRegions = [
   { region: "曼谷", customerWhatsAppEnabled: true },
   { region: "苏梅", customerWhatsAppEnabled: false },
+  { region: "吉隆坡", customerWhatsAppEnabled: false },
+  { region: "龙目岛", customerWhatsAppEnabled: false },
 ];
 
 export async function listRegionNotificationSettings(): Promise<RegionNotificationSettingView[]> {

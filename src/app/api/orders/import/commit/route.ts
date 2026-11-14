@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   const timeZone = serviceTimeZoneForCity(String(fields.city));
   const pickupDateTime = timeZone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(fields.pickupDateTime)) ? zonedLocalDateTimeToUtc(fields.pickupDateTime, timeZone) : null;
   if (!pickupDateTime || Number.isNaN(pickupDateTime.getTime())) return failure("INVALID_PICKUP_TIME", "接客时间无法确认，请返回核对。", ["pickupDateTime"], 422);
-  if (!timeZone) return failure("CITY_REQUIRED", "无法确认服务城市，请根据接人和送人地址选择曼谷、苏梅或吉隆坡后再保存。", ["city"], 422);
+  if (!timeZone) return failure("CITY_REQUIRED", "无法确认服务城市，请根据接人和送人地址选择曼谷、苏梅、吉隆坡或龙目岛后再保存。", ["city"], 422);
   const order = await db.$transaction(async (tx) => {
     const city = fields.city;
     const fleet = await canonicalFleetForCity(tx, city);
