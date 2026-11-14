@@ -60,9 +60,15 @@ function syncKualaLumpurMailOperations() {
     // Search within a bounded recent window. Filtering in both Apps Script and
     // the server intentionally errs on the side of privacy: only KL complaint
     // / quotation candidates leave Gmail.
-    GmailApp.search('newer_than:14d', 0, 50).forEach(function (thread) { thread.getMessages().forEach(function (mail) {
-      var id = mail.getId(); var subject = mail.getSubject() || ''; var text = mail.getPlainBody() || '';
-      if (seen[id] || !/(kuala\s*lumpur|klia|malaysia|吉隆坡)/i.test(subject + '\n' + text)) return;
+    // Keep the operations bridge on the same trusted iWay sender allowlist as
+    // order ingestion. A mailbox-wide keyword scan can capture unrelated
+    // GitHub, Vercel, or newsletter traffic that happens to mention Kuala Lumpur.
+    var senderQuery = IWAY_SENDERS.map(function (sender) { return 'from:' + sender; }).join(' OR ');
+    GmailApp.search('(' + senderQuery + ') newer_than:14d', 0, 50).forEach(function (thread) { thread.getMessages().forEach(function (mail) {
+      var id = mail.getId();
+      if (seen[id] || !isTrustedSender_(mail.getFrom())) return;
+      var subject = mail.getSubject() || ''; var text = mail.getPlainBody() || '';
+      if (!/(kuala\s*lumpur|klia|malaysia|吉隆坡)/i.test(subject + '\n' + text)) return;
       if (!/(complaint|dissatisfied|unhappy|refund|late|no\s+show|inquir|quotation|quote|price|rate|询价|报价|投诉)/i.test(subject + '\n' + text)) return;
       messages.push({ id:id, threadId:thread.getId(), sender:mail.getFrom(), subject:subject, receivedAt:mail.getDate().toISOString(), text:text });
     }); });
