@@ -36,7 +36,12 @@ function gmailSyncSummary(status: GmailSyncStatus | null) {
   const run = status.latestRun;
   if (!run) return status.latestSuccessfulSyncAt ? `最近成功同步：${displaySyncTime(status.latestSuccessfulSyncAt)} · 本轮没有产生新的订单导入记录。` : "Gmail 服务端已准备好，正在等待 Google Apps Script 的首次检查。";
   const when = displaySyncTime(run.completedAt || run.startedAt);
-  if (run.status === "FAILED") return `Gmail 最近同步失败（${when}）：${run.errorMessage || "请检查 Google Apps Script 执行记录。"}`;
+  if (run.status === "FAILED") {
+    const successfulAt = status.latestSuccessfulSyncAt ? Date.parse(status.latestSuccessfulSyncAt) : 0;
+    const failedAt = Date.parse(run.completedAt || run.startedAt || "") || 0;
+    if (successfulAt > failedAt) return `最近成功同步：${displaySyncTime(status.latestSuccessfulSyncAt!)}；更早一次失败（${when}）：${run.errorMessage || "请检查 Google Apps Script 执行记录。"}`;
+    return `Gmail 最近同步失败（${when}）：${run.errorMessage || "请检查 Google Apps Script 执行记录。"}`;
+  }
   if (run.status === "RUNNING") return `Gmail 正在同步（开始于 ${when}）。`;
   return `Gmail 最近成功同步（${displaySyncTime(status.latestSuccessfulSyncAt || run.completedAt || run.startedAt)}）：新增 ${run.createdCount} 笔，取消 ${run.cancelledCount ?? 0} 笔，待核对 ${run.updatedCount ?? 0} 笔，已存在或未导入 ${run.skippedCount} 笔。`;
 }
