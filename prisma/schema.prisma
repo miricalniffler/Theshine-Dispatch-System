@@ -44,6 +44,7 @@ model Order {
   customerInboundMessages CustomerInboundMessage[]
   customerCommunicationExceptions CustomerCommunicationException[]
   mailOperationMessages MailOperationMessage[]
+  gmailOrderSnapshots GmailOrderSnapshot[]
   customerConfirmationStatus String?
   customerConfirmedAt DateTime?
   customerLargeLuggageCount Int?
@@ -402,6 +403,27 @@ model ImportedSourceMessage {
 
   @@unique([connector, externalId])
   @@index([orderId])
+}
+
+// 每一条由 Gmail 自动应用的订单变更，都保存完整的前后业务字段快照。
+// 该表只追加，不覆盖；回滚本身也会另存一条快照，便于审计和冲突判断。
+model GmailOrderSnapshot {
+  id                      String   @id @default(cuid())
+  orderId                 String
+  sourceMessageExternalId String?  @unique
+  kind                    String
+  beforeState             Json
+  afterState              Json
+  changedFields           Json
+  sourceReceivedAt        DateTime?
+  appliedAt               DateTime @default(now())
+  rolledBackAt            DateTime?
+  rollbackSnapshotId      String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, appliedAt])
+  @@index([kind, appliedAt])
 }
 
 // 一条 AirportGuide 就是一份可保留的指引版本。新版本启用时，旧版本保留但停用，

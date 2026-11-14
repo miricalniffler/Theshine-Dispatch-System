@@ -211,12 +211,13 @@ function manualTriggerAction_(e) {
   } catch (_) { throw new Error('MANUAL_TRIGGER_INVALID_REQUEST'); }
 }
 
-function emptySummary_() { return { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0 }; }
+function emptySummary_() { return { created: 0, updated: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0 }; }
 
 function syncSummary_(data) {
   data = data || {};
   return {
     created: Number(data.created || 0),
+    updated: Number(data.updated || 0),
     cancelled: Number(data.cancelled || 0),
     review: Number(data.review || 0),
     skipped: Number(data.skipped || 0),

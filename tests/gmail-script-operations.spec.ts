@@ -31,8 +31,9 @@ test("Apps Script operations sync unwraps the API result and records success onl
   expect(result.summary.created).toBe(1);
   expect(result.summary.skipped).toBe(2);
   expect(Date.parse(result.latestSuccessAt)).toBeGreaterThan(0);
-  expect(request?.url).toBe("https://dispatch.example/api/mail-operations/gmail");
-  expect((request?.options.headers as Record<string, string>).Authorization).toBe("Bearer server-side-token");
+  const captured = request as unknown as { url: string; options: Record<string, unknown> };
+  expect(captured.url).toBe("https://dispatch.example/api/mail-operations/gmail");
+  expect((captured.options.headers as Record<string, string>).Authorization).toBe("Bearer server-side-token");
   expect(JSON.parse(properties.IWAY_GMAIL_OPERATIONS_SEEN)).toHaveProperty("iway-message-1");
   expect(properties.IWAY_GMAIL_OPERATIONS_LAST_SUCCESS_AT).toBe(result.latestSuccessAt);
 });
