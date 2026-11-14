@@ -244,7 +244,7 @@ async function main() {
     return;
   }
   const fleets = new Map();
-  for (const city of ["曼谷", "苏梅", "吉隆坡"]) {
+  for (const city of ["曼谷", "苏梅", "吉隆坡", "龙目岛"]) {
     const name = `${city}车队`;
     const fleet = await db.fleet.findUnique({ where: { name_city: { name, city } } });
     if (!fleet) throw new Error(`找不到${name}；为避免创建额外车队，本次新订单未导入。`);

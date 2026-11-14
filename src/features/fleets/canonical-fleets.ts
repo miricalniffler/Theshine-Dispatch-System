@@ -8,6 +8,7 @@ export const canonicalFleets = {
   "曼谷": { name: "曼谷车队", city: "曼谷" },
   "苏梅": { name: "苏梅车队", city: "苏梅" },
   "吉隆坡": { name: "吉隆坡车队", city: "吉隆坡" },
+  "龙目岛": { name: "龙目岛车队", city: "龙目岛" },
 } as const;
 
 export type SupportedFleetCity = keyof typeof canonicalFleets;

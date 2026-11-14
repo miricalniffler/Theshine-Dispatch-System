@@ -25,3 +25,8 @@ test("iWay 吉隆坡订单沿用结构化解析并使用吉隆坡时区", () => 
   expect(parsed.platformOrderNumber).toBe("1163001");
 });
 
+test("龙目岛机场接送归属龙目岛并使用 WITA 时区", () => {
+  expect(detectDispatchCity("Dream Divers - Telok Kodek, Lombok", "Lombok International Airport").city).toBe("龙目岛");
+  expect(serviceTimeZoneForCity("龙目岛")).toBe("Asia/Makassar");
+});
+

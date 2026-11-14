@@ -98,8 +98,8 @@ async function applyMessage(message: ImportedMessage): Promise<"created" | "upda
   const cityDetection = structured?.cityDetection ?? detectDispatchCity(pickupAddress, dropoffAddress);
   const city = cityDetection.city;
   const pickup = structured?.pickupDateTime
-    ? dateTime(structured.pickupDateTime.replace("T", " "), structured.serviceTimeZone || (city === "吉隆坡" ? "Asia/Kuala_Lumpur" : "Asia/Bangkok"))
-    : dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"), city === "吉隆坡" ? "Asia/Kuala_Lumpur" : "Asia/Bangkok");
+    ? dateTime(structured.pickupDateTime.replace("T", " "), structured.serviceTimeZone || (city === "吉隆坡" ? "Asia/Kuala_Lumpur" : city === "龙目岛" ? "Asia/Makassar" : "Asia/Bangkok"))
+    : dateTime(pick(message.text, "(?:Departure Time|Pickup Time)"), city === "吉隆坡" ? "Asia/Kuala_Lumpur" : city === "龙目岛" ? "Asia/Makassar" : "Asia/Bangkok");
   if (!pickup || !passengerName || !passengerPhone || !pickupAddress || !dropoffAddress || !platformVehicleType) { await recordMessage(message, existing?.id); return "skipped"; }
   const adults = structured?.adults ?? numberFrom(pick(message.text, "(?:Adults|Number of passengers)"));
   const children = structured?.children ?? numberFrom(pick(message.text, "Children"));
