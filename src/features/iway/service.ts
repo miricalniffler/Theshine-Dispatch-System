@@ -177,7 +177,11 @@ export async function saveDriverDetails(orderId: string, input: DriverDetailsInp
     // order back to DRIVER_CONFIRMED made the original completion disappear
     // and could accidentally put it back into the normal bulk-return queue.
     if (input.changeType === "REASSIGNMENT") await tx.activityLog.create({ data: { orderId, action: "订单换车/换司机", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
-    if (check.valid && (currentOrder.status === "DISPATCHED" || currentOrder.status === "READY_TO_DISPATCH")) {
+    // A manually recovered order can initially be marked PENDING_REVIEW only
+    // because its source card omitted passenger contact fields. Once an
+    // operator has confirmed the complete driver and vehicle details, it is
+    // safe to advance it to the same return-ready state as a normal order.
+    if (check.valid && (currentOrder.status === "PENDING_REVIEW" || currentOrder.status === "DISPATCHED" || currentOrder.status === "READY_TO_DISPATCH")) {
       await tx.order.update({ where: { id: orderId }, data: { status: "DRIVER_CONFIRMED" } });
       await tx.activityLog.create({ data: { orderId, action: "确认司机资料", actor: "运营人员", metadata: `规则版本：${rules.rules_version}` } });
     }
