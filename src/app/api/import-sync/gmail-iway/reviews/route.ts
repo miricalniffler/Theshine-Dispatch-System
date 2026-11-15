@@ -3,24 +3,39 @@ import { db } from "@/lib/db";
 import { failure, success } from "@/lib/api-response";
 import { ingestLifecycle, previewLifecycleReview, type MailReview } from "@/features/import/gmail-lifecycle";
 import { classifyLifecycleNotice } from "@/features/import/iway-lifecycle-parser";
+import type { GmailIwayMessage } from "@/features/import/gmail-iway-sync";
 
 const connector = "gmail-iway";
 const openAction = "LIFECYCLE_REVIEW_PENDING";
 function teamAuthorised(request: NextRequest) { const expected = process.env.TEAM_ACCESS_TOKEN; return Boolean(expected) && request.cookies.get("iway-team-access")?.value === expected; }
 
-export async function GET() {
+function readableMail(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const message = value as Partial<GmailIwayMessage>;
+  if (typeof message.id !== "string" || typeof message.sender !== "string" || typeof message.subject !== "string" || typeof message.receivedAt !== "string" || typeof message.text !== "string") return null;
+  // This internal workbench is team-login protected. The bound only prevents a
+  // malformed source record from making the orders dashboard unusable.
+  return { id: message.id, sender: message.sender, subject: message.subject, receivedAt: message.receivedAt, text: message.text.slice(0, 40_000), fields: Array.isArray(message.fields) ? message.fields : undefined } satisfies GmailIwayMessage;
+}
+
+export async function GET(request: NextRequest) {
+  if (!teamAuthorised(request)) return failure("UNAUTHORISED", "需要登录后才能查看 Gmail 异常详情。", undefined, 401);
   const rows = await db.importedSourceMessage.findMany({ where: { connector, action: openAction }, orderBy: { processedAt: "desc" }, take: 100 });
   return success(await Promise.all(rows.map(async (row) => {
-    let review: MailReview | null = null; let orderId = row.orderId;
+    let review: MailReview | null = null; let orderId = row.orderId; let mail: GmailIwayMessage | null = null;
+    let order = null as Awaited<ReturnType<typeof db.order.findUnique>>;
     try {
-      const source = JSON.parse(row.sourceText); review = source.review;
-      if (review && source.message && review.reason !== "CANCELLED_NOTIFY_FLEET") {
-        const notice = classifyLifecycleNotice(source.message.subject, source.message.text, source.message.fields);
-        const order = notice?.orderNumber ? await db.order.findUnique({ where: { platformOrderNumber: notice.orderNumber } }) : null;
-        review = previewLifecycleReview(source.message, review, order); orderId = order?.id ?? null;
+      const source = JSON.parse(row.sourceText) as { review?: MailReview; message?: unknown };
+      review = source.review || null; mail = readableMail(source.message);
+      if (review && mail) {
+        const notice = classifyLifecycleNotice(mail.subject, mail.text, mail.fields);
+        order = notice?.orderNumber ? await db.order.findUnique({ where: { platformOrderNumber: notice.orderNumber } }) : null;
+        if (review.reason !== "CANCELLED_NOTIFY_FLEET") review = previewLifecycleReview(mail, review, order);
+        orderId = order?.id ?? null;
       }
     } catch { /* keep the protected source record but do not expose raw mail */ }
-    return { id: row.id, externalId: row.externalId, orderId, receivedAt: row.receivedAt, review };
+    const orderData = order ? { platformOrderNumber: order.platformOrderNumber, status: order.status, passengerName: order.passengerName, passengerPhone: order.passengerPhone, pickupDateTime: order.pickupDateTime, pickupAddress: order.pickupAddress, dropoffAddress: order.dropoffAddress, platformVehicleType: order.platformVehicleType, flightNumber: order.flightNumber, meetGreetLine: order.meetGreetLine, otherNotes: order.otherNotes } : null;
+    return { id: row.id, externalId: row.externalId, orderId, receivedAt: row.receivedAt, review, mail: mail ? { sender: mail.sender, subject: mail.subject, receivedAt: mail.receivedAt, text: mail.text } : null, order: orderData };
   })));
 }
 
