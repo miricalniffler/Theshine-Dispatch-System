@@ -6,7 +6,7 @@ import { isIwayNewRideEmail, parseIwayNewRide } from "./iway-new-ride-parser";
 import { zonedLocalDateTimeToUtc } from "./service-timezone";
 
 export type GmailIwayMessage = { id: string; sender: string; subject: string; receivedAt: string; text: string; fields?: MailField[] };
-export type GmailIwaySummary = { created: number; cancelled: number; review: number; skipped: number; rejected: number; processedIds: string[] };
+export type GmailIwaySummary = { created: number; updated: number; cancelled: number; review: number; skipped: number; rejected: number; processedIds: string[] };
 
 const connector = "gmail-iway";
 const defaultSenders = ["control@iwayex.com", "noreply@iway.ru", "booking@iwayex.com"];
@@ -69,7 +69,7 @@ export function classifyGmailIwayMessage(message: GmailIwayMessage, enabledAt = 
  */
 export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Promise<GmailIwaySummary> {
   const run = await db.importSyncRun.create({ data: { connector, status: "RUNNING" } });
-  const summary: GmailIwaySummary = { created: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0, processedIds: [] };
+  const summary: GmailIwaySummary = { created: 0, updated: 0, cancelled: 0, review: 0, skipped: 0, rejected: 0, processedIds: [] };
   try {
     for (const message of messages) {
       const notice = classifyLifecycleNotice(message.subject, message.text, message.fields);
@@ -78,7 +78,9 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
         const waterline = validReceivedAt(process.env.IWAY_GMAIL_ENABLED_AT || "");
         if (!trustedSenders().includes(senderAddress(message.sender)) || !date || !waterline || date <= waterline) { summary.rejected++; continue; }
         const result = await ingestLifecycle(message);
-        if (result === "cancelledReview") { summary.cancelled++; summary.review++; } else summary[result]++;
+        if (result === "cancelledReview") { summary.cancelled++; summary.review++; }
+        else if (result === "amended") summary.updated++;
+        else summary[result]++;
         summary.processedIds.push(message.id);
         continue;
       }
@@ -148,7 +150,7 @@ export async function ingestGmailIwayMessages(messages: GmailIwayMessage[]): Pro
       summary[result] += 1;
       summary.processedIds.push(message.id);
     }
-    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created, cancelledCount: summary.cancelled, updatedCount: summary.review, skippedCount: summary.skipped + summary.rejected } });
+    await db.importSyncRun.update({ where: { id: run.id }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created, cancelledCount: summary.cancelled, updatedCount: summary.updated, skippedCount: summary.skipped + summary.rejected } });
     return summary;
   } catch (error) {
     // Do not store raw email content in an error message. The raw source is

@@ -19,7 +19,8 @@ test("30-minute configuration replaces duplicate Gmail timers without mutating s
   const before = { ...properties };
   const deleted: string[] = [];
   const created: Array<{ handler: string; minutes: number }> = [];
-  const trigger = (handler: string) => ({ handler, getHandlerFunction: () => handler });
+  type Trigger = { handler: string; getHandlerFunction: () => string };
+  const trigger = (handler: string): Trigger => ({ handler, getHandlerFunction: () => handler });
   const triggers = [
     trigger("syncIwayGmailOrders"), trigger("syncIwayGmailOrders"),
     trigger("syncKualaLumpurMailOperations"), trigger("syncKualaLumpurMailOperations"),
@@ -29,7 +30,7 @@ test("30-minute configuration replaces duplicate Gmail timers without mutating s
     PropertiesService: { getScriptProperties: () => ({ getProperty: (key: string) => properties[key] || null, setProperty: (key: string, value: string) => { properties[key] = value; }, deleteProperty: (key: string) => { delete properties[key]; } }) },
     ScriptApp: {
       getProjectTriggers: () => [...triggers],
-      deleteTrigger: (trigger: ReturnType<typeof trigger>) => { deleted.push(trigger.handler); const index = triggers.indexOf(trigger); if (index >= 0) triggers.splice(index, 1); },
+      deleteTrigger: (item: Trigger) => { deleted.push(item.handler); const index = triggers.indexOf(item); if (index >= 0) triggers.splice(index, 1); },
       newTrigger: (handler: string) => ({ timeBased: () => ({ everyMinutes: (minutes: number) => ({ create: () => { created.push({ handler, minutes }); } }) }) }),
     },
   };

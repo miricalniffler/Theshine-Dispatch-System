@@ -6,7 +6,7 @@ export type Order = {
   orderNo: string;
   serviceDate: string;
   pickupTime: string;
-  city: "曼谷" | "苏梅" | "吉隆坡";
+  city: "曼谷" | "苏梅" | "吉隆坡" | "龙目岛";
   fleetName: string;
   passengerName: string;
   passengerPhone: string;
@@ -18,6 +18,8 @@ export type Order = {
   restoreBlockedReason?: string | null;
   latestExceptionNote?: string | null;
   latestExceptionAt?: string | null;
+  gmailEvent?: "NEW" | "AMENDED" | "CANCELLED" | null;
+  gmailChangedFields?: string[];
   exceptions: OrderException[];
   createdAt: string;
   driverDetail?: {

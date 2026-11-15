@@ -55,24 +55,23 @@ test("待办只读展示可修复旧识别并保留邮件三项变更；取消�
   expect(previewLifecycleReview(missingCancel, { ...stored, reason: "ORDER_NOT_FOUND" }, null)).toMatchObject({ mailType: "cancel", orderNumber: "1162424", reason: "CANCEL_ORIGINAL_NOT_FOUND" });
   expect(previewLifecycleReview(missingCancel, { ...stored, reason: "CANCELLED_NOTIFY_FLEET" }, null).reason).toBe("CANCELLED_NOTIFY_FLEET");
 });
-test("修改待办保留表格中的全部当前乘客与联系电话，不推断删除未变更的嵌套备注", () => {
+test("乘客资料变更没有逐字段旧值时进入异常待办，不推断删除未变更的嵌套备注", () => {
   const message = { ...linkedAmendment, fields: linkedAmendment.fields.map(f => f.label === "Passengers" ? { ...f, current: "Test A,Test B,Test C,Test D () Phone: +7 111 111 1111,+7 222 222 2222,+7 333 333 3333,+7 444 444 4444" } : f).concat({ label: "Additional remarks", current: "PARAMS Toll road", previous: [] }) };
   const stored: MailReview = { reason: "ORDER_NOT_FOUND", orderNumber: null, kind: "review", differences: [], fields: [] };
   const review = previewLifecycleReview(message, stored, { passengerName: "Old names", passengerPhone: "Old contacts", platformVehicleType: "MINIBUS", adults: 6 } as any);
-  expect(review.differences.find(d => d.field === "passengerName")?.proposed).toBe("Test A,Test B,Test C,Test D");
-  expect(review.differences.find(d => d.field === "passengerPhone")?.proposed).toContain("+7 444 444 4444");
+  expect(review.reason).toContain("AMENDMENT_UNSUPPORTED_CHANGED_FIELDS");
   expect(review.differences.some(d => d.field === "otherNotes")).toBeFalsy();
 });
 function fake(status="DISPATCHED", latest=false) {
   let known=false; const logs:any[]=[]; const sources:any[]=[]; const updates:any[]=[];
   const order:any={id:"order-1", platformOrderNumber:"1150642",status,driverDetail:status==="DISPATCHED"?{}:null,pickupDateTime:new Date("2026-11-01T04:00:00Z")};
-  const tx:any={$executeRaw:async()=>0,$queryRaw:async()=>[],order:{findUnique:async()=>order,findUniqueOrThrow:async()=>order,update:async(v:any)=>{updates.push(v);order.status=v.data.status;}},importedSourceMessage:{findUnique:async()=>known?{}:null,findFirst:async()=>latest?{id:"newer"}:null,create:async(v:any)=>{known=true;sources.push(v);return v;}},activityLog:{create:async(v:any)=>{logs.push(v);}},iwayReturnBatchOrder:{findMany:async()=>[{iwayReturnBatchId:"batch-1"}]},iwayReturnBatch:{updateMany:async(v:any)=>updates.push(v)}};
+  const tx:any={$executeRaw:async()=>0,$queryRaw:async()=>[],order:{findUnique:async()=>order,findUniqueOrThrow:async()=>order,update:async(v:any)=>{updates.push(v);Object.assign(order,v.data);return order;}},importedSourceMessage:{findUnique:async()=>known?{}:null,findFirst:async()=>latest?{id:"newer"}:null,create:async(v:any)=>{known=true;sources.push(v);return v;}},gmailOrderSnapshot:{create:async(v:any)=>{updates.push({snapshot:v});return v;}},activityLog:{create:async(v:any)=>{logs.push(v);}},iwayReturnBatchOrder:{findMany:async()=>[{iwayReturnBatchId:"batch-1"}]},iwayReturnBatch:{updateMany:async(v:any)=>updates.push(v)}};
   return {tx,logs,sources,updates,order};
 }
 test("取消原子写入、派车通知、永久失效旧回传、重试不重复",async()=>{
   const f=fake();const original=db.$transaction;
   (db as any).$transaction=async(fn:any)=>fn(f.tx);
-  try {expect(await ingestLifecycle(cancel)).toBe("cancelledReview");expect(f.order.status).toBe("CANCELLED");expect(f.updates[1].data.contentSnapshot).toContain("已失效");expect(f.sources[0].data.action).toBe("LIFECYCLE_REVIEW_PENDING");expect(JSON.parse(f.sources[0].data.sourceText).review.reason).toBe("CANCELLED_NOTIFY_FLEET");const n=f.logs.length;expect(await ingestLifecycle(cancel)).toBe("skipped");expect(f.logs.length).toBe(n);}finally{(db as any).$transaction=original;}
+  try {expect(await ingestLifecycle(cancel)).toBe("cancelledReview");expect(f.order.status).toBe("CANCELLED");expect(f.updates.find((x:any)=>x.data?.contentSnapshot)?.data.contentSnapshot).toContain("已失效");expect(f.sources[0].data.action).toBe("LIFECYCLE_REVIEW_PENDING");expect(JSON.parse(f.sources[0].data.sourceText).review.reason).toBe("CANCELLED_NOTIFY_FLEET");const n=f.logs.length;expect(await ingestLifecycle(cancel)).toBe("skipped");expect(f.logs.length).toBe(n);}finally{(db as any).$transaction=original;}
 });
 for(const [status,latest] of [["COMPLETED",false],["DISPATCHED",true]] as const) test(`取消保护 ${status} newer=${latest}`,async()=>{
  const f=fake(status,latest);const original=db.$transaction;(db as any).$transaction=async(fn:any)=>fn(f.tx);
