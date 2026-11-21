@@ -185,7 +185,17 @@ async function mainOnce() {
       where: { connector: "feishu-mail", status: "RUNNING", startedAt: { lt: staleBefore } },
       data: { status: "FAILED", completedAt: new Date(), errorMessage: "本机飞书同步超过 5 分钟未完成，已由下一轮周期同步自动释放。" },
     });
-    const run = await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
+    // Claim the oldest web-requested run when present. This gives the manual
+    // button a concrete, auditable completion record rather than merely
+    // waiting for any later scheduled run.
+    const requested = await db.importSyncRun.findFirst({
+      where: { connector: "feishu-mail", status: "REQUESTED" },
+      orderBy: { startedAt: "asc" },
+      select: { id: true },
+    });
+    const run = requested
+      ? await db.importSyncRun.update({ where: { id: requested.id }, data: { status: "RUNNING" } })
+      : await db.importSyncRun.create({ data: { connector: "feishu-mail", status: "RUNNING" } });
     syncRequestId = run.id;
   }
   // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
