@@ -18,10 +18,18 @@ export async function POST() {
     // process, but it can wait for the helper's next recorded run. Do not
     // report a completed sync here: the browser must still observe a fresh
     // SUCCESS/FAILED run before refreshing its order list.
+    // The operations Mac polls the production database.  Persisting a small
+    // request record gives a manual click an auditable starting point and
+    // lets the browser distinguish the next helper run from an older one.
+    // It deliberately contains no mailbox content and does not change orders.
+    const requested = await db.importSyncRun.create({
+      data: { connector: "feishu-mail", status: "REQUESTED" },
+    });
     return success({
       completed: false,
       localScheduled: true,
-      message: "服务器未配置飞书桥接；正在等待已授权的本机同步助手提交下一轮结果。",
+      requestId: requested.id,
+      message: "已请求本机飞书同步助手执行下一轮同步。",
     });
   }
 

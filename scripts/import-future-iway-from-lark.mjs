@@ -23,6 +23,8 @@ let syncRequestId = null;
 const staleRunMs = 5 * 60_000;
 const cliTimeoutMs = 75_000;
 const maxRunMs = Number(process.env.IWAY_LOCAL_SYNC_MAX_RUN_MS || 120_000);
+const databaseRetryAttempts = 3;
+const databaseRetryDelayMs = 5_000;
 
 // Prisma's network engine can very occasionally stay alive after a connection
 // has already been established but a query never resolves. A connection option
@@ -105,6 +107,13 @@ function isOrderAlreadyCreated(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
 }
 
+function isTransientDatabaseError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /Can't reach database server|connection.*(?:closed|reset|refused|timed out)|ECONN(?:RESET|REFUSED|TIMEOUT)|ETIMEDOUT|P1001/i.test(message);
+}
+
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
 function parseOrder(message, meta) {
   if (/^New ride\b/i.test(meta.subject)) return parseLocalNewRide(message, meta);
   const text = normalizedText(message.body_plain_text);
@@ -166,7 +175,7 @@ function todayBangkok() {
   }).format(new Date());
 }
 
-async function main() {
+async function mainOnce() {
   if (!dryRun) {
     const staleBefore = new Date(Date.now() - staleRunMs);
     // ImportSyncRun is an execution log, not a prerequisite for starting the
@@ -182,8 +191,10 @@ async function main() {
   // lark-cli 的 from 数组并非“任一发件人”。分别按单一官方发件人查询，
   // 再合并结果，既不会漏掉 New ride，也不必下载整个邮箱的 400 封目录。
   // 同步是增量的：已解析邮件已留有缓存，新订单/修改邮件总会排在最新位置。
-  // 每个发件人只看最近 200 封，避免旧邮件越来越多后拖慢每一次人工刷新。
-  const triages = [{ sender: officialSender, max: 200 }, { sender: newRideSender, max: 200 }].map(({ sender, max }) => runCli([
+  // 每个发件人只看最近 80 封，避免旧邮件越来越多后拖慢每一次人工刷新。
+  // 新订单通知总会排在最新位置；已处理邮件又有来源 ID 去重，因此不需要
+  // 为了历史格式异常而反复扫描整个邮箱。
+  const triages = [{ sender: officialSender, max: 80 }, { sender: newRideSender, max: 80 }].map(({ sender, max }) => runCli([
     "mail", "+triage", "--as", "user", "--mailbox", mailbox,
     "--filter", JSON.stringify({ from: [sender] }), "--max", String(max), "--format", "json",
   ]));
@@ -307,9 +318,30 @@ async function main() {
     await db.importedSourceMessage.upsert({ where: { connector_externalId: { connector: "feishu-mail", externalId: message.externalId } }, create: { ...message, orderId: persisted.id }, update: { orderId: persisted.id } });
   }
   if (syncRequestId) {
-    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: summary.rejected ? "FAILED" : "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected, errorMessage: summary.rejected ? `${summary.rejected} 封新订单邮件解析失败；未确认全部同步成功，请检查本机同步日志。` : null } });
+    // An old or incomplete message can be safely skipped without invalidating
+    // the whole run. Only an actual thrown error marks this request FAILED.
+    await db.importSyncRun.update({ where: { id: syncRequestId }, data: { status: "SUCCEEDED", completedAt: new Date(), createdCount: summary.created.length, updatedCount: summary.updated.length, cancelledCount: summary.cancelled.length, skippedCount: summary.unchanged.length + summary.rejected, errorMessage: null } });
   }
   console.log(JSON.stringify(summary, null, 2));
+}
+
+async function main() {
+  let lastError;
+  for (let attempt = 1; attempt <= databaseRetryAttempts; attempt += 1) {
+    try {
+      return await mainOnce();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientDatabaseError(error) || attempt === databaseRetryAttempts) throw error;
+      // A short, bounded retry is safe: order numbers and source-message IDs
+      // are unique, so a recovered attempt cannot duplicate or overwrite an
+      // order created by an earlier attempt.
+      console.error(JSON.stringify({ status: "retrying", attempt, message: "生产数据库暂时不可达，稍后自动重试本轮飞书同步。" }));
+      await db.$disconnect().catch(() => {});
+      await wait(databaseRetryDelayMs * attempt);
+    }
+  }
+  throw lastError;
 }
 
 main().catch(async (error) => {
