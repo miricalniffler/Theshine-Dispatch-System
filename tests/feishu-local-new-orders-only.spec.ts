@@ -15,6 +15,8 @@ test("本机恢复助手只导入新订单，不能取消或覆盖已有订单",
   expect(source).toContain("if (!isOrderAlreadyCreated(error)) throw error;");
   expect(source).toContain("databaseRetryAttempts = 3");
   expect(source).toContain("isTransientDatabaseError");
+  expect(source).toContain('status: "REQUESTED"');
+  expect(source).toContain("Claim the oldest web-requested run");
   expect(source).toContain("sender: officialSender, max: 80");
   expect(source).toContain("sender: newRideSender, max: 80");
   expect(source).toContain('status: "SUCCEEDED"');
