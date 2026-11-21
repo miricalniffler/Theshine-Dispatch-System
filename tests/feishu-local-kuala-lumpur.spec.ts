@@ -18,5 +18,5 @@ test("本机飞书同步仍通过邮件 ID 和订单号保护重复导入", () =
   const source = readFileSync(resolve(process.cwd(), "scripts/import-future-iway-from-lark.mjs"), "utf8");
   expect(source).toContain("knownIds.has(mail.message_id)");
   expect(source).toContain("if (existing) { summary.unchanged.push(item.orderNo); continue; }");
-  expect(source).toContain('for (const city of ["曼谷", "苏梅", "吉隆坡"])');
+  expect(source).toContain('for (const city of ["曼谷", "苏梅", "吉隆坡", "龙目岛"])');
 });
