@@ -154,7 +154,7 @@ export async function createDispatchPreview(orderIds: string[], options: Dispatc
     errors: [],
     // 微信和 WhatsApp 中用两个回车分隔订单；不再插入视觉分割线。
     text: includeBatchFooter
-      ? `${bodies.join("\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules)}`
+      ? `${bodies.join("\n\n")}\n\n${renderDispatchBatchFooter(city, selected.length, rules, selected[0].serviceDate)}`
       : bodies.join("\n\n"),
     city,
     fleetName: selected[0].fleetName,

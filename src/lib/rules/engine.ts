@@ -243,8 +243,8 @@ export function formatServiceDateLabel(serviceDate: string, locale: "zh" | "en" 
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Bangkok" }).format(date);
 }
 
-export function renderDispatchBatchFooter(city: string, orderCount: number, rules: RulesConfig = loadRules()) {
+export function renderDispatchBatchFooter(city: string, orderCount: number, rules: RulesConfig = loadRules(), serviceDate = "") {
   const template = rules.templates.dispatch_batch_footers[city];
   if (!template) throw new Error(`No dispatch batch footer configured for city: ${city}`);
-  return renderTemplate(template, { order_count: orderCount, order_unit: orderCount === 1 ? "order" : "orders" });
+  return renderTemplate(template, { order_count: orderCount, order_unit: orderCount === 1 ? "order" : "orders", service_date: serviceDate });
 }

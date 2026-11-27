@@ -26,6 +26,7 @@ templates:
     "曼谷": "{{order_count}} {{order_unit}} for tomorrow, please kindly check, thank you!"
     "苏梅": "明日{{order_count}}个订单，请查收~"
     "吉隆坡": "{{order_count}} order(s) for tomorrow, please kindly check, thank you!"
+    "龙目岛": "明日（{{service_date}}）龙目岛{{order_count}}个订单，请查收"
   iway_return:
     header: "Dear team, Here are the driver and vehicle details for {{service_date_label_en}}:"
     body: |
